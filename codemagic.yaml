@@ -1,0 +1,27 @@
+﻿workflows:
+  ios_release:
+    name: iOS Release (TestFlight)
+    environment:
+      flutter: stable
+      xcode: latest
+    scripts:
+      - name: Flutter packages
+        script: flutter pub get
+      - name: Fetch signing (App Store)
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "com.adrianegger.partypin" --type IOS_APP_STORE --create
+          xcode-project use-profiles
+      - name: Build IPA
+        script: flutter build ipa --release
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios/ipa/*.dSYM.zip
+    publishing:
+      app_store_connect:
+        auth: api_key
+        api_key: 
+        key_id: 
+        issuer_id: 
+        is_key_content_base64: true
+        submit_to_testflight: true

@@ -1,0 +1,44 @@
+name: party_pin
+description: "App for Partypeople"
+publish_to: 'none'
+version: 1.0.0+2
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  geocoding: ^2.0.6
+  google_maps_flutter: ^2.3.0
+  shared_preferences: ^2.1.0
+  intl: ^0.18.1
+  permission_handler: ^11.0.1
+  image_picker: ^1.1.0
+  url_launcher: ^6.1.10
+  http: ^1.1.0
+
+  # 🔥 Firebase
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.4.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - lib/Pics/logo2.png
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "lib/Pics/logo2.png"
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "lib/Pics/logo2.png"
+  remove_alpha_ios: true
