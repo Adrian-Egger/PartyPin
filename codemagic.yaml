@@ -7,17 +7,24 @@ workflows:
     scripts:
       - name: Flutter packages
         script: flutter pub get
+
       - name: Fetch signing (App Store)
         script: |
           keychain initialize
           app-store-connect fetch-signing-files "com.adrianegger.partypin" --type IOS_APP_STORE --create
           xcode-project use-profiles
-      - name: Build IPA
-        script: flutter build ipa --release
+
+      - name: Set build number from Codemagic
+        script: |
+          # nutzt die laufende Build-ID als CFBundleVersion
+          flutter build ipa --release --build-number ${CM_BUILD_ID}
+
     artifacts:
       - build/ios/ipa/*.ipa
       - build/ios/ipa/*.dSYM.zip
+
     publishing:
-  app_store_connect:
-    auth: integration
-    submit_to_testflight: true
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+
