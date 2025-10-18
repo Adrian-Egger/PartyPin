@@ -2,7 +2,7 @@ workflows:
   ios_release:
     name: iOS Release (TestFlight)
     integrations:
-      app_store_connect: Partypin-ASC
+      app_store_connect: PartyPin
 
     environment:
       flutter: stable
