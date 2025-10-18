@@ -14,7 +14,7 @@ workflows:
       - name: Fetch signing (App Store)
         script: |
           keychain initialize
-          app-store-connect fetch-signing-files "com.adrianegger.partypin" --type IOS_APP_STORE --create
+          app-store-connect fetch-signing-files "com.partypin.partyPin" --type IOS_APP_STORE --create
           xcode-project use-profiles
       - name: Build IPA
         script: flutter build ipa --release --build-number ${CM_BUILD_ID}
