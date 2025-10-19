@@ -1,49 +1,103 @@
 workflows:
-  ios_release:
-    name: iOS Release (TestFlight)
-    integrations:
-      app_store_connect: PartyPin
+  ios_manual_sign:
+    name: iOS Manual Signing
+    max_build_duration: 60
+    instance_type: mac_mini_m1
+
     environment:
-      flutter: stable
-      xcode: latest
+      xcode: 16.4
       vars:
-        CM_EXPORT_METHOD: app-store
+        DEVELOPMENT_TEAM: ABCDE12345            # <- TeamID einsetzen
+        BUNDLE_ID: com.LAlabs.partypin
+      groups:
+        - ios_secure_files                      # optional: Gruppe für Secrets
+      # Erwarte folgende Secure Files:
+      # - CM_CERTIFICATE: Apple Distribution .p12
+      # - CM_CERTIFICATE_PASSWORD: Passwort des .p12
+      # - CM_PROVISIONING_PROFILE: passendes .mobileprovision
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+
+    cache:
+      cache_paths:
+        - ~/.pub-cache
+        - ~/Library/Caches/CocoaPods
+        - ios/Pods
 
     scripts:
-      - name: Flutter packages
-        script: flutter pub get
+      - name: Xcode-Version prüfen
+        script: |
+          xcodebuild -version
 
-      - name: Install signing
+      - name: Keychain initialisieren und Zertifikat importieren
         script: |
           keychain initialize
-          keychain add-certificates
-          xcode-project use-profiles --warn-only
-          ls -l ~/Library/MobileDevice/Provisioning\ Profiles
-          PF=$(ls ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | head -n1)
-          INFO=$(security cms -D -i "$PF")
-          PF_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$INFO")
-          TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' /dev/stdin <<< "$INFO")
-          echo "PROFILE_NAME=$PF_NAME" >> $CM_ENV
-          echo "DEVELOPMENT_TEAM=$TEAM_ID" >> $CM_ENV
+          keychain add-certificates \
+            --certificate "$CM_CERTIFICATE" \
+            --certificate-password "$CM_CERTIFICATE_PASSWORD"
+          security find-identity -p codesigning -v | grep "Apple Distribution" || { echo "Kein Apple Distribution Zertifikat"; exit 1; }
 
-      - name: Debug signing
+      - name: Provisioning Profile installieren und UUID extrahieren
         script: |
-          security find-identity -v -p codesigning || true
-          /usr/libexec/PlistBuddy -c 'Print :ApplicationIdentifierPrefix:0' /dev/stdin <<< "$INFO" || true
-          xcodebuild -showBuildSettings -workspace ios/Runner.xcworkspace -scheme Runner | grep PRODUCT_BUNDLE_IDENTIFIER
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          PROFILE_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
+          cp "$CM_PROVISIONING_PROFILE" "$PROFILE_PATH"
 
-      - name: Build IPA
+          # UUID robust extrahieren
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          if [ -z "$PROFILE_UUID" ]; then
+            PROFILE_UUID=$(/usr/bin/grep -a -A1 UUID "$PROFILE_PATH" | /usr/bin/awk -F'[<>]' '/UUID/{getline; print $3}')
+          fi
+          [ -n "$PROFILE_UUID" ] || { echo "Profil-UUID nicht gefunden"; exit 1; }
+          echo "PROFILE_UUID=$PROFILE_UUID" >> $CM_ENV
+
+          # BundleID und Team im Profil verifizieren
+          PROFILE_APPID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          echo "Profil AppID: $PROFILE_APPID"
+          case "$PROFILE_APPID" in
+            ${DEVELOPMENT_TEAM}.$BUNDLE_ID|${DEVELOPMENT_TEAM}.*)
+              echo "Profil passt"
+              ;;
+            *)
+              echo "Profil passt nicht zu Team/BundleID"
+              exit 1
+              ;;
+          esac
+
+      - name: Pods installieren
+        script: |
+          cd ios
+          pod repo update
+          pod install --verbose
+          cd ..
+
+      - name: Clean
+        script: |
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
+          xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Release -quiet clean
+
+      - name: Archiv bauen
         script: |
           xcode-project build-ipa \
             --workspace ios/Runner.xcworkspace \
             --scheme Runner \
-            --archive-flags 'CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" PROVISIONING_PROFILE_SPECIFIER="${PROFILE_NAME}" CODE_SIGN_IDENTITY="Apple Distribution" PRODUCT_BUNDLE_IDENTIFIER=com.LAlabs.partypin'
+            --archive-flags "CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM} PROVISIONING_PROFILE_SPECIFIER=${PROFILE_UUID} CODE_SIGN_IDENTITY='Apple Distribution' PRODUCT_BUNDLE_IDENTIFIER=${BUNDLE_ID} CODE_SIGNING_ALLOWED=YES COMPILER_INDEX_STORE_ENABLE=NO"
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - build/ios/ipa/*.dSYM.zip
+      - build/ios/xcarchive/*.xcarchive
+      - ~/Library/Logs/**/*.log
 
     publishing:
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: true
+      email:
+        recipients:
+          - you@example.com
+        notify:
+          success: true
+          failure: true
