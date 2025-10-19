@@ -1,40 +1,53 @@
 workflows:
   ios_inline_signing:
-    name: iOS Inline Signing (nur YAML)
+    name: iOS Inline Signing
     environment:
       vars:
-        WORKSPACE: "App.xcworkspace"      # ggf. leeren, wenn .xcodeproj
+        # Hier deinen Workspace-Namen eintragen (falls du .xcworkspace hast)
+        WORKSPACE: "App.xcworkspace"
         SCHEME: "App"
-        EXPORT_METHOD: "app-store"         # app-store | ad-hoc | development | enterprise
+        EXPORT_METHOD: "app-store"   # app-store | development | ad-hoc | enterprise
 
-        # ↓↓↓ ERSETZEN: Base64-Inhalte direkt hier einfügen
-        P12_BASE64: |
-          PASTE_DEIN_P12_ALS_BASE64_HIER_REIN
-        MOBILEPROVISION_BASE64: |
-          PASTE_DEIN_MOBILEPROVISION_ALS_BASE64_HIER_REIN
-        P12_PASSWORD: "DEIN_P12_PASSWORT"
+        # ERSETZEN mit DEINEN Base64-Daten OHNE UMBRÜCHE!
+        P12_BASE64: "HIER_DEIN_P12_BASE64_REIN" 
+        MOBILEPROVISION_BASE64: "HIER_DEIN_PROVISION_BASE64_REIN"
+        P12_PASSWORD: "HIER_DEIN_P12_PASSWORT"
 
     scripts:
-      - name: Preflight
-        script: |
-          set -euo pipefail
-          [[ -n "${P12_BASE64// }" ]] || { echo "P12_BASE64 leer"; exit 1; }
-          [[ -n "${MOBILEPROVISION_BASE64// }" ]] || { echo "MOBILEPROVISION_BASE64 leer"; exit 1; }
-          [[ -n "${P12_PASSWORD:-}" ]] || { echo "P12_PASSWORD leer"; exit 1; }
-          echo "Variablen vorhanden. Fahre fort."
-
       - name: Install signing (inline)
         script: |
+          #!/usr/bin/env bash
           set -euo pipefail
-          mkdir -p /tmp/signing
-          echo "$P12_BASE64" | base64 -d > /tmp/signing/cert.p12
-          echo "$MOBILEPROVISION_BASE64" | base64 -d > /tmp/signing/profile.mobileprovision
 
+          # 0) Preflight
+          [[ -n "${P12_BASE64:-}" ]] || { echo "P12_BASE64 leer"; exit 1; }
+          [[ -n "${MOBILEPROVISION_BASE64:-}" ]] || { echo "MOBILEPROVISION_BASE64 leer"; exit 1; }
+          [[ -n "${P12_PASSWORD:-}" ]] || { echo "P12_PASSWORD leer"; exit 1; }
+
+          # 1) Decode mit Padding-Korrektur (python vermeidet base64 Fehler)
+          mkdir -p /tmp/signing
+          python3 - <<'PY'
+          import os, base64, pathlib
+          def b64_to_file(env, path):
+              s = ''.join(os.environ[env].split())
+              s += '=' * ((4 - len(s) % 4) % 4)
+              pathlib.Path(path).write_bytes(base64.b64decode(s))
+          b64_to_file('P12_BASE64', '/tmp/signing/cert.p12')
+          b64_to_file('MOBILEPROVISION_BASE64', '/tmp/signing/profile.mobileprovision')
+          PY
+
+          # 2) Zertifikat prüfen
+          if ! /usr/bin/openssl pkcs12 -info -in /tmp/signing/cert.p12 -passin pass:"$P12_PASSWORD" -nodes -nokeys >/dev/null 2>&1; then
+            echo "Ungültiges .p12 oder falsches Passwort"; exit 1
+          fi
+
+          # 3) Keychain einrichten
           keychain initialize
           keychain add-certificates \
             --certificate /tmp/signing/cert.p12 \
             --certificate-password "$P12_PASSWORD"
 
+          # 4) Profil mappen
           xcode-project use-profiles \
             --provisioning-profile /tmp/signing/profile.mobileprovision
 
