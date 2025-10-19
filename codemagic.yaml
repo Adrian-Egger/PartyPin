@@ -3,15 +3,15 @@ workflows:
     name: iOS Inline Signing
     environment:
       vars:
-        # Hier deinen Workspace-Namen eintragen (falls du .xcworkspace hast)
-        WORKSPACE: "App.xcworkspace"
+        # Passe an:
+        WORKSPACE: "App.xcworkspace"     # leer lassen wenn .xcodeproj
         SCHEME: "App"
-        EXPORT_METHOD: "app-store"   # app-store | development | ad-hoc | enterprise
+        EXPORT_METHOD: "app-store"       # app-store | development | ad-hoc | enterprise
 
-        # ERSETZEN mit DEINEN Base64-Daten OHNE UMBRÜCHE!
-        P12_BASE64: "HIER_DEIN_P12_BASE64_REIN" 
-        MOBILEPROVISION_BASE64: "HIER_DEIN_PROVISION_BASE64_REIN"
-        P12_PASSWORD: "HIER_DEIN_P12_PASSWORT"
+        # ERSETZEN: Base64 in EINER Zeile ohne Umbrüche
+        P12_BASE64: "HIER_P12_BASE64_EINFÜGEN"
+        MOBILEPROVISION_BASE64: "HIER_MOBILEPROVISION_BASE64_EINFÜGEN"
+        P12_PASSWORD: "HIER_P12_PASSWORT"
 
     scripts:
       - name: Install signing (inline)
@@ -19,35 +19,49 @@ workflows:
           #!/usr/bin/env bash
           set -euo pipefail
 
-          # 0) Preflight
+          # Preflight
           [[ -n "${P12_BASE64:-}" ]] || { echo "P12_BASE64 leer"; exit 1; }
           [[ -n "${MOBILEPROVISION_BASE64:-}" ]] || { echo "MOBILEPROVISION_BASE64 leer"; exit 1; }
           [[ -n "${P12_PASSWORD:-}" ]] || { echo "P12_PASSWORD leer"; exit 1; }
+          echo "P12_BASE64 length: ${#P12_BASE64}"
+          echo "MOBILEPROVISION_BASE64 length: ${#MOBILEPROVISION_BASE64}"
 
-          # 1) Decode mit Padding-Korrektur (python vermeidet base64 Fehler)
+          # Decode robust
           mkdir -p /tmp/signing
           python3 - <<'PY'
-          import os, base64, pathlib
-          def b64_to_file(env, path):
-              s = ''.join(os.environ[env].split())
-              s += '=' * ((4 - len(s) % 4) % 4)
-              pathlib.Path(path).write_bytes(base64.b64decode(s))
-          b64_to_file('P12_BASE64', '/tmp/signing/cert.p12')
-          b64_to_file('MOBILEPROVISION_BASE64', '/tmp/signing/profile.mobileprovision')
+          import os, base64, pathlib, re, sys
+          def clean(s):
+              s = ''.join(s.split()).strip('"').strip("'")
+              if not re.fullmatch(r'[A-Za-z0-9+/=_-]+', s):
+                  print("Warnung: Nicht-Base64-Zeichen gefunden", file=sys.stderr)
+              return s
+          def write_b64(env, path):
+              s = clean(os.environ[env])
+              def dec(t):
+                  t += '=' * ((4 - len(t) % 4) % 4)
+                  try:
+                      return base64.b64decode(t, validate=False)
+                  except Exception:
+                      t = t.replace('-', '+').replace('_', '/')
+                      t += '=' * ((4 - len(t) % 4) % 4)
+                      return base64.b64decode(t, validate=False)
+              pathlib.Path(path).write_bytes(dec(s))
+          write_b64('P12_BASE64', '/tmp/signing/cert.p12')
+          write_b64('MOBILEPROVISION_BASE64', '/tmp/signing/profile.mobileprovision')
           PY
 
-          # 2) Zertifikat prüfen
+          # Prüfe PKCS#12
           if ! /usr/bin/openssl pkcs12 -info -in /tmp/signing/cert.p12 -passin pass:"$P12_PASSWORD" -nodes -nokeys >/dev/null 2>&1; then
             echo "Ungültiges .p12 oder falsches Passwort"; exit 1
           fi
 
-          # 3) Keychain einrichten
+          # Keychain + Import
           keychain initialize
           keychain add-certificates \
             --certificate /tmp/signing/cert.p12 \
             --certificate-password "$P12_PASSWORD"
 
-          # 4) Profil mappen
+          # Profil mappen
           xcode-project use-profiles \
             --provisioning-profile /tmp/signing/profile.mobileprovision
 
