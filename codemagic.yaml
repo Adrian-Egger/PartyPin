@@ -1,35 +1,60 @@
 workflows:
-  ios_secure_files:
-    name: iOS Build mit Secure Files (empfohlen)
+  ios_inline_signing:
+    name: iOS Inline Signing (nur Workflow)
     environment:
-      # Binde deine Secure-Files-Gruppe ein (vorher in Codemagic anlegen):
-      groups:
-        - ios_credentials   # enthält: CM_CERTIFICATE (File), CM_CERTIFICATE_PASSWORD (Secure String), CM_PROVISIONING_PROFILE (File)
       vars:
-        WORKSPACE: "App.xcworkspace"   # falls .xcodeproj: leer lassen oder unten Pfad automatisch ermitteln
+        WORKSPACE: "App.xcworkspace"      # leer lassen, wenn .xcodeproj
         SCHEME: "App"
-        EXPORT_METHOD: "app-store"     # app-store | development | ad-hoc | enterprise
+        EXPORT_METHOD: "app-store"        # app-store | development | ad-hoc | enterprise
+
+        # ↓↓↓ HIER einsetzen: Base64 EINZEILIG, nur ASCII A–Z a–z 0–9 + / =
+        P12_BASE64: "HIER_P12_BASE64_EINZEILIG_EINFÜGEN"
+        MOBILEPROVISION_BASE64: "HIER_MOBILEPROVISION_BASE64_EINZEILIG_EINFÜGEN"
+        P12_PASSWORD: "HIER_P12_PASSWORT"
 
     scripts:
-      - name: Preflight
+      - name: Install signing (inline)
         script: |
           #!/usr/bin/env bash
           set -euo pipefail
-          [[ -f "${CM_CERTIFICATE:-}" ]] || { echo "FEHLT: CM_CERTIFICATE (File-Variable)"; exit 1; }
-          [[ -f "${CM_PROVISIONING_PROFILE:-}" ]] || { echo "FEHLT: CM_PROVISIONING_PROFILE (File-Variable)"; exit 1; }
-          [[ -n "${CM_CERTIFICATE_PASSWORD:-}" ]] || { echo "FEHLT: CM_CERTIFICATE_PASSWORD (Secure String)"; exit 1; }
-          echo "Workspace='${WORKSPACE:-}'  Scheme='${SCHEME:-}'  Export='${EXPORT_METHOD:-}'"
 
-      - name: Install signing
-        script: |
-          #!/usr/bin/env bash
-          set -euo pipefail
+          # Preflight
+          [[ -n "${P12_BASE64:-}" ]] || { echo "P12_BASE64 leer"; exit 1; }
+          [[ -n "${MOBILEPROVISION_BASE64:-}" ]] || { echo "MOBILEPROVISION_BASE64 leer"; exit 1; }
+          [[ -n "${P12_PASSWORD:-}" ]] || { echo "P12_PASSWORD leer"; exit 1; }
+
+          # Decode robust (ASCII-only, Padding fix)
+          mkdir -p /tmp/signing
+          python3 - <<'PY'
+          import os, base64, pathlib, re, sys
+          def clean(s):
+              s = ''.join(s.split()).strip('"').strip("'")
+              if not re.fullmatch(r'[A-Za-z0-9+/=]+', s):
+                  print("Fehler: Nicht-Base64-Zeichen gefunden", file=sys.stderr); sys.exit(2)
+              return s
+          def write(env, path):
+              s = clean(os.environ[env])
+              s += '=' * ((4 - len(s) % 4) % 4)
+              pathlib.Path(path).write_bytes(base64.b64decode(s))
+          write('P12_BASE64', '/tmp/signing/cert.p12')
+          write('MOBILEPROVISION_BASE64', '/tmp/signing/profile.mobileprovision')
+          PY
+
+          # Prüfen: gültiges PKCS#12 + Passwort korrekt
+          /usr/bin/openssl pkcs12 -info \
+            -in /tmp/signing/cert.p12 \
+            -passin pass:"$P12_PASSWORD" -nodes -nokeys >/dev/null || {
+              echo "Ungültiges .p12 oder falsches Passwort"; exit 1; }
+
+          # Keychain & Import
           keychain initialize
           keychain add-certificates \
-            --certificate "$CM_CERTIFICATE" \
-            --certificate-password "$CM_CERTIFICATE_PASSWORD"
+            --certificate /tmp/signing/cert.p12 \
+            --certificate-password "$P12_PASSWORD"
+
+          # Profil mappen
           xcode-project use-profiles \
-            --provisioning-profile "$CM_PROVISIONING_PROFILE"
+            --provisioning-profile /tmp/signing/profile.mobileprovision
 
       - name: Build IPA
         script: |
