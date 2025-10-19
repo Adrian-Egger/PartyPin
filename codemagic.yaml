@@ -13,20 +13,31 @@ workflows:
       - name: Flutter packages
         script: flutter pub get
 
-      - name: Use signing (uploaded p12 + mobileprovision)
+      - name: Install signing
         script: |
           keychain initialize
           keychain add-certificates
-          xcode-project use-profiles
+          xcode-project use-profiles --warn-only
+          ls -l ~/Library/MobileDevice/Provisioning\ Profiles
+          PF=$(ls ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | head -n1)
+          INFO=$(security cms -D -i "$PF")
+          PF_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$INFO")
+          TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' /dev/stdin <<< "$INFO")
+          echo "PROFILE_NAME=$PF_NAME" >> $CM_ENV
+          echo "DEVELOPMENT_TEAM=$TEAM_ID" >> $CM_ENV
 
       - name: Debug signing
         script: |
-          security find-identity -v -p codesigning
-          ls -l ~/Library/MobileDevice/Provisioning\ Profiles
+          security find-identity -v -p codesigning || true
+          /usr/libexec/PlistBuddy -c 'Print :ApplicationIdentifierPrefix:0' /dev/stdin <<< "$INFO" || true
           xcodebuild -showBuildSettings -workspace ios/Runner.xcworkspace -scheme Runner | grep PRODUCT_BUNDLE_IDENTIFIER
 
       - name: Build IPA
-        script: xcode-project build-ipa --workspace ios/Runner.xcworkspace --scheme Runner
+        script: |
+          xcode-project build-ipa \
+            --workspace ios/Runner.xcworkspace \
+            --scheme Runner \
+            --archive-flags 'CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM}" PROVISIONING_PROFILE_SPECIFIER="${PROFILE_NAME}" CODE_SIGN_IDENTITY="Apple Distribution" PRODUCT_BUNDLE_IDENTIFIER=com.LAlabs.partypin'
 
     artifacts:
       - build/ios/ipa/*.ipa
