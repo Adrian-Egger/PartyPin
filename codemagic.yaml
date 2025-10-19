@@ -1,30 +1,42 @@
 workflows:
-  ios:
-    name: iOS
+  ios_inline_signing:
+    name: iOS Inline Signing (nur YAML)
     environment:
-      groups:
-        - ios_credentials   # enthält: CM_CERTIFICATE (File), CM_CERTIFICATE_PASSWORD (Secure String), CM_PROVISIONING_PROFILE (File)
       vars:
-        WORKSPACE: "App.xcworkspace"   # oder leer lassen, wenn du .xcodeproj nutzt
+        WORKSPACE: "App.xcworkspace"      # ggf. leeren, wenn .xcodeproj
         SCHEME: "App"
-        BUNDLE_ID: "com.example.app"
-        EXPORT_METHOD: "app-store"      # app-store | ad-hoc | development | enterprise
+        EXPORT_METHOD: "app-store"         # app-store | ad-hoc | development | enterprise
+
+        # ↓↓↓ ERSETZEN: Base64-Inhalte direkt hier einfügen
+        P12_BASE64: |
+          PASTE_DEIN_P12_ALS_BASE64_HIER_REIN
+        MOBILEPROVISION_BASE64: |
+          PASTE_DEIN_MOBILEPROVISION_ALS_BASE64_HIER_REIN
+        P12_PASSWORD: "DEIN_P12_PASSWORT"
 
     scripts:
-      - name: Install signing
+      - name: Preflight
         script: |
           set -euo pipefail
-          [[ -f "$CM_CERTIFICATE" ]] || { echo "CM_CERTIFICATE fehlt"; exit 1; }
-          [[ -f "$CM_PROVISIONING_PROFILE" ]] || { echo "CM_PROVISIONING_PROFILE fehlt"; exit 1; }
-          [[ -n "${CM_CERTIFICATE_PASSWORD:-}" ]] || { echo "CM_CERTIFICATE_PASSWORD leer"; exit 1; }
+          [[ -n "${P12_BASE64// }" ]] || { echo "P12_BASE64 leer"; exit 1; }
+          [[ -n "${MOBILEPROVISION_BASE64// }" ]] || { echo "MOBILEPROVISION_BASE64 leer"; exit 1; }
+          [[ -n "${P12_PASSWORD:-}" ]] || { echo "P12_PASSWORD leer"; exit 1; }
+          echo "Variablen vorhanden. Fahre fort."
+
+      - name: Install signing (inline)
+        script: |
+          set -euo pipefail
+          mkdir -p /tmp/signing
+          echo "$P12_BASE64" | base64 -d > /tmp/signing/cert.p12
+          echo "$MOBILEPROVISION_BASE64" | base64 -d > /tmp/signing/profile.mobileprovision
 
           keychain initialize
           keychain add-certificates \
-            --certificate "$CM_CERTIFICATE" \
-            --certificate-password "$CM_CERTIFICATE_PASSWORD"
+            --certificate /tmp/signing/cert.p12 \
+            --certificate-password "$P12_PASSWORD"
 
           xcode-project use-profiles \
-            --provisioning-profile "$CM_PROVISIONING_PROFILE"
+            --provisioning-profile /tmp/signing/profile.mobileprovision
 
       - name: Build IPA
         script: |
@@ -46,21 +58,7 @@ workflows:
               --export-method "$EXPORT_METHOD"
           fi
 
-      - name: Sanity check (optional)
-        script: |
-          set -euo pipefail
-          security find-identity -v -p codesigning || true
-          xcode-project detect-signing || true
-
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
       - $HOME/Library/Developer/Xcode/Archives/**/*
-
-    publishing:
-      email:
-        recipients:
-          - dev@example.com
-        notify:
-          success: true
-          failure: true
