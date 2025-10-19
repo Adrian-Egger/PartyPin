@@ -21,24 +21,43 @@ workflows:
           require P12_PASSWORD
 
           mkdir -p /tmp/signing
+
+          # P12 strikt Base64
           python3 - <<'PY'
           import os, base64, pathlib, re, sys, binascii
-          def clean_b64(s: str) -> str:
-              s = ''.join(s.split()).strip('"').strip("'")
-              if not re.fullmatch(r'[A-Za-z0-9+/=]+', s):
-                  print("Base64 enthält ungültige Zeichen", file=sys.stderr); sys.exit(2)
-              s += "=" * ((4 - len(s) % 4) % 4)
-              return s
-          def write_b64(env, path):
-              raw = os.environ[env]
-              b64 = clean_b64(raw)
+          def clean_b64_strict(label: str, s: str) -> bytes:
+              t = ''.join(s.split()).strip('"').strip("'")
+              if not re.fullmatch(r'[A-Za-z0-9+/=]+', t or ""):
+                  print(f"{label}: Kein gültiges Base64", file=sys.stderr); sys.exit(2)
+              t += "=" * ((4 - len(t) % 4) % 4)
               try:
-                  data = base64.b64decode(b64, validate=False)
+                  return base64.b64decode(t, validate=True)
               except binascii.Error:
-                  print(f"{env} konnte nicht base64-dekodiert werden", file=sys.stderr); sys.exit(2)
-              pathlib.Path(path).write_bytes(data)
-          write_b64('P12_BASE64', '/tmp/signing/cert.p12')
-          write_b64('MOBILEPROVISION_BASE64', '/tmp/signing/profile.mobileprovision')
+                  print(f"{label}: Base64-Decode fehlgeschlagen", file=sys.stderr); sys.exit(2)
+
+          p12_b = clean_b64_strict("P12_BASE64", os.environ["P12_BASE64"])
+          pathlib.Path("/tmp/signing/cert.p12").write_bytes(p12_b)
+          PY
+
+          # Mobileprovision tolerant: Base64 ODER roher Inhalt
+          python3 - <<'PY'
+          import os, base64, pathlib, re, sys, binascii
+          raw = os.environ["MOBILEPROVISION_BASE64"]
+          s = ''.join(raw.split()).strip('"').strip("'")
+
+          def try_b64(s: str):
+              if not re.fullmatch(r'[A-Za-z0-9+/=]+', s or ""):
+                  return None
+              s += "=" * ((4 - len(s) % 4) % 4)
+              try:
+                  return base64.b64decode(s, validate=True)
+              except binascii.Error:
+                  return None
+
+          data = try_b64(s)
+          if data is None:
+              data = raw.encode("utf-8")
+          pathlib.Path("/tmp/signing/profile.mobileprovision").write_bytes(data)
           PY
 
           /usr/bin/openssl pkcs12 -info -in /tmp/signing/cert.p12 -passin pass:"$P12_PASSWORD" -nodes -nokeys >/dev/null \
@@ -56,7 +75,7 @@ workflows:
 
           UUID="$(/usr/bin/plutil -extract UUID raw -o - /tmp/signing/profile.plist 2>/dev/null || true)"
           if [[ -z "$UUID" ]]; then
-            UUID="$(/wusr/libexec/PlistBuddy -c 'Print :UUID' /tmp/signing/profile.plist 2>/dev/null || true)"
+            UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' /tmp/signing/profile.plist 2>/dev/null || true)"
           fi
           [[ -n "$UUID" ]] || { echo "Profil ungültig: UUID nicht gefunden"; exit 1; }
 
@@ -89,12 +108,12 @@ workflows:
             if [[ -n "${WS}" ]]; then
               SCHEME="$(
                 /usr/bin/xcodebuild -workspace "${WS}" -list -json \
-                | /usr/bin/python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("workspace",{}).get("schemes",[\":none:\"])[0])'
+                | /usr/bin/python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("workspace",{}).get("schemes",[":none:"])[0])'
               )"
             else
               SCHEME="$(
                 /usr/bin/xcodebuild -project "${PROJ}" -list -json \
-                | /usr/bin/python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("project",{}).get("schemes",[\":none:\"])[0])'
+                | /usr/bin/python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("project",{}).get("schemes",[":none:"])[0])'
               )"
             fi
           fi
@@ -120,6 +139,12 @@ workflows:
           DEST="-destination 'generic/platform=iOS'"
 
           if [[ -n "${WS}" ]]; then
+            /usr/bin/xcodebuild -workspace "${WS}" -scheme "${SCHEME}" -showBuildSettings >/tmp/xcodebuild_settings.log 2>&1 || true
+          else
+            /usr/bin/xcodebuild -project "${PROJ}" -scheme "${SCHEME}" -showBuildSettings >/tmp/xcodebuild_settings.log 2>&1 || true
+          fi
+
+          if [[ -n "${WS}" ]]; then
             echo "Using workspace: ${WS}  scheme: ${SCHEME}"
             xcode-project build-ipa \
               --workspace "${WS}" \
@@ -138,4 +163,5 @@ workflows:
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
+      - /tmp/xcodebuild_settings.log
       - $HOME/Library/Developer/Xcode/Archives/**/*
