@@ -1,58 +1,66 @@
 workflows:
-  ios_release:
-    name: iOS Release (TestFlight)
-    integrations:
-      app_store_connect: PartyPin
-
+  ios:
+    name: iOS
     environment:
-      flutter: stable
-      xcode: latest
+      groups:
+        - ios_credentials   # enthält: CM_CERTIFICATE (File), CM_CERTIFICATE_PASSWORD (Secure String), CM_PROVISIONING_PROFILE (File)
       vars:
-        CM_EXPORT_METHOD: app-store
+        WORKSPACE: "App.xcworkspace"   # oder leer lassen, wenn du .xcodeproj nutzt
+        SCHEME: "App"
+        BUNDLE_ID: "com.example.app"
+        EXPORT_METHOD: "app-store"      # app-store | ad-hoc | development | enterprise
 
     scripts:
-      - name: Flutter packages
-        script: flutter pub get
-
-      - name: Install signing (use uploaded p12 + mobileprovision)
+      - name: Install signing
         script: |
-          set -e
+          set -euo pipefail
+          [[ -f "$CM_CERTIFICATE" ]] || { echo "CM_CERTIFICATE fehlt"; exit 1; }
+          [[ -f "$CM_PROVISIONING_PROFILE" ]] || { echo "CM_PROVISIONING_PROFILE fehlt"; exit 1; }
+          [[ -n "${CM_CERTIFICATE_PASSWORD:-}" ]] || { echo "CM_CERTIFICATE_PASSWORD leer"; exit 1; }
+
           keychain initialize
-          keychain add-certificates
-          xcode-project use-profiles
+          keychain add-certificates \
+            --certificate "$CM_CERTIFICATE" \
+            --certificate-password "$CM_CERTIFICATE_PASSWORD"
 
-      - name: Export signing vars
-        script: |
-          set -e
-          PF=$(ls ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | head -n1)
-          INFO=$(/usr/bin/security cms -D -i "$PF")
-          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$INFO")
-          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$INFO")
-          TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' /dev/stdin <<< "$INFO")
-          echo "PROFILE_NAME=$PROFILE_NAME" >> $CM_ENV
-          echo "PROFILE_UUID=$PROFILE_UUID" >> $CM_ENV
-          echo "DEVELOPMENT_TEAM=$TEAM_ID" >> $CM_ENV
-          echo "Using PROFILE_NAME=$PROFILE_NAME, PROFILE_UUID=$PROFILE_UUID, TEAM_ID=$TEAM_ID"
-
-      - name: Debug signing
-        script: |
-          security find-identity -v -p codesigning || true
-          ls -l ~/Library/MobileDevice/Provisioning\ Profiles || true
-          xcodebuild -showBuildSettings -workspace ios/Runner.xcworkspace -scheme Runner | grep PRODUCT_BUNDLE_IDENTIFIER
+          xcode-project use-profiles \
+            --provisioning-profile "$CM_PROVISIONING_PROFILE"
 
       - name: Build IPA
         script: |
-          set -e
-          xcode-project build-ipa \
-            --workspace ios/Runner.xcworkspace \
-            --scheme Runner \
-            --archive-flags "CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM} PROVISIONING_PROFILE_SPECIFIER=${PROFILE_UUID} CODE_SIGN_IDENTITY=Apple\ Distribution"
+          set -euo pipefail
+          DEST="-destination 'generic/platform=iOS'"
+          if [[ -n "${WORKSPACE:-}" && -f "$WORKSPACE" ]]; then
+            xcode-project build-ipa \
+              --workspace "$WORKSPACE" \
+              --scheme "$SCHEME" \
+              --archive-flags="$DEST" \
+              --export-method "$EXPORT_METHOD"
+          else
+            PROJ="${WORKSPACE%.xcworkspace}.xcodeproj"
+            [[ -f "$PROJ" ]] || PROJ=$(ls *.xcodeproj | head -n1)
+            xcode-project build-ipa \
+              --project "$PROJ" \
+              --scheme "$SCHEME" \
+              --archive-flags="$DEST" \
+              --export-method "$EXPORT_METHOD"
+          fi
+
+      - name: Sanity check (optional)
+        script: |
+          set -euo pipefail
+          security find-identity -v -p codesigning || true
+          xcode-project detect-signing || true
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - build/ios/ipa/*.dSYM.zip
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/Archives/**/*
 
     publishing:
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: true
+      email:
+        recipients:
+          - dev@example.com
+        notify:
+          success: true
+          failure: true
