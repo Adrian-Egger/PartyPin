@@ -63,7 +63,6 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           backgroundColor: Colors.grey[900],
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          // macht den Dialog scrollbar -> kein gelb/schwarzer Overflow
           scrollable: true,
           title: Row(
             children: const [
@@ -79,7 +78,6 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
             builder: (context, setStateDialog) {
               return ConstrainedBox(
                 constraints: BoxConstraints(
-                  // Max. 60% der Bildschirmhöhe, damit nix überläuft
                   maxHeight: MediaQuery.of(context).size.height * 0.60,
                   maxWidth: 520,
                 ),
@@ -87,7 +85,6 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Text mit hervorgehobenen Schlüsselwörtern
                       RichText(
                         text: TextSpan(
                           style: const TextStyle(color: Colors.white70, height: 1.35),
@@ -146,27 +143,41 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     }
   }
 
+  /// Neue Reihenfolge: Terms -> Selection -> PartyMap
   Future<void> _checkTermsAndSelection() async {
     final prefs = await SharedPreferences.getInstance();
-    final termsAccepted = prefs.getBool('termsAccepted') ?? false;
-    final savedLanguage = prefs.getString('language');
-    final savedCountry = prefs.getString('country');
-    final savedCity = prefs.getString('city');
 
+    // 1) TermsScreen, wenn nicht akzeptiert
+    final termsAccepted = prefs.getBool('termsAccepted') ?? false;
     if (!termsAccepted) {
       if (!mounted) return;
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TermsScreen()));
-      return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const TermsScreen()),
+      );
     }
+
+    // 2) Nach Rückkehr ggf. Auswahl erzwingen
+    //    Werte frisch lesen, da TermsScreen sie evtl. setzt
+    final prefsAfterTerms = await SharedPreferences.getInstance();
+    String? savedLanguage = prefsAfterTerms.getString('language');
+    String? savedCountry  = prefsAfterTerms.getString('country');
+    String? savedCity     = prefsAfterTerms.getString('city');
 
     if (savedLanguage == null || savedCountry == null || savedCity == null) {
       if (!mounted) return;
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const SelectionScreen()));
-      return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SelectionScreen()),
+      );
     }
 
+    // 3) Danach zur PartyMap
     if (!mounted) return;
-    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const PartyMapScreen()));
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const PartyMapScreen()),
+    );
   }
 
   Future<void> _proceed() async {
@@ -212,7 +223,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         "vorname": vorname,
         "nachname": nachname,
         "username": username,
-        "password": password,
+        "password": password, // Hinweis: nicht im Klartext speichern in Produktion
         "age": age,
         "geburtsdatum": {"tag": _selectedDay, "monat": _selectedMonth, "jahr": _selectedYear},
       });
@@ -346,14 +357,12 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                               child: CupertinoPicker(
                                 backgroundColor: Colors.grey[850],
                                 itemExtent: 32,
-                                scrollController:
-                                FixedExtentScrollController(initialItem: _selectedDay - 1),
+                                scrollController: FixedExtentScrollController(initialItem: _selectedDay - 1),
                                 onSelectedItemChanged: (index) => setState(() => _selectedDay = index + 1),
                                 children: List.generate(
                                   31,
                                       (index) => Center(
-                                    child: Text("${index + 1}",
-                                        style: const TextStyle(color: Colors.white)),
+                                    child: Text("${index + 1}", style: const TextStyle(color: Colors.white)),
                                   ),
                                 ),
                               ),
@@ -362,15 +371,12 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                               child: CupertinoPicker(
                                 backgroundColor: Colors.grey[850],
                                 itemExtent: 32,
-                                scrollController:
-                                FixedExtentScrollController(initialItem: _selectedMonth - 1),
-                                onSelectedItemChanged: (index) =>
-                                    setState(() => _selectedMonth = index + 1),
+                                scrollController: FixedExtentScrollController(initialItem: _selectedMonth - 1),
+                                onSelectedItemChanged: (index) => setState(() => _selectedMonth = index + 1),
                                 children: List.generate(
                                   12,
                                       (index) => Center(
-                                    child: Text("${index + 1}",
-                                        style: const TextStyle(color: Colors.white)),
+                                    child: Text("${index + 1}", style: const TextStyle(color: Colors.white)),
                                   ),
                                 ),
                               ),
@@ -379,14 +385,15 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                               child: CupertinoPicker(
                                 backgroundColor: Colors.grey[850],
                                 itemExtent: 32,
-                                scrollController:
-                                FixedExtentScrollController(initialItem: currentYear - _selectedYear),
+                                scrollController: FixedExtentScrollController(
+                                  initialItem: DateTime.now().year - _selectedYear,
+                                ),
                                 onSelectedItemChanged: (index) =>
-                                    setState(() => _selectedYear = currentYear - index),
+                                    setState(() => _selectedYear = DateTime.now().year - index),
                                 children: List.generate(
-                                  currentYear - 1900 + 1,
+                                  DateTime.now().year - 1900 + 1,
                                       (index) => Center(
-                                    child: Text("${currentYear - index}",
+                                    child: Text("${DateTime.now().year - index}",
                                         style: const TextStyle(color: Colors.white)),
                                   ),
                                 ),
@@ -407,8 +414,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ).copyWith(
                             backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                                  (states) =>
-                              states.contains(MaterialState.disabled)
+                                  (states) => states.contains(MaterialState.disabled)
                                   ? Colors.redAccent.withOpacity(0.4)
                                   : Colors.redAccent,
                             ),
@@ -428,8 +434,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                             MaterialPageRoute(builder: (_) => const LoginScreen()),
                           );
                         },
-                        child: const Text("Ich habe schon einen Account",
-                            style: TextStyle(color: Colors.white54)),
+                        child: const Text("Ich habe schon einen Account", style: TextStyle(color: Colors.white54)),
                       ),
                     ],
                   ),
