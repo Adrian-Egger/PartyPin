@@ -3,7 +3,6 @@ workflows:
     name: iOS Release (TestFlight)
     integrations:
       app_store_connect: PartyPin
-
     environment:
       flutter: stable
       xcode: latest
@@ -20,8 +19,14 @@ workflows:
           keychain add-certificates
           xcode-project use-profiles
 
+      - name: Debug signing
+        script: |
+          security find-identity -v -p codesigning
+          ls -l ~/Library/MobileDevice/Provisioning\ Profiles
+          xcodebuild -showBuildSettings -workspace ios/Runner.xcworkspace -scheme Runner | grep PRODUCT_BUNDLE_IDENTIFIER
+
       - name: Build IPA
-        script: flutter build ipa --release --build-number ${CM_BUILD_ID}
+        script: xcode-project build-ipa --workspace ios/Runner.xcworkspace --scheme Runner
 
     artifacts:
       - build/ios/ipa/*.ipa
