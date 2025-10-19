@@ -41,12 +41,11 @@ workflows:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PROV" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           xcode-project use-profiles
-        - name: Build IPA
+      - name: Build IPA
         script: |
           #!/usr/bin/env bash
           set -euo pipefail
 
-          # Workspace/Projekt automatisch finden
           WS="$(find . -maxdepth 3 -name "*.xcworkspace" | head -n1 || true)"
           PROJ=""
           if [[ -z "$WS" ]]; then
@@ -54,7 +53,6 @@ workflows:
           fi
           [[ -n "$WS" || -n "$PROJ" ]] || { echo "Kein .xcworkspace oder .xcodeproj gefunden"; exit 1; }
 
-          # Scheme automatisch ermitteln, wenn nicht gesetzt
           if [[ -z "${SCHEME:-}" ]]; then
             if [[ -n "$WS" ]]; then
               SCHEME="$(
@@ -87,7 +85,6 @@ workflows:
               --archive-flags="$DEST" \
               --export-method "$EXPORT_METHOD"
           fi
-
 
     artifacts:
       - build/ios/ipa/*.ipa
