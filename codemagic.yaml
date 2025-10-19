@@ -7,15 +7,19 @@ workflows:
     environment:
       flutter: stable
       xcode: latest
+      vars:
+        CM_EXPORT_METHOD: app-store
 
     scripts:
       - name: Flutter packages
         script: flutter pub get
-      - name: Fetch signing (App Store)
+
+      - name: Use signing (uploaded p12 + mobileprovision)
         script: |
           keychain initialize
-          app-store-connect fetch-signing-files "com.partypin.partyPin" --type IOS_APP_STORE --create
+          keychain add-certificates
           xcode-project use-profiles
+
       - name: Build IPA
         script: flutter build ipa --release --build-number ${CM_BUILD_ID}
 
