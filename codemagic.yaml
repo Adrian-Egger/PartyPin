@@ -41,12 +41,12 @@ workflows:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PROV" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           xcode-project use-profiles
-            - name: Build IPA
+        - name: Build IPA
         script: |
           #!/usr/bin/env bash
           set -euo pipefail
 
-          # Workspace (.xcworkspace) oder Projekt (.xcodeproj) automatisch finden
+          # Workspace/Projekt automatisch finden
           WS="$(find . -maxdepth 3 -name "*.xcworkspace" | head -n1 || true)"
           PROJ=""
           if [[ -z "$WS" ]]; then
@@ -54,27 +54,21 @@ workflows:
           fi
           [[ -n "$WS" || -n "$PROJ" ]] || { echo "Kein .xcworkspace oder .xcodeproj gefunden"; exit 1; }
 
-          # Scheme automatisch ermitteln, wenn nicht angegeben
+          # Scheme automatisch ermitteln, wenn nicht gesetzt
           if [[ -z "${SCHEME:-}" ]]; then
             if [[ -n "$WS" ]]; then
-              SCHEME="$(/usr/bin/xcodebuild -workspace "$WS" -list -json \
-                | /usr/bin/python3 - << 'PY'
-import sys, json
-d = json.load(sys.stdin)
-print(d.get("workspace", {}).get("schemes", [":none:"])[0])
-PY
+              SCHEME="$(
+                /usr/bin/xcodebuild -workspace "$WS" -list -json \
+                | /usr/bin/python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("workspace",{}).get("schemes",[":none:"])[0])'
               )"
             else
-              SCHEME="$(/usr.bin/xcodebuild -project "$PROJ" -list -json \
-                | /usr/bin/python3 - << 'PY'
-import sys, json
-d = json.load(sys.stdin)
-print(d.get("project", {}).get("schemes", [":none:"])[0])
-PY
+              SCHEME="$(
+                /usr/bin/xcodebuild -project "$PROJ" -list -json \
+                | /usr/bin/python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("project",{}).get("schemes",[":none:"])[0])'
               )"
             fi
           fi
-          [[ "$SCHEME" != ":none:" ]] || { echo "Konnte Scheme nicht ermitteln. Setze SCHEME explizit."; exit 1; }
+          [[ -n "$SCHEME" && "$SCHEME" != ":none:" ]] || { echo "Konnte Scheme nicht ermitteln. Setze SCHEME explizit."; exit 1; }
 
           DEST="-destination 'generic/platform=iOS'"
 
@@ -93,6 +87,7 @@ PY
               --archive-flags="$DEST" \
               --export-method "$EXPORT_METHOD"
           fi
+
 
     artifacts:
       - build/ios/ipa/*.ipa
