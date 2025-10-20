@@ -22,4 +22,3 @@ workflows:
 
           echo "✅ Beide Dateien vorhanden:"
           ls -lh /tmp/cert.p12 /tmp/profile.mobileprovision
-Kannst du an dieses Bild mal einen kleinen Teil anhängen von dem, was noch dazu gehört, dass wir testen können, ob der Teil zumindest schon mal geht. Nur so einen Abschnitt dazuhängen, dass schon mal eine Sache mehr geht.
