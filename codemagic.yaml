@@ -21,34 +21,25 @@ workflows:
 
           req(){ [[ -n "${!1:-}" ]] || { echo "$1 leer"; exit 1; }; }
           req P12_BASE64; req MOBILEPROVISION_BASE64; req P12_PASSWORD
+
           mkdir -p /tmp/signing
 
-          # .p12 streng Base64
-          python3 - <<'PY'
-          import os, base64, pathlib, re, sys, binascii
-          s=''.join(os.environ["P12_BASE64"].split()).strip('"').strip("'")
-          if not re.fullmatch(r'[A-Za-z0-9+/=]+', s):
-              sys.exit(2)
-          s += "=" * ((4 - len(s) % 4) % 4)
-          pathlib.Path("/tmp/signing/cert.p12").write_bytes(base64.b64decode(s, validate=True))
-          PY
+          # .p12 aus ENV sauber decodieren
+          /usr/bin/python3 -c "import sys,base64,re,pathlib; s=''.join(sys.argv[1].split()).strip('\"').strip(\"'\"); 
+from_base64=re.fullmatch(r'[A-Za-z0-9+/=]+',s) is not None; 
+s+= '='*((4-len(s)%4)%4); 
+pathlib.Path('/tmp/signing/cert.p12').write_bytes(base64.b64decode(s, validate=True))" "$P12_BASE64"
 
-          # mobileprovision: Base64 CMS / XML-Plist / Roh
-          python3 - <<'PY'
-          import os, base64, pathlib, re, binascii, sys
-          raw=os.environ["MOBILEPROVISION_BASE64"]
-          if not raw: sys.exit(1)
-          s=''.join(raw.split()).strip('"').strip("'")
-          data=None
-          if re.fullmatch(r'[A-Za-z0-9+/=]+', s or ""):
-              try:
-                  s+= "="*((4-len(s)%4)%4)
-                  data=base64.b64decode(s, validate=True)
-              except binascii.Error:
-                  data=None
-          if data is None: data=raw.encode("utf-8")
-          pathlib.Path("/tmp/signing/profile.mobileprovision").write_bytes(data)
-          PY
+          # mobileprovision (Base64 oder Roh)
+          /usr/bin/python3 -c "import sys,base64,re,pathlib,binascii; raw=sys.argv[1]; 
+s=''.join(raw.split()).strip('\"').strip(\"'\"); 
+data=None
+if re.fullmatch(r'[A-Za-z0-9+/=]+', s or ''): 
+  try:
+    s+= '='*((4-len(s)%4)%4); data=base64.b64decode(s, validate=True)
+  except binascii.Error:
+    data=None
+pathlib.Path('/tmp/signing/profile.mobileprovision').write_bytes(data if data is not None else raw.encode())" "$MOBILEPROVISION_BASE64"
 
           /usr/bin/openssl pkcs12 -info -in /tmp/signing/cert.p12 -passin pass:"$P12_PASSWORD" -nodes -nokeys >/dev/null \
             || { echo "Ungültiges .p12 oder falsches Passwort"; exit 1; }
@@ -61,7 +52,7 @@ workflows:
 
           PLIST="/tmp/signing/profile.plist"; rm -f "$PLIST"
 
-          # Versuche: security cms -> OpenSSL -> eingebettetes <plist>
+          # CMS -> Plist, dann Fallbacks
           /usr/bin/security cms -D -i "$PROV" -o "$PLIST" >/dev/null 2>&1 || \
           /usr/bin/openssl  smime -inform DER -verify -noverify -in "$PROV" -out "$PLIST" >/dev/null 2>&1 || \
           /usr/bin/openssl  smime -inform PEM -verify -noverify -in "$PROV" -out "$PLIST" >/dev/null 2>&1 || true
@@ -73,7 +64,10 @@ workflows:
 
           /usr/bin/plutil -p "$PLIST" >/dev/null 2>&1 || { echo "Provisioning-Profile ungültig"; exit 1; }
 
-          UUID="$(/usr/bin/python3 -c 'import plistlib; print(plistlib.load(open("/tmp/signing/profile.plist","rb")).get("UUID",""))' || true)"
+          UUID="$(
+            /usr/bin/plutil -extract UUID raw -o - "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c 'Print :UUID' "$PLIST" 2>/dev/null || true
+          )"
           [[ -n "$UUID" ]] || { echo "Profil ungültig: UUID nicht gefunden"; exit 1; }
 
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
@@ -86,6 +80,7 @@ workflows:
         script: |
           #!/usr/bin/env bash
           set -euo pipefail
+
           export IPHONEOS_DEPLOYMENT_TARGET=14.0
 
           # Flutter vorbereiten
@@ -96,47 +91,44 @@ workflows:
             flutter build ios --release --no-codesign
           fi
 
-          # Podfile auf 14.0 setzen ohne Heredoc
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          pf=Path("ios/Podfile")
-          pf.parent.mkdir(parents=True, exist_ok=True)
-          if not pf.exists():
-              pf.write_text(
-                  "platform :ios, '14.0'\n"
-                  "require File.expand_path(File.join('..','Flutter','podhelper'))\n"
-                  "flutter_ios_podfile_setup\n"
-                  "target 'Runner' do\n"
-                  "  use_frameworks!\n"
-                  "  use_modular_headers!\n"
-                  "  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))\n"
-                  "end\n"
-                  "post_install do |installer|\n"
-                  "  installer.pods_project.targets.each do |t|\n"
-                  "    t.build_configurations.each do |config|\n"
-                  "      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'\n"
-                  "    end\n"
-                  "  end\n"
-                  "end\n"
-              )
-          txt=pf.read_text()
-          if re.search(r'^\s*platform\s*:ios', txt, re.M):
-              txt=re.sub(r"^\s*platform\s*:ios.*$", "platform :ios, '14.0'", txt, flags=re.M)
-          else:
-              txt="platform :ios, '14.0'\n"+txt
-          if "post_install do |installer|" not in txt:
-              txt += (
-                "\npost_install do |installer|\n"
-                "  installer.pods_project.targets.each do |t|\n"
-                "    t.build_configurations.each do |config|\n"
-                "      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'\n"
-                "    end\n"
-                "  end\n"
-                "end\n"
-              )
-          pf.write_text(txt)
-          PY
+          # Podfile sicher auf 14.0 setzen (ohne Heredoc)
+          /usr/bin/python3 - <<'PYCODE' >/dev/null 2>&1 || true
+PYCODE
+          /usr/bin/python3 -c "from pathlib import Path; import re
+pf=Path('ios/Podfile'); pf.parent.mkdir(parents=True, exist_ok=True)
+if not pf.exists():
+  pf.write_text(\"\"\"platform :ios, '14.0'
+require File.expand_path(File.join('..','Flutter','podhelper'))
+flutter_ios_podfile_setup
+target 'Runner' do
+  use_frameworks!
+  use_modular_headers!
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+end
+post_install do |installer|
+  installer.pods_project.targets.each do |t|
+    t.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+    end
+  end
+end
+\"\"\")
+txt=pf.read_text()
+if re.search(r'^\\s*platform\\s*:ios', txt, re.M):
+  txt=re.sub(r'^\\s*platform\\s*:ios.*$', \"platform :ios, '14.0'\", txt, flags=re.M)
+else:
+  txt=\"platform :ios, '14.0'\\n\"+txt
+if 'post_install do |installer|' not in txt:
+  txt += \"\"\"\npost_install do |installer|
+  installer.pods_project.targets.each do |t|
+    t.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+    end
+  end
+end
+\"\"\"
+pf.write_text(txt)
+"
 
           # Pods neu
           if [[ -d ios ]]; then
@@ -162,18 +154,13 @@ workflows:
           fi
           [[ -n "$WS" || -n "$PROJ" ]] || { echo "Kein iOS .xcworkspace oder .xcodeproj gefunden"; exit 1; }
 
-          # Scheme wählen
+          # Schemes lesen ohne Heredoc
           LIST_JSON="$(/usr/bin/xcodebuild ${WS:+-workspace "$WS"} ${PROJ:+-project "$PROJ"} -list -json 2>/dev/null || true)"
-          DETECTED="$(/usr/bin/python3 - <<'PY'
-import json,sys
-try:
-  d=json.loads(sys.stdin.read() or "{}")
-  s=d.get("workspace",{}).get("schemes") or d.get("project",{}).get("schemes") or []
-  print("\n".join(s))
-except Exception:
-  pass
-PY
-<<<"$LIST_JSON")"
+          DETECTED="$(LIST_JSON="$LIST_JSON" /usr/bin/python3 -c "import os,json
+d=json.loads(os.environ.get('LIST_JSON') or '{}')
+s=d.get('workspace',{}).get('schemes') or d.get('project',{}).get('schemes') or []
+print('\n'.join(s))" 2>/dev/null || true)"
+
           WANT="${SCHEME:-}"
           if [[ -n "$WANT" ]] && grep -Fxq "$WANT" <<<"$DETECTED"; then
             PICK="$WANT"
@@ -225,21 +212,20 @@ PY
             xcodebuild -project "$PROJ" -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination "$DESTINATION" clean archive -archivePath "$ARCHIVE_PATH" CODE_SIGN_STYLE=Manual IPHONEOS_DEPLOYMENT_TARGET=14.0 | tee /tmp/xcodebuild_logs_archive.log
           fi
 
-          # ExportOptions
+          # ExportOptions.plist ohne Heredoc
           EXPORT_METHOD="${EXPORT_METHOD:-app-store}"
           EXPORT_PLIST="/tmp/ExportOptions.plist"
-          cat > "$EXPORT_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>method</key><string>${EXPORT_METHOD}</string>
-  <key>signingStyle</key><string>manual</string>
-  <key>destination</key><string>export</string>
-  <key>stripSwiftSymbols</key><true/>
-  <key>compileBitcode</key><false/>
-  <key>uploadBitcode</key><false/>
-</dict></plist>
-PLIST
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0"><dict>' \
+            '  <key>method</key><string>'"${EXPORT_METHOD}"'</string>' \
+            '  <key>signingStyle</key><string>manual</string>' \
+            '  <key>destination</key><string>export</string>' \
+            '  <key>stripSwiftSymbols</key><true/>' \
+            '  <key>compileBitcode</key><false/>' \
+            '  <key>uploadBitcode</key><false/>' \
+            '</dict></plist>' > "$EXPORT_PLIST"
 
           # Export
           mkdir -p build/ios/ipa
