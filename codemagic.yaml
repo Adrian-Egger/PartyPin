@@ -29,22 +29,4 @@ workflows:
           /usr/bin/openssl smime -inform DER -verify -noverify -in /tmp/profile.mobileprovision -out "$PLIST" >/dev/null 2>&1 || \
           awk 'f{print} /<plist/{f=1} /<\/plist>/{print; exit}' /tmp/profile.mobileprovision > "$PLIST"
 
-          /usr/bin/plutil -convert xml1 "$PLIST" >/dev/null 2>&1 || true
-          /usr/bin/plutil -p "$PLIST" >/dev/null || { echo "❌ Provisioning ungültig"; exit 1; }
-
-          echo "ℹ️  Profil-Metadaten:"
-          python3 - <<'PY'
-import plistlib, sys
-p="/tmp/profile.plist"
-d=plistlib.load(open(p,"rb"))
-ent=d.get("Entitlements",{})
-print("  Name:             ", d.get("Name",""))
-print("  UUID:             ", d.get("UUID",""))
-print("  TeamIdentifier:   ", (d.get("TeamIdentifier") or [""])[0])
-print("  AppID Prefix:     ", (d.get("ApplicationIdentifierPrefix") or [""])[0])
-print("  application-id:   ", ent.get("application-identifier",""))
-print("  get-task-allow:   ", ent.get("get-task-allow",""))
-PY
-
-          echo "✅ Dateien bereit:"
-          ls -lh /tmp/cert.p12 /tmp/profile.mobileprovision "$PLIST" || true
+         
