@@ -1,0 +1,40 @@
+platform :ios, '14.0'
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+project 'Runner', { 'Debug' => :debug, 'Profile' => :release, 'Release' => :release }
+
+def flutter_root
+  p = File.expand_path(File.join('..','Flutter','Generated.xcconfig'), __FILE__)
+  raise "#{p} must exist. Run 'flutter pub get' first." unless File.exist?(p)
+  File.foreach(p) { |line| m = line.match(/FLUTTER_ROOT\=(.*)/); return m[1].strip if m }
+  raise "FLUTTER_ROOT not found."
+end
+
+require File.expand_path(File.join('packages','flutter_tools','bin','podhelper'), flutter_root)
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  use_frameworks! :linkage => :static
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |t|
+    flutter_additional_ios_build_settings(t)
+    t.build_configurations.each do |cfg|
+      cfg.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+    end
+  end
+
+  %w[openssl_grpc BoringSSL-GRPC].each do |name|
+    t = installer.pods_project.targets.find { |x| x.name == name }
+    next unless t
+    t.build_configurations.each do |c|
+      s = c.build_settings
+      s['CODE_SIGNING_ALLOWED']  = 'NO'
+      s['CODE_SIGNING_REQUIRED'] = 'NO'
+      s['CODE_SIGNING_IDENTITY'] = ''
+      s['CODE_SIGN_STYLE']       = 'Manual'
+      s['SKIP_INSTALL']          = 'YES'
+    end
+  end
+end
