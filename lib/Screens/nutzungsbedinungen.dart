@@ -1,3 +1,4 @@
+//lib/Screens/terms_screen.dart
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'party_map_screen.dart';
@@ -13,12 +14,24 @@ class _TermsScreenState extends State<TermsScreen> {
   bool _accepted = false;
   bool _isSaving = false;
 
+  // --- Farben: ident mit NewPartyScreen ---
+  static const _bg = Color(0xFF0E0F12);
+  static const _gradTop = Color(0xFF0E0F12);
+  static const _gradBottom = Color(0xFF141A22);
+  static const _panel = Color(0xFF15171C);
+  static const _panelBorder = Color(0xFF2A2F38);
+  static const _card = Color(0xFF1C1F26);
+  static const _textPrimary = Colors.white;
+  static const _textSecondary = Color(0xFFB6BDC8);
+  static const _accent = Color(0xFFFF3B30); // Rot
+  static const _secondary = Color(0xFF00C2A8); // Türkis (falls gebraucht)
+
   Future<void> _acceptTerms() async {
     setState(() => _isSaving = true);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('termsAccepted', true);
+    if (!mounted) return;
     setState(() => _isSaving = false);
-
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => const PartyMapScreen()),
@@ -28,17 +41,21 @@ class _TermsScreenState extends State<TermsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _bg,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text("Nutzungsbedingungen & Datenschutz"),
         centerTitle: true,
+        title: const Text(
+          "Nutzungsbedingungen & Datenschutz",
+          style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
+        ),
       ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF0f0f0f), Color(0xFF1f1f1f)],
+            colors: [_gradTop, _gradBottom],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
@@ -47,33 +64,52 @@ class _TermsScreenState extends State<TermsScreen> {
           child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 40),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Card(
-                color: Colors.grey[900]!.withOpacity(0.9),
-                shape: RoundedRectangleBorder(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _panel,
                   borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: _panelBorder),
+                  boxShadow: const [
+                    BoxShadow(color: Color(0x33000000), blurRadius: 14, offset: Offset(0, 10)),
+                  ],
                 ),
-                elevation: 12,
                 child: Padding(
                   padding: const EdgeInsets.all(20),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Icon(Icons.gavel, size: 64, color: Colors.redAccent),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          Icon(Icons.gavel, size: 56, color: _accent),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
                       const Text(
                         "Datenschutzerklärung & AGB",
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
-                          color: Colors.white,
+                          color: _textPrimary,
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        height: 300,
-                        child: SingleChildScrollView(
-                          child: const Text(
-                            """
+                      const SizedBox(height: 16),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: _card,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: _panelBorder),
+                        ),
+                        constraints: const BoxConstraints(minHeight: 260, maxHeight: 360),
+                        padding: const EdgeInsets.all(14),
+                        child: const Scrollbar(
+                          thumbVisibility: true,
+                          child: SingleChildScrollView(
+                            child: Text(
+                              '''
 Datenschutzerklärung
 
 1. Erhobene Daten
@@ -113,102 +149,91 @@ Nutzer haben das Recht auf:
 - Widerspruch gegen die Verarbeitung
 - Datenübertragbarkeit
 
-Dazu kann eine Anfrage an mypartypin@gmail.com gestellt werden.
+Anfragen an: mypartypin@gmail.com
 
 7. Sicherheit
 Wir setzen technische und organisatorische Maßnahmen ein, um die Daten vor Verlust, Missbrauch und unbefugtem Zugriff zu schützen.
 
 8. Änderungen
-Wir behalten uns vor, diese Datenschutzerklärung zu ändern, um sie an geänderte Funktionen der App oder rechtliche Anforderungen anzupassen. Die aktuelle Version ist jederzeit in der App abrufbar.
+Wir behalten uns vor, diese Datenschutzerklärung anzupassen. Die aktuelle Version ist in der App abrufbar.
 
 9. Anwendbares Recht
-Es gilt das Recht der Bundesrepublik Österreich, soweit zwingendes Verbraucherrecht nicht entgegensteht.
+Es gilt österreichisches Recht, soweit zwingendes Verbraucherrecht nicht entgegensteht.
 
 
 Allgemeine Geschäftsbedingungen (AGB)
 
 Geltungsbereich
-Diese App ermöglicht es Nutzerinnen und Nutzern, öffentliche Veranstaltungen („Partys“) auf einer Karte darzustellen, sich für Partys anzumelden und mit anderen Teilnehmern zu kommunizieren. Die Nutzung erfolgt ausschließlich auf Grundlage dieser AGB.
+Diese App ermöglicht es, Partys auf einer Karte darzustellen, sich anzumelden und zu kommunizieren. Nutzung ausschließlich auf Grundlage dieser AGB.
 
 Registrierung
-Zur Nutzung der App ist eine Registrierung mit Vorname, Nachname, Alter und Benutzername erforderlich. Der Nutzer verpflichtet sich, bei der Registrierung wahrheitsgemäße Angaben zu machen.
+Erforderlich sind Vorname, Nachname, Alter und Benutzername. Angaben müssen wahrheitsgemäß sein.
 
 Nutzung der App
-Nutzer können Partys anlegen und verwalten. Es gibt offene Partys (sichtbar für alle registrierten Nutzer). Der Ersteller einer Party ist verantwortlich für deren Inhalt und Einladungen.
+Nutzer können Partys anlegen und verwalten. Der Ersteller ist für Inhalte verantwortlich.
 
 Verantwortlichkeiten
-Die App stellt lediglich die technische Plattform bereit. Für den Inhalt der Partys und die Organisation der Veranstaltungen sind ausschließlich die Nutzer verantwortlich. Die Betreiber übernehmen keine Haftung für Schäden, die im Zusammenhang mit Partys entstehen.
+Die App ist eine Plattform. Für Inhalte und Organisation haften die Nutzer. Keine Haftung der Betreiber, soweit gesetzlich zulässig.
 
 Pflichten der Nutzer
-- Keine Veröffentlichung von rechtswidrigen Inhalten
-- Keine Nutzung der App zum Zwecke von Belästigung oder Betrug
-- Wahrung der Rechte Dritter
+- Keine rechtswidrigen Inhalte
+- Keine Belästigung oder Betrug
+- Rechte Dritter wahren
 
-Haftungsausschluss
-Die Betreiber übernehmen keine Garantie für die Verfügbarkeit der App. Eine Haftung für Schäden, die durch die Nutzung der App entstehen, ist ausgeschlossen, soweit gesetzlich zulässig.
+Verfügbarkeit
+Keine Garantie auf dauerhafte Verfügbarkeit.
 
 Änderungen der AGB
-Die Betreiber behalten sich vor, diese AGB jederzeit zu ändern. Änderungen werden in der App angezeigt. Die weitere Nutzung nach Änderung gilt als Zustimmung.
+Änderungen werden in der App angezeigt. Weitere Nutzung gilt als Zustimmung.
 
 Anwendbares Recht
-Es gilt das Recht der Bundesrepublik Österreich, soweit zwingendes Verbraucherrecht nicht entgegensteht.
-""",
-                            style: TextStyle(color: Colors.white70, fontSize: 14),
+Es gilt österreichisches Recht, soweit zwingendes Verbraucherrecht nicht entgegensteht.
+''',
+                              style: TextStyle(color: _textSecondary, fontSize: 14, height: 1.35),
+                            ),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 18),
                       Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Checkbox(
                             value: _accepted,
-                            activeColor: Colors.redAccent,
-                            onChanged: (val) {
-                              setState(() {
-                                _accepted = val ?? false;
-                              });
-                            },
+                            activeColor: _accent,
+                            side: const BorderSide(color: _panelBorder),
+                            onChanged: (val) => setState(() => _accepted = val ?? false),
                           ),
+                          const SizedBox(width: 6),
                           const Expanded(
                             child: Text(
                               "Ich habe die Datenschutzerklärung und AGB gelesen und akzeptiere sie.",
-                              style: TextStyle(color: Colors.white70),
+                              style: TextStyle(color: _textSecondary),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       SizedBox(
                         width: double.infinity,
-                        child: AnimatedOpacity(
-                          duration: const Duration(milliseconds: 300),
-                          opacity: (_accepted && !_isSaving) ? 1.0 : 0.5,
-                          child: ElevatedButton(
-                            onPressed: (_accepted && !_isSaving) ? _acceptTerms : null,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.redAccent,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: _isSaving
-                                ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
-                            )
-                                : const Text(
-                              "Weiter",
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
+                        child: ElevatedButton(
+                          onPressed: (_accepted && !_isSaving) ? _acceptTerms : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _accent,
+                            disabledBackgroundColor: Colors.grey[700],
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: _isSaving
+                              ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                          )
+                              : const Text(
+                            "Weiter",
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                           ),
                         ),
                       ),

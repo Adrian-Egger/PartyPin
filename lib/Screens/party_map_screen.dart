@@ -2,6 +2,7 @@
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -11,50 +12,54 @@ import '../Screens/new_party.dart';
 import '../Screens/menu_screen.dart';
 import '../Screens/profil_settings_screen.dart';
 import '../Screens/feedback_screen.dart';
+import '../Social/friends.dart';
 import '../Services/geocoding_services.dart';
-
-// ⬇️ ausgelagertes BottomSheet (UI ist dort)
 import '../widgets/party_bottom_sheet.dart';
 
 class PartyMapScreen extends StatefulWidget {
   const PartyMapScreen({super.key});
-
   @override
   State<PartyMapScreen> createState() => _PartyMapScreenState();
 }
 
-class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProviderStateMixin {
+class _PartyMapScreenState extends State<PartyMapScreen>
+    with SingleTickerProviderStateMixin {
+  // Farbschema
+  static const _bgTop = Color(0xFF0E0F12);
+  static const _bgBottom = Color(0xFF141A22);
+  static const _panel = Color(0xFF1C1F26);
+  static const _text = Colors.white;
+  static const _muted = Color(0xFFB6BDC8);
+  static const _accent = Color(0xFFFF3B30);
+
   GoogleMapController? mapController;
   CameraPosition? _startPos;
 
   final Set<Marker> _markers = {};
   final Set<Circle> _circles = {};
-  final Map<String, Map<String, dynamic>> _partyCache = {}; // partyId -> data
+  final Map<String, Map<String, dynamic>> _partyCache = {};
 
+  // Indizes: 0=Feedback, 1=Map, 2=Freunde, 3=Neue Party
   int _currentIndex = 1;
   String _currentCity = "";
   double _currentLat = 48.2082;
   double _currentLng = 16.3738;
 
-  String? _currentUsername; // "Vorname Nachname"
+  String? _currentUsername;
 
-  // Lock icons (Closed)
-  BitmapDescriptor? _lockIconGrey;   // pending/keine Anfrage
-  BitmapDescriptor? _lockIconGreen;  // approved (für mich)
-  BitmapDescriptor? _lockIconBlue;   // Host (eigene Party)
-  BitmapDescriptor? _lockIconRed;    // declined (für mich)
-  BitmapDescriptor? _hitboxIcon;     // große transparente Tap-Fläche
+  BitmapDescriptor? _lockIconGrey;
+  BitmapDescriptor? _lockIconGreen;
+  BitmapDescriptor? _lockIconBlue;
+  BitmapDescriptor? _lockIconRed;
+  BitmapDescriptor? _hitboxIcon;
 
-  // Verified-Cache (optional)
   final Map<String, bool> _verifiedCache = {};
-
   bool _ratingPromptShown = false;
-
-  // --- LEGAL WARNING STATE (Banner im Header) ---
   bool _legalWarnDismissed = false;
-
-  // --- Reload-Status für den Button ---
   bool _isReloading = false;
+
+  // Suche
+  final TextEditingController _searchCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -68,6 +73,22 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
     });
   }
 
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  // exakt unter dem AppBar-Titel
+  double _searchTop(BuildContext ctx) {
+    final pad = MediaQuery.of(ctx).padding.top;
+    return pad + kToolbarHeight + 8;
+  }
+
+  // ---------- kleine Helfer ----------
+  String _safeDocId(String input) =>
+      input.trim().replaceAll('/', '_').replaceAll('#', '_').replaceAll('?', '_');
+
   // ---------- Setup ----------
   Future<void> _loadSavedLocation() async {
     final prefs = await SharedPreferences.getInstance();
@@ -75,16 +96,20 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
     _currentLat = prefs.getDouble('selectedLat') ?? 48.2082;
     _currentLng = prefs.getDouble('selectedLng') ?? 16.3738;
     setState(() {
-      _startPos = CameraPosition(target: LatLng(_currentLat, _currentLng), zoom: 13);
+      _startPos = CameraPosition(
+        target: LatLng(_currentLat, _currentLng),
+        zoom: 13,
+      );
     });
   }
 
+  // NUR den echten Username verwenden, der beim Login in SharedPreferences gespeichert wird
   Future<void> _loadCurrentUser() async {
     final prefs = await SharedPreferences.getInstance();
-    final vorname = prefs.getString('vorname') ?? '';
-    final nachname = prefs.getString('nachname') ?? '';
-    final combined = '$vorname $nachname'.trim();
-    _currentUsername = combined.isEmpty ? null : combined;
+    final uname = (prefs.getString('username') ?? '').trim();
+    setState(() {
+      _currentUsername = uname.isEmpty ? null : uname;
+    });
   }
 
   Future<void> _loadLegalWarnState() async {
@@ -102,22 +127,35 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
 
   Future<void> _prepareIcons() async {
     _lockIconBlue = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: 112, circleColor: const Color(0xFF1976D2),
-      icon: Icons.lock_rounded, iconColor: Colors.white, iconScale: .52,
+      diameter: 112,
+      circleColor: const Color(0xFF1976D2),
+      icon: Icons.lock_rounded,
+      iconColor: Colors.white,
+      iconScale: .52,
     ));
     _lockIconGrey = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: 128, circleColor: const Color(0xFF424242),
-      icon: Icons.lock_rounded, iconColor: Colors.white, iconScale: .55,
+      diameter: 128,
+      circleColor: const Color(0xFF424242),
+      icon: Icons.lock_rounded,
+      iconColor: Colors.white,
+      iconScale: .55,
     ));
     _lockIconGreen = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: 128, circleColor: const Color(0xFF2E7D32),
-      icon: Icons.lock_rounded, iconColor: Colors.white, iconScale: .55,
+      diameter: 128,
+      circleColor: const Color(0xFF2E7D32),
+      icon: Icons.lock_rounded,
+      iconColor: Colors.white,
+      iconScale: .55,
     ));
     _lockIconRed = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: 128, circleColor: const Color(0xFFD32F2F),
-      icon: Icons.lock_rounded, iconColor: Colors.white, iconScale: .55,
+      diameter: 128,
+      circleColor: const Color(0xFFD32F2F),
+      icon: Icons.lock_rounded,
+      iconColor: Colors.white,
+      iconScale: .55,
     ));
-    _hitboxIcon = BitmapDescriptor.fromBytes(await _drawTransparentCircle(diameter: 240));
+    _hitboxIcon =
+        BitmapDescriptor.fromBytes(await _drawTransparentCircle(diameter: 240));
     if (mounted) setState(() {});
   }
 
@@ -171,20 +209,31 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
 
   String _monthName(int month) {
     const months = [
-      "", "Januar", "Februar", "März", "April", "Mai",
-      "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"
+      "",
+      "Januar",
+      "Februar",
+      "März",
+      "April",
+      "Mai",
+      "Juni",
+      "Juli",
+      "August",
+      "September",
+      "Oktober",
+      "November",
+      "Dezember"
     ];
     return months[month];
   }
 
-  // ---------- Flags / Parser / Datum ----------
-  bool _isClosedDoc(Map<String,dynamic> d) {
+  // ---------- Parser / Flags ----------
+  bool _isClosedDoc(Map<String, dynamic> d) {
     final t = (d['type'] ?? '').toString().trim().toLowerCase();
     final b = d['isClosed'] == true;
     return t == 'closed' || b == true;
   }
 
-  LatLng? _parseLatLng(Map<String,dynamic> d) {
+  LatLng? _parseLatLng(Map<String, dynamic> d) {
     try {
       if (d['lat'] != null && d['lng'] != null) {
         double toD(v) {
@@ -192,12 +241,15 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
           if (v is String) return double.parse(v);
           return double.nan;
         }
+
         final lat = toD(d['lat']);
         final lng = toD(d['lng']);
         if (lat.isFinite && lng.isFinite) return LatLng(lat, lng);
       }
       final gp = d['location'] ?? d['geo'] ?? d['coords'];
-      if (gp != null && gp is GeoPoint) return LatLng(gp.latitude, gp.longitude);
+      if (gp != null && gp is GeoPoint) {
+        return LatLng(gp.latitude, gp.longitude);
+      }
     } catch (_) {}
     return null;
   }
@@ -205,8 +257,11 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
   DateTime? _partyStart(Map<String, dynamic> d) {
     DateTime? base;
     final v = d['date'];
-    if (v is Timestamp) base = v.toDate();
-    else if (v is String) base = DateTime.tryParse(v);
+    if (v is Timestamp) {
+      base = v.toDate();
+    } else if (v is String) {
+      base = DateTime.tryParse(v);
+    }
     if (base == null) return null;
 
     final timeStr = (d['time'] ?? '').toString().trim();
@@ -228,20 +283,20 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
 
   bool _isActive(Map<String, dynamic> d) => !_isExpiredWithGrace(d);
 
-  // ⬇️ NEU: Rating-Fenster = ab 00:00 des nächsten Kalendertags
   bool _isInRatingWindow(Map<String, dynamic> d) {
     final start = _partyStart(d);
     if (start == null) return false;
-    final nextDayMidnight = DateTime(start.year, start.month, start.day).add(const Duration(days: 1));
-    final now = DateTime.now();
-    return now.isAfter(nextDayMidnight);
+    final nextDayMidnight =
+    DateTime(start.year, start.month, start.day).add(const Duration(days: 1));
+    return DateTime.now().isAfter(nextDayMidnight);
   }
 
-  // ---------- Verified Helpers ----------
+  // ---------- Verified ----------
   Future<bool> _isUserVerified(String username) async {
     if (_verifiedCache.containsKey(username)) return _verifiedCache[username]!;
     try {
-      final snap = await FirebaseFirestore.instance.collection('users').doc(username).get();
+      final snap =
+      await FirebaseFirestore.instance.collection('users').doc(username).get();
       final verified = (snap.data()?['verified'] == true);
       _verifiedCache[username] = verified;
       return verified;
@@ -251,58 +306,15 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
     }
   }
 
-  Future<void> _toggleMyVerified() async {
-    if (_currentUsername == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Kein Name gesetzt – Profil öffnen und Vor-/Nachname hinterlegen.")),
-      );
-    } else {
-      final ref = FirebaseFirestore.instance.collection('users').doc(_currentUsername);
-      final snap = await ref.get();
-      final current = snap.data()?['verified'] == true;
-      await ref.set({'verified': !current}, SetOptions(merge: true));
-      _verifiedCache[_currentUsername!] = !current;
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Verified für $_currentUsername: ${!current ? 'aktiv' : 'deaktiviert'}")),
-        );
-        setState(() {});
-      }
-    }
-  }
-
-  Widget _nameWithVerifiedBadge(String username, {TextStyle? style}) {
-    return FutureBuilder<bool>(
-      future: _isUserVerified(username),
-      builder: (context, snap) {
-        final isVerified = snap.data == true;
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(
-              child: Text(
-                username,
-                style: style ?? const TextStyle(color: Colors.white),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (isVerified) ...[
-              const SizedBox(width: 6),
-              const Icon(Icons.verified, color: Colors.lightBlueAccent, size: 18),
-            ],
-          ],
-        );
-      },
-    );
-  }
-
-  // ---------- RSVP/Icon Helpers ----------
+  // ---------- RSVP ----------
   Future<String?> _myOpenRsvpStatus(String partyId) async {
     if (_currentUsername == null) return null;
     try {
       final snap = await FirebaseFirestore.instance
-          .collection('Party').doc(partyId)
-          .collection('rsvps').doc(_currentUsername)
+          .collection('Party')
+          .doc(partyId)
+          .collection('rsvps')
+          .doc(_currentUsername!) // ! weil oben geprüft
           .get();
       return snap.data()?['status'] as String?;
     } catch (_) {
@@ -338,7 +350,7 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
     });
   }
 
-  // ---------- Load / Refresh ----------
+  // ---------- Daten ----------
   Future<void> _refreshMap() async {
     _partyCache.clear();
     _markers.clear();
@@ -354,7 +366,6 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
       try {
         final data = doc.data();
         _partyCache[doc.id] = data;
-
         if (_isExpiredWithGrace(data)) continue;
 
         final pos = _parseLatLng(data);
@@ -372,7 +383,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
           bool isHostForThisParty = false;
           String? myStatus;
           if (_currentUsername != null) {
-            isHostForThisParty = (data['hostName']?.toString().trim() ?? '') == _currentUsername!.trim();
+            isHostForThisParty =
+                (data['hostName']?.toString().trim() ?? '') == _currentUsername!.trim();
             if (!isHostForThisParty) {
               myStatus = await _myRequestStatus(doc.id, _currentUsername!);
             }
@@ -382,8 +394,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
             circleId: CircleId(doc.id),
             center: shift,
             radius: 1000,
-            fillColor: Colors.grey.withOpacity(0.25),
-            strokeColor: Colors.grey,
+            fillColor: Colors.grey.withOpacity(0.22),
+            strokeColor: Colors.grey.shade500,
             strokeWidth: 2,
             zIndex: 1,
             onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
@@ -392,7 +404,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
           _markers.add(Marker(
             markerId: MarkerId('hit_${doc.id}'),
             position: shift,
-            icon: _hitboxIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+            icon:
+            _hitboxIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
             anchor: const Offset(0.5, 0.5),
             zIndex: 9,
             consumeTapEvents: true,
@@ -423,7 +436,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
           bool isHostForThisParty = false;
           String? myOpenStatus;
           if (_currentUsername != null) {
-            isHostForThisParty = (data['hostName']?.toString().trim() ?? '') == _currentUsername!.trim();
+            isHostForThisParty =
+                (data['hostName']?.toString().trim() ?? '') == _currentUsername!.trim();
             if (!isHostForThisParty) {
               myOpenStatus = await _myOpenRsvpStatus(doc.id);
             }
@@ -458,7 +472,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
       final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
       try {
         final partyDoc = await partyRef.get();
-        final arr = (partyDoc.data()?['approvedUsers'] as List?)?.cast<String>() ?? const <String>[];
+        final arr =
+            (partyDoc.data()?['approvedUsers'] as List?)?.cast<String>() ?? const <String>[];
         if (arr.contains(username)) return 'approved';
       } catch (_) {}
       try {
@@ -476,89 +491,114 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
 
   // ---------- Ratings ----------
   Future<void> _setRating(String partyId, String username, String value) async {
-    // value: 'good' | 'bad'
     final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
     final ratingRef = partyRef.collection('ratings').doc(username);
 
     try {
       await FirebaseFirestore.instance.runTransaction((tx) async {
-        // --- Reads first (CF rules: all reads before writes) ---
         final partySnap = await tx.get(partyRef);
         final partyData = partySnap.data() ?? {};
         final ratingSnap = await tx.get(ratingRef);
 
-        // Host-ID für Aggregation (bevorzugt hostId, sonst hostName)
-        final String hostDocId = (partyData['hostId']?.toString().trim().isNotEmpty == true)
-            ? partyData['hostId'].toString()
-            : (partyData['hostName']?.toString() ?? '').toString();
-
+        // Host sauber bestimmen: hostUid bevorzugen, sonst sicherer Name
+        final hostUid =
+        ((partyData['hostUid'] ?? partyData['hostId']) ?? '').toString().trim();
+        final hostName = (partyData['hostName'] ?? '').toString().trim();
+        final hostDocId = hostUid.isNotEmpty ? hostUid : _safeDocId(hostName);
         if (hostDocId.isEmpty) {
           throw StateError("Kein Host für Aggregation vorhanden.");
         }
 
-        // ⬇️ NEU: Bewertungsfenster serverseitig prüfen (ab 00:00 des nächsten Tages)
+        // Bewertung erst ab dem Folgetag
         DateTime? start;
         final v = partyData['date'];
-        if (v is Timestamp) start = v.toDate();
-        else if (v is String) start = DateTime.tryParse(v);
+        if (v is Timestamp) {
+          start = v.toDate();
+        } else if (v is String) {
+          start = DateTime.tryParse(v);
+        }
         if (start != null) {
-          // Normalisiere auf 00:00 am Party-Tag
           start = DateTime(start.year, start.month, start.day, 0, 0);
         }
-        final now = DateTime.now();
-        if (start == null || now.isBefore(start.add(const Duration(days: 1)))) {
+        if (start == null || DateTime.now().isBefore(start.add(const Duration(days: 1)))) {
           throw StateError("Bewertung erst ab dem nächsten Tag möglich.");
         }
 
+        // User-Dokument des Hosts
         final userRef = FirebaseFirestore.instance.collection('users').doc(hostDocId);
         final userSnap = await tx.get(userRef);
 
-        // Delta bestimmen (falls User seine Meinung ändert)
+        // Vorherige Stimme des aktuellen Users zu dieser Party
         final prevVal = (ratingSnap.data()?['value'] as String?);
         int deltaGood = 0, deltaBad = 0;
         if (value == 'good') deltaGood++;
-        if (value == 'bad')  deltaBad++;
-
-        if (prevVal == 'good') deltaGood--; // rückgängig machen
-        if (prevVal == 'bad')  deltaBad--;
-
-        // Wenn keine Veränderung, kein weiterer Write nötig
+        if (value == 'bad') deltaBad++;
+        if (prevVal == 'good') deltaGood--;
+        if (prevVal == 'bad') deltaBad--;
         final changed = (deltaGood != 0 || deltaBad != 0);
 
-        // --- Writes ---
-        // Rating speichern/überschreiben
-        tx.set(ratingRef, {
-          'username': username,
-          'value': value,
-          'ts': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
+        // 1) Party-spezifische Stimme speichern
+        tx.set(
+          ratingRef,
+          {
+            'username': username,
+            'value': value,
+            'ts': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
 
+        // 2) Benutzer-Scoped Rating-Schema mitschreiben: pro Party, pro Rater
+        final perPartyUserRatingRef =
+        userRef.collection('partyRatings').doc(partyId).collection('byUser').doc(username);
+        tx.set(
+          perPartyUserRatingRef,
+          {
+            'partyId': partyId,
+            'fromUser': username,
+            'value': value,
+            'ts': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+
+        // 3) Aggregation aktualisieren
         if (changed) {
-          // Party-spezifische Zähler (optional, nützlich für Anzeige)
-          tx.set(partyRef, {
-            'ratingsGood': FieldValue.increment(deltaGood),
-            'ratingsBad': FieldValue.increment(deltaBad),
-          }, SetOptions(merge: true));
+          tx.set(
+            partyRef,
+            {
+              'ratingsGood': FieldValue.increment(deltaGood),
+              'ratingsBad': FieldValue.increment(deltaBad),
+            },
+            SetOptions(merge: true),
+          );
 
-          // Host-Aggregate laden & neu berechnen
           final currentGood = (userSnap.data()?['partyScoreGood'] ?? 0) as int;
-          final currentBad  = (userSnap.data()?['partyScoreBad'] ?? 0) as int;
+          final currentBad = (userSnap.data()?['partyScoreBad'] ?? 0) as int;
           final newGood = currentGood + deltaGood;
-          final newBad  = currentBad  + deltaBad;
+          final newBad = currentBad + deltaBad;
           final total = newGood + newBad;
           final pct = total > 0 ? ((newGood / total) * 100).round() : 0;
 
-          tx.set(userRef, {
-            'partyScoreGood': newGood,
-            'partyScoreBad' : newBad,
-            'partyScorePct' : pct, // 0..100 (gerundet)
-          }, SetOptions(merge: true));
+          tx.set(
+            userRef,
+            {
+              'partyScoreGood': newGood,
+              'partyScoreBad': newBad,
+              'partyScorePct': pct,
+              'partyScoreUpdatedAt': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
         }
       });
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(value == 'good' ? "Danke für die positive Bewertung!" : "Danke für dein Feedback!")),
+        SnackBar(
+          content:
+          Text(value == 'good' ? "Danke für die positive Bewertung!" : "Danke für dein Feedback!"),
+        ),
       );
     } on StateError catch (e) {
       if (!mounted) return;
@@ -575,8 +615,11 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
 
   Future<bool> _userHasRated(String partyId, String username) async {
     final snap = await FirebaseFirestore.instance
-        .collection('Party').doc(partyId)
-        .collection('ratings').doc(username).get();
+        .collection('Party')
+        .doc(partyId)
+        .collection('ratings')
+        .doc(username)
+        .get();
     return snap.exists;
   }
 
@@ -588,7 +631,11 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
       if (!_isInRatingWindow(data)) continue;
 
       final myRsvp = await FirebaseFirestore.instance
-          .collection('Party').doc(pid).collection('rsvps').doc(_currentUsername).get();
+          .collection('Party')
+          .doc(pid)
+          .collection('rsvps')
+          .doc(_currentUsername!) // ! weil oben geprüft
+          .get();
       final status = myRsvp.data()?['status'] as String?;
       if (status != 'going' && status != 'maybe') continue;
 
@@ -597,20 +644,15 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
 
       _ratingPromptShown = true;
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Wie war „${data['name'] ?? 'die Party'}“? Jetzt bewerten."),
-          action: SnackBarAction(
-            label: "ÖFFNEN",
-            onPressed: () => _openPartySheet(data, pid),
-          ),
-        ),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text("Wie war „${data['name'] ?? 'die Party'}“? Jetzt bewerten."),
+        action: SnackBarAction(label: "ÖFFNEN", onPressed: () => _openPartySheet(data, pid)),
+      ));
       break;
     }
   }
 
-  // ---------- Report-Dialog ----------
+  // ---------- Report ----------
   Future<void> _sendReportDialog(String partyId) async {
     final outerContext = context;
     final controller = TextEditingController();
@@ -639,16 +681,15 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
             title: const Text("Party melden", style: TextStyle(color: Colors.white)),
             content: SingleChildScrollView(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    "Grund auswählen:",
-                    style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700),
-                  ),
+                  const Text("Grund auswählen:",
+                      style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 8),
                   Wrap(
-                    spacing: 8, runSpacing: 8,
+                    spacing: 8,
+                    runSpacing: 8,
                     children: quickReasons.map((r) {
                       final selected = r == selectedReason;
                       return ChoiceChip(
@@ -656,9 +697,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
                         selected: selected,
                         onSelected: (v) => setSB(() => selectedReason = v ? r : null),
                         labelStyle: TextStyle(
-                          color: selected ? Colors.white : Colors.white70,
-                          fontWeight: FontWeight.w700,
-                        ),
+                            color: selected ? Colors.white : Colors.white70,
+                            fontWeight: FontWeight.w700),
                         selectedColor: Colors.redAccent,
                         backgroundColor: Colors.grey[800],
                         shape: StadiumBorder(
@@ -670,10 +710,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
                     }).toList(),
                   ),
                   const SizedBox(height: 14),
-                  const Text(
-                    "Optionaler Hinweis:",
-                    style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700),
-                  ),
+                  const Text("Optionaler Hinweis:",
+                      style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   TextField(
                     controller: controller,
@@ -682,12 +720,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
                     decoration: const InputDecoration(
                       hintText: "z. B. was genau passiert ist…",
                       hintStyle: TextStyle(color: Colors.white38),
-                      enabledBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white24),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.white54),
-                      ),
+                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white54)),
                     ),
                   ),
                 ],
@@ -696,7 +730,9 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
             actionsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             actions: [
               TextButton(
-                onPressed: isSubmitting ? null : () => Navigator.of(dialogCtx, rootNavigator: true).pop(),
+                onPressed: isSubmitting
+                    ? null
+                    : () => Navigator.of(dialogCtx, rootNavigator: true).pop(),
                 style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
                 child: const Text("Abbrechen"),
               ),
@@ -706,12 +742,11 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
                     : () async {
                   if (_currentUsername == null) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Bitte Vor- & Nachname in den Einstellungen setzen.")),
+                      const SnackBar(content: Text("Bitte Username in den Einstellungen setzen.")),
                     );
                     return;
                   }
                   setSB(() => isSubmitting = true);
-
                   try {
                     final party = _partyCache[partyId] ?? {};
                     final partyName = (party['name'] ?? '').toString();
@@ -730,36 +765,31 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
                     });
 
                     if (!mounted) return;
-
                     Navigator.of(dialogCtx, rootNavigator: true).pop();
                     if (Navigator.of(outerContext).canPop()) {
                       Navigator.of(outerContext).pop();
                     }
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Meldung gesendet")),
-                    );
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(const SnackBar(content: Text("Meldung gesendet")));
                   } on FirebaseException catch (e) {
                     setSB(() => isSubmitting = false);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text("Fehler: ${e.message ?? e.code}")),
-                    );
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text("Fehler: ${e.message ?? e.code}")));
                   } catch (e) {
                     setSB(() => isSubmitting = false);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text("Unerwarteter Fehler: $e")),
-                    );
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text("Unerwarteter Fehler: $e")));
                   }
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(96, 44),
-                ),
+                    backgroundColor: Colors.redAccent,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(96, 44)),
                 child: isSubmitting
                     ? const SizedBox(
-                  width: 20, height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                )
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                     : const Text("Senden"),
               ),
             ],
@@ -769,51 +799,60 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
     );
   }
 
-  // ---------- Streams-Helfer ----------
   Stream<DocumentSnapshot<Map<String, dynamic>>>? _rsvpStream(String partyId) {
     if (_currentUsername == null) return null;
     return FirebaseFirestore.instance
-        .collection('Party').doc(partyId)
-        .collection('rsvps').doc(_currentUsername)
+        .collection('Party')
+        .doc(partyId)
+        .collection('rsvps')
+        .doc(_currentUsername!) // ! weil oben geprüft
         .snapshots();
   }
 
-  // ---- Länder-Code aus SharedPrefs (für Suche) ----
   Future<String?> _getSelectedCountryCode() async {
     final prefs = await SharedPreferences.getInstance();
-    String? raw =
-        prefs.getString('countryCode') ??
-            prefs.getString('selectedCountryCode') ??
-            prefs.getString('countryISO2') ??
-            prefs.getString('country') ??
-            prefs.getString('country_name');
+    String? raw = prefs.getString('countryCode') ??
+        prefs.getString('selectedCountryCode') ??
+        prefs.getString('countryISO2') ??
+        prefs.getString('country') ??
+        prefs.getString('country_name');
 
     if (raw == null || raw.trim().isEmpty) return null;
-
     final v = raw.trim().toLowerCase();
     if (RegExp(r'^[a-z]{2}$').hasMatch(v)) return v;
 
     const map = {
-      'österreich': 'at', 'austria': 'at',
-      'deutschland': 'de', 'germany': 'de',
-      'schweiz': 'ch', 'switzerland': 'ch',
-      'italien': 'it', 'italy': 'it',
-      'tschechien': 'cz', 'czechia': 'cz', 'czech republic': 'cz',
-      'slowakei': 'sk', 'slovakia': 'sk',
-      'ungarn': 'hu', 'hungary': 'hu',
+      'österreich': 'at',
+      'austria': 'at',
+      'deutschland': 'de',
+      'germany': 'de',
+      'schweiz': 'ch',
+      'switzerland': 'ch',
+      'italien': 'it',
+      'italy': 'it',
+      'tschechien': 'cz',
+      'czechia': 'cz',
+      'czech republic': 'cz',
+      'slowakei': 'sk',
+      'slovakia': 'sk',
+      'ungarn': 'hu',
+      'hungary': 'hu',
     };
     return map[v];
   }
 
-  // ---------- BottomSheet-Öffner ----------
   void _openPartySheet(Map<String, dynamic> data, String partyId) async {
     final isClosed = _isClosedDoc(data);
     final hostName = (data['hostName'] ?? '').toString();
-    final isHost = _currentUsername != null && hostName.trim() == _currentUsername!.trim();
+    final isHost =
+        _currentUsername != null && hostName.trim() == _currentUsername!.trim();
 
     DateTime? date;
-    if (data['date'] is Timestamp) date = (data['date'] as Timestamp).toDate();
-    final formattedDate = date != null ? "${date.day}. ${_monthName(date.month)} ${date.year}" : "";
+    if (data['date'] is Timestamp) {
+      date = (data['date'] as Timestamp).toDate();
+    }
+    final formattedDate =
+    date != null ? "${date.day}. ${_monthName(date.month)} ${date.year}" : "";
 
     bool baseCanSeeFull = !isClosed;
     if (isClosed) {
@@ -823,7 +862,6 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
         baseCanSeeFull = st == 'approved';
       }
     }
-
     final inRatingWindow = _isInRatingWindow(data);
 
     if (!mounted) return;
@@ -833,8 +871,7 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
       backgroundColor: Colors.grey[900],
       useSafeArea: true,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => PartyBottomSheet(
         partyId: partyId,
         data: data,
@@ -845,33 +882,31 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
         currentUsername: _currentUsername,
         inRatingWindow: inRatingWindow,
         isActive: _isActive(data),
-
-        // Callbacks
         onSetRsvp: (status) => _setRsvpStatus(partyId, _currentUsername!, status),
         onClearRsvp: () => _clearRsvp(partyId, _currentUsername!),
         onSendJoinRequest: () => _sendJoinRequest(partyId, _currentUsername!),
         onUpdateRequestStatus: (u, s) => _updateRequestStatus(partyId, u, s),
         onSetRating: (val) => _setRating(partyId, _currentUsername!, val),
         onReport: () => _sendReportDialog(partyId),
-
-        // Streams/Helfer
         rsvpStream: () => _rsvpStream(partyId),
         comingStream: () => FirebaseFirestore.instance
-            .collection('Party').doc(partyId).collection('coming')
+            .collection('Party')
+            .doc(partyId)
+            .collection('coming')
             .orderBy('timestamp', descending: true)
             .snapshots(),
         maybeStream: () => FirebaseFirestore.instance
-            .collection('Party').doc(partyId).collection('maybe')
+            .collection('Party')
+            .doc(partyId)
+            .collection('maybe')
             .orderBy('timestamp', descending: true)
             .snapshots(),
-        ratingsStream: () => FirebaseFirestore.instance
-            .collection('Party').doc(partyId).collection('ratings')
-            .snapshots(),
+        ratingsStream: () =>
+            FirebaseFirestore.instance.collection('Party').doc(partyId).collection('ratings').snapshots(),
         isUserVerified: _isUserVerified,
-
-        // Marker-Darstellung live anpassen
         recolorOpenMarker: (status) {
-          final isHostForThis = (data['hostName']?.toString().trim() ?? '') == _currentUsername?.trim();
+          final isHostForThis =
+              (data['hostName']?.toString().trim() ?? '') == _currentUsername?.trim();
           _setOpenMarkerColor(partyId, status: status, isHost: isHostForThis);
         },
         setClosedLockIcon: (status) => _setLockIconForPartyStatus(partyId, status: status),
@@ -884,15 +919,21 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
     );
   }
 
-  // ---------- Actions / RSVP ----------
   Future<void> _setRsvpStatus(String partyId, String username, String status) async {
     final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
-    final rsvpRef  = partyRef.collection('rsvps').doc(username);
+    final rsvpRef = partyRef.collection('rsvps').doc(username);
     final comingRef = partyRef.collection('coming').doc(username);
-    final maybeRef  = partyRef.collection('maybe').doc(username);
+    final maybeRef = partyRef.collection('maybe').doc(username);
 
     await FirebaseFirestore.instance.runTransaction((tx) async {
-      tx.set(rsvpRef, {'username': username, 'status': status, 'timestamp': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      tx.set(
+          rsvpRef,
+          {
+            'username': username,
+            'status': status,
+            'timestamp': FieldValue.serverTimestamp()
+          },
+          SetOptions(merge: true));
       if (status == 'going') {
         tx.set(comingRef, {'username': username, 'timestamp': FieldValue.serverTimestamp()});
         tx.delete(maybeRef);
@@ -902,7 +943,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
       }
     });
 
-    final isHost = _partyCache[partyId]?['hostName']?.toString().trim() == _currentUsername?.trim();
+    final isHost =
+        _partyCache[partyId]?['hostName']?.toString().trim() == _currentUsername?.trim();
     _setOpenMarkerColor(partyId, status: status, isHost: isHost);
   }
 
@@ -914,35 +956,50 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
       tx.delete(partyRef.collection('maybe').doc(username));
     });
 
-    final isHost = _partyCache[partyId]?['hostName']?.toString().trim() == _currentUsername?.trim();
+    final isHost =
+        _partyCache[partyId]?['hostName']?.toString().trim() == _currentUsername?.trim();
     _setOpenMarkerColor(partyId, status: null, isHost: isHost);
   }
 
   Future<void> _sendJoinRequest(String partyId, String username) async {
     final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
-    final reqRef   = partyRef.collection('requests').doc(username);
+    final reqRef = partyRef.collection('requests').doc(username);
     await FirebaseFirestore.instance.runTransaction((tx) async {
-      tx.set(reqRef, {
-        'username': username,
-        'status': 'pending',
-        'timestamp': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      tx.set(
+          reqRef,
+          {
+            'username': username,
+            'status': 'pending',
+            'timestamp': FieldValue.serverTimestamp()
+          },
+          SetOptions(merge: true));
     });
   }
 
   Future<void> _updateRequestStatus(String partyId, String username, String status) async {
     final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
-    final reqRef   = partyRef.collection('requests').doc(username);
-    final apprRef  = partyRef.collection('approved').doc(username);
+    final reqRef = partyRef.collection('requests').doc(username);
+    final apprRef = partyRef.collection('approved').doc(username);
 
     await FirebaseFirestore.instance.runTransaction((tx) async {
-      tx.set(reqRef, {'username': username, 'status': status, 'handledAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      tx.set(
+          reqRef,
+          {
+            'username': username,
+            'status': status,
+            'handledAt': FieldValue.serverTimestamp()
+          },
+          SetOptions(merge: true));
       if (status == 'approved') {
         tx.set(apprRef, {'username': username, 'timestamp': FieldValue.serverTimestamp()});
-        tx.set(partyRef, {'approvedUsers': FieldValue.arrayUnion([username])}, SetOptions(merge: true));
+        tx.set(partyRef, {
+          'approvedUsers': FieldValue.arrayUnion([username])
+        }, SetOptions(merge: true));
       } else {
         tx.delete(apprRef);
-        tx.set(partyRef, {'approvedUsers': FieldValue.arrayRemove([username])}, SetOptions(merge: true));
+        tx.set(partyRef, {
+          'approvedUsers': FieldValue.arrayRemove([username])
+        }, SetOptions(merge: true));
       }
     });
 
@@ -955,7 +1012,7 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
 
   void _setLockIconForPartyStatus(String partyId, {required String? status}) {
     final lockId = 'lock_$partyId';
-    final hitId  = 'hit_$partyId';
+    final hitId = 'hit_$partyId';
 
     final existing = _markers.where((m) => m.markerId.value == lockId).toList();
     if (existing.isEmpty) return;
@@ -985,7 +1042,8 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
         _markers.add(Marker(
           markerId: MarkerId(hitId),
           position: old.position,
-          icon: _hitboxIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          icon:
+          _hitboxIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
           anchor: const Offset(0.5, 0.5),
           zIndex: 9,
           consumeTapEvents: true,
@@ -995,7 +1053,6 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
     });
   }
 
-  // ---------- Moderner, zentraler Success-Toast ----------
   Future<void> _showCenterSuccess(String text) async {
     if (!mounted) return;
     final overlay = Overlay.of(context);
@@ -1007,8 +1064,16 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
       duration: const Duration(milliseconds: 220),
       reverseDuration: const Duration(milliseconds: 160),
     );
-    final fade = CurvedAnimation(parent: controller, curve: Curves.easeOutCubic, reverseCurve: Curves.easeInCubic);
-    final scale = CurvedAnimation(parent: controller, curve: Curves.easeOutBack, reverseCurve: Curves.easeIn);
+    final fade = CurvedAnimation(
+      parent: controller,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    final scale = CurvedAnimation(
+      parent: controller,
+      curve: Curves.easeOutBack,
+      reverseCurve: Curves.easeIn,
+    );
 
     entry = OverlayEntry(
       builder: (ctx) => Positioned.fill(
@@ -1024,7 +1089,10 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
                     color: Colors.grey[900]!.withOpacity(0.96),
                     borderRadius: BorderRadius.circular(14),
                     boxShadow: [
-                      BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 18, offset: const Offset(0, 10)),
+                      BoxShadow(
+                          color: Colors.black.withOpacity(0.35),
+                          blurRadius: 18,
+                          offset: const Offset(0, 10))
                     ],
                     border: Border.all(color: Colors.greenAccent.withOpacity(0.35)),
                   ),
@@ -1032,24 +1100,18 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        width: 28,
-                        height: 28,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.green,
-                        ),
-                        child: const Icon(Icons.check_rounded, color: Colors.white, size: 18),
-                      ),
+                          width: 28,
+                          height: 28,
+                          decoration:
+                          const BoxDecoration(shape: BoxShape.circle, color: Colors.green),
+                          child: const Icon(Icons.check_rounded, color: Colors.white, size: 18)),
                       const SizedBox(width: 12),
-                      Text(
-                        text,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: .2,
-                        ),
-                      ),
+                      Text(text,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: .2)),
                     ],
                   ),
                 ),
@@ -1070,21 +1132,17 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
     controller.dispose();
   }
 
-  // ⬇️ Zentrales Reload mit Spinner + moderner Success-Toast
   Future<void> _reload() async {
     if (_isReloading) return;
     setState(() => _isReloading = true);
     try {
       await _refreshMap();
-      if (mounted) {
-        await _showCenterSuccess("Karte aktualisiert");
-      }
+      if (mounted) await _showCenterSuccess("Karte aktualisiert");
     } finally {
       if (mounted) setState(() => _isReloading = false);
     }
   }
 
-  // ---------- LEGAL-Gate: Methoden ----------
   Future<bool> _ensureLegalConsentBeforeCreating() async {
     final prefs = await SharedPreferences.getInstance();
     final alreadyAccepted = prefs.getBool('legal_consent_create_v1') ?? false;
@@ -1123,9 +1181,9 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Text(
-                      "Das Erstellen von Fake-Partys ist VERBOTEN. Du bestätigst, dass alle Angaben wahrheitsgemäß sind "
-                          "und die Veranstaltung wirklich stattfindet.",
-                      style: TextStyle(color: Colors.white70, height: 1.35, fontWeight: FontWeight.w600),
+                      "Das Erstellen von Fake-Partys ist VERBOTEN. Du bestätigst, dass alle Angaben wahrheitsgemäß sind und die Veranstaltung wirklich stattfindet.",
+                      style:
+                      TextStyle(color: Colors.white70, height: 1.35, fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 12),
                     CheckboxListTile(
@@ -1186,20 +1244,28 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     if (_startPos == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+          body: Center(child: CircularProgressIndicator(color: _accent)));
     }
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.grey[900],
+        elevation: 0,
+        backgroundColor: Colors.transparent,
         centerTitle: true,
         title: const Text(
           "Party Map",
-          style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: _text,
+            fontSize: 24,
+            fontWeight: FontWeight.w800,
+          ),
         ),
         leading: IconButton(
-          icon: const Icon(Icons.menu, color: Colors.redAccent),
-          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MenuScreen())),
+          icon: const Icon(Icons.menu, color: _accent),
+          onPressed: () =>
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const MenuScreen())),
         ),
         actions: [
           IconButton(
@@ -1207,128 +1273,125 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
             onPressed: _isReloading ? null : _reload,
             icon: _isReloading
                 ? const SizedBox(
-              width: 20, height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-            )
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.refresh, color: Colors.white),
           ),
           IconButton(
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileSettingsScreen())),
-            icon: CircleAvatar(
-              radius: 18,
-              backgroundColor: Colors.redAccent,
-              child: ClipOval(
-                child: Image.asset(
-                  'lib/Pics/profile_pic.png',
-                  fit: BoxFit.cover,
-                  width: 36, height: 36,
-                  errorBuilder: (context, error, stackTrace) => const Icon(Icons.person, color: Colors.white),
+            onPressed: () =>
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileSettingsScreen())),
+            icon: const CircleAvatar(
+              radius: 16,
+              backgroundColor: _accent,
+              child: Icon(Icons.person, color: Colors.white, size: 18),
+            ),
+          ),
+          const SizedBox(width: 6),
+        ],
+      ),
+
+      body: Stack(
+        children: [
+          // Hintergrund-Gradient
+          const Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [_bgTop, _bgBottom],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
                 ),
               ),
+            ),
+          ),
+
+          // Inhalt unter AppBar
+          SafeArea(
+            top: true,
+            bottom: false,
+            child: Column(
+              children: [
+                if (!_legalWarnDismissed) _legalWarningBanner(),
+                Expanded(
+                  child: GoogleMap(
+                    initialCameraPosition: _startPos!,
+                    markers: _markers,
+                    circles: _circles,
+                    zoomControlsEnabled: true,
+                    zoomGesturesEnabled: true,
+                    onMapCreated: (controller) => mapController = controller,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Suchleiste schwebend direkt unter Titel (unabhängig vom Banner)
+          Positioned(
+            left: 12,
+            right: 12,
+            top: _searchTop(context),
+            child: _SearchCard(
+              controller: _searchCtrl,
+              onSearch: (input) async {
+                final cc = await _getSelectedCountryCode();
+                final withCity =
+                input.trim().isEmpty ? _currentCity : "${input.trim()}, ${_currentCity.trim()}";
+
+                GeocodedLocation? location =
+                    await GeocodingService.getLocationFromAddress(withCity, countryCode: cc) ??
+                        await GeocodingService.getLocationFromAddress(input.trim(), countryCode: cc);
+
+                if (location != null) {
+                  final pos = LatLng(location.latitude, location.longitude);
+                  setState(() {
+                    _markers.add(Marker(
+                      markerId: MarkerId("${input.trim()}|${_currentCity.trim()}"),
+                      position: pos,
+                      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+                    ));
+                  });
+                  mapController?.animateCamera(CameraUpdate.newLatLngZoom(pos, 15));
+                } else {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(const SnackBar(content: Text("Adresse nicht gefunden.")));
+                }
+              },
+              onClear: () => _searchCtrl.clear(),
             ),
           ),
         ],
       ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF0f0f0f), Color(0xFF1f1f0f)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: Column(
-          children: [
-            if (!_legalWarnDismissed) _legalWarningBanner(),
-            Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: TextField(
-                onSubmitted: (input) async {
-                  final cc = await _getSelectedCountryCode();
-                  final withCity = input.trim().isEmpty
-                      ? _currentCity
-                      : "${input.trim()}, ${_currentCity.trim()}";
 
-                  GeocodedLocation? location =
-                      await GeocodingService.getLocationFromAddress(withCity, countryCode: cc)
-                          ?? await GeocodingService.getLocationFromAddress(input.trim(), countryCode: cc);
-
-                  if (location != null) {
-                    final pos = LatLng(location.latitude, location.longitude);
-                    setState(() {
-                      _markers.add(Marker(
-                        markerId: MarkerId("${input.trim()}|${_currentCity.trim()}"),
-                        position: pos,
-                        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-                        onTap: () {},
-                      ));
-                      mapController?.animateCamera(CameraUpdate.newLatLngZoom(pos, 15));
-                    });
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Adresse nicht gefunden.")),
-                    );
-                  }
-                },
-                keyboardType: TextInputType.streetAddress,
-                textInputAction: TextInputAction.search,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: "Adresse eingeben",
-                  hintStyle: const TextStyle(color: Colors.redAccent),
-                  prefixIcon: const Icon(Icons.search, color: Colors.redAccent),
-                  enabledBorder: OutlineInputBorder(
-                    borderSide: const BorderSide(color: Colors.redAccent),
-                    borderRadius: BorderRadius.circular(0),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderSide: const BorderSide(color: Colors.redAccent, width: 2),
-                    borderRadius: BorderRadius.circular(0),
-                  ),
-                  filled: true,
-                  fillColor: Colors.grey[800],
-                ),
-              ),
-            ),
-            Expanded(
-              child: GoogleMap(
-                initialCameraPosition: _startPos!,
-                markers: _markers,
-                circles: _circles,
-                zoomControlsEnabled: true,
-                zoomGesturesEnabled: true,
-                onMapCreated: (controller) => mapController = controller,
-              ),
-            ),
-          ],
-        ),
-      ),
       bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: Colors.grey[900],
-        selectedItemColor: Colors.redAccent,
-        unselectedItemColor: Colors.white70,
+        backgroundColor: _panel,
+        selectedItemColor: _accent,
+        unselectedItemColor: _muted,
         currentIndex: _currentIndex,
         onTap: _onBottomNavTapped,
         type: BottomNavigationBarType.fixed,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.feedback), label: "Feedback"),
           BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
+          BottomNavigationBarItem(icon: Icon(Icons.people), label: "Freunde"),
           BottomNavigationBarItem(icon: Icon(Icons.add), label: "Neue Party"),
         ],
       ),
     );
   }
 
-  // ---------- LEGAL WARNING Banner-Widget ----------
   Widget _legalWarningBanner() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: const Color(0xFFFFF3CD),
         border: Border.all(color: const Color(0xFFFFEEBA)),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 8, offset: Offset(0, 3))],
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1337,9 +1400,7 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
           const SizedBox(width: 10),
           const Expanded(
             child: Text(
-              "WICHTIG: Das Erstellen von Fake-Partys ist rechtlich VERBOTEN. "
-                  "Nur echte, wahrheitsgemäße Angaben machen. Verstöße führen zur Sperrung "
-                  "und können an Behörden gemeldet werden.",
+              "WICHTIG: Das Erstellen von Fake-Partys ist rechtlich VERBOTEN. Nur echte, wahrheitsgemäße Angaben machen.",
               style: TextStyle(color: Color(0xFF856404), fontWeight: FontWeight.w800),
             ),
           ),
@@ -1353,21 +1414,104 @@ class _PartyMapScreenState extends State<PartyMapScreen> with SingleTickerProvid
     );
   }
 
-  // ---------- Bottom Navigation ----------
   void _onBottomNavTapped(int index) async {
     if (_currentIndex == index) return;
     setState(() => _currentIndex = index);
 
     if (index == 0) {
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const FeedbackScreen()));
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const FeedbackScreen()),
+      );
     } else if (index == 1) {
       await _refreshMap();
     } else if (index == 2) {
+      final me = (_currentUsername ?? '').trim();
+      if (me.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Username fehlt. In den Einstellungen setzen.')),
+        );
+        return;
+      }
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => FriendsScreen(currentUsername: me)),
+      );
+    } else if (index == 3) {
       final ok = await _ensureLegalConsentBeforeCreating();
       if (!ok) return;
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const NewPartyScreen()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const NewPartyScreen()),
+      );
       setState(() => _currentIndex = 1);
       await _refreshMap();
     }
+  }
+}
+
+// ---------- Suchkarte ----------
+class _SearchCard extends StatelessWidget {
+  final TextEditingController controller;
+  final Future<void> Function(String) onSearch;
+  final VoidCallback onClear;
+
+  const _SearchCard({
+    required this.controller,
+    required this.onSearch,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.grey[850],
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.redAccent.withOpacity(.85), width: 1.2),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(.5),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
+            )
+          ],
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 12),
+            const Icon(Icons.search, color: Colors.redAccent),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: controller,
+                style: const TextStyle(color: Colors.white),
+                textInputAction: TextInputAction.search,
+                onSubmitted: onSearch,
+                decoration: const InputDecoration(
+                  hintText: "Adresse eingeben",
+                  hintStyle: TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
+                  border: InputBorder.none,
+                ),
+              ),
+            ),
+            if (controller.text.isNotEmpty)
+              IconButton(
+                onPressed: onClear,
+                icon: const Icon(Icons.close, color: Colors.white70, size: 18),
+                tooltip: 'Löschen',
+              )
+            else
+              IconButton(
+                onPressed: () => onSearch(controller.text),
+                icon: const Icon(Icons.arrow_forward_rounded, color: Colors.white),
+                tooltip: 'Suchen',
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }

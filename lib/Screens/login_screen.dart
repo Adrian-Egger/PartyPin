@@ -31,8 +31,8 @@ class _LoginScreenState extends State<LoginScreen> {
     final savedCity = prefs.getString('city');
     final termsAccepted = prefs.getBool("termsAccepted") ?? false;
 
-    // 1️⃣ Zuerst SelectionScreen prüfen
     if (savedLanguage == null || savedCountry == null || savedCity == null) {
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const SelectionScreen()),
@@ -40,8 +40,8 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    // 2️⃣ Dann TermsScreen prüfen
     if (!termsAccepted) {
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const TermsScreen()),
@@ -49,7 +49,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    // 3️⃣ Alles erledigt → PartyMapScreen
+    if (!mounted) return;
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => const PartyMapScreen()),
@@ -70,20 +70,30 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final query = await FirebaseFirestore.instance
-          .collection("users")
-          .where("username", isEqualTo: username)
-          .limit(1)
-          .get();
+      final users = FirebaseFirestore.instance.collection("users");
+      Map<String, dynamic>? userData;
 
-      if (query.docs.isEmpty) {
+      try {
+        final byId = await users.doc(username).get();
+        userData = byId.data();
+      } catch (_) {
+        userData = null;
+      }
+
+      if (userData == null) {
+        final query =
+        await users.where("username", isEqualTo: username).limit(1).get();
+        if (query.docs.isNotEmpty) {
+          userData = query.docs.first.data();
+        }
+      }
+
+      if (userData == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Username nicht gefunden!")),
         );
         return;
       }
-
-      final userData = query.docs.first.data();
 
       if (userData["password"] != password) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -93,19 +103,21 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString("vorname", userData["vorname"]);
-      await prefs.setString("nachname", userData["nachname"]);
+      await prefs.setString("vorname", (userData["vorname"] ?? "").toString());
+      await prefs.setString("nachname", (userData["nachname"] ?? "").toString());
       await prefs.setString("username", username);
-      await prefs.setString("password", password);
+      await prefs.setBool("isLoggedIn", true);
+      await prefs.setString("currentUsername", username);
 
-      // Prüfen, ob SelectionScreen oder TermsScreen noch nötig
       await _checkNavigation();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Fehler beim Login: $e")),
       );
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -143,7 +155,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.nightlife, size: 64, color: Colors.redAccent),
+                      const Icon(Icons.nightlife,
+                          size: 64, color: Colors.redAccent),
                       const SizedBox(height: 16),
                       const Text(
                         'Login',
@@ -160,8 +173,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         style: TextStyle(color: Colors.white70),
                       ),
                       const SizedBox(height: 20),
-
-                      // Username
                       TextField(
                         controller: _usernameController,
                         onChanged: (_) => setState(() {}),
@@ -169,7 +180,8 @@ class _LoginScreenState extends State<LoginScreen> {
                         decoration: InputDecoration(
                           labelText: "Username",
                           labelStyle: const TextStyle(color: Colors.white70),
-                          prefixIcon: const Icon(Icons.person, color: Colors.redAccent),
+                          prefixIcon: const Icon(Icons.person,
+                              color: Colors.redAccent),
                           filled: true,
                           fillColor: Colors.grey[850],
                           border: OutlineInputBorder(
@@ -178,8 +190,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
-
-                      // Passwort
                       TextField(
                         controller: _passwordController,
                         onChanged: (_) => setState(() {}),
@@ -188,7 +198,8 @@ class _LoginScreenState extends State<LoginScreen> {
                         decoration: InputDecoration(
                           labelText: "Passwort",
                           labelStyle: const TextStyle(color: Colors.white70),
-                          prefixIcon: const Icon(Icons.lock, color: Colors.redAccent),
+                          prefixIcon: const Icon(Icons.lock,
+                              color: Colors.redAccent),
                           filled: true,
                           fillColor: Colors.grey[850],
                           border: OutlineInputBorder(
@@ -197,12 +208,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const SizedBox(height: 25),
-
-                      // Login-Button: immer da, verblaßt oder aktiv
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed: (_isFormValid && !_isLoading) ? _login : null,
+                          onPressed:
+                          (_isFormValid && !_isLoading) ? _login : null,
                           style: ElevatedButton.styleFrom(
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -210,17 +220,18 @@ class _LoginScreenState extends State<LoginScreen> {
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ).copyWith(
-                            backgroundColor: MaterialStateProperty.resolveWith<Color>(
-                                  (states) {
-                                if (states.contains(MaterialState.disabled)) {
-                                  return Colors.redAccent.withOpacity(0.4); // verblaßt
-                                }
-                                return Colors.redAccent; // aktiv
-                              },
-                            ),
+                            backgroundColor:
+                            MaterialStateProperty.resolveWith<Color>(
+                                    (states) {
+                                  if (states.contains(MaterialState.disabled)) {
+                                    return Colors.redAccent.withOpacity(0.4);
+                                  }
+                                  return Colors.redAccent;
+                                }),
                           ),
                           child: _isLoading
-                              ? const CircularProgressIndicator(color: Colors.white)
+                              ? const CircularProgressIndicator(
+                              color: Colors.white)
                               : const Text(
                             'Login',
                             style: TextStyle(
@@ -230,13 +241,13 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
-
                       const SizedBox(height: 8),
                       TextButton(
                         onPressed: () {
                           Navigator.pushReplacement(
                             context,
-                            MaterialPageRoute(builder: (_) => const CreateAccountScreen()),
+                            MaterialPageRoute(
+                                builder: (_) => const CreateAccountScreen()),
                           );
                         },
                         child: const Text(
