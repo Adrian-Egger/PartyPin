@@ -1,12 +1,13 @@
-import 'dart:convert';
+// lib/Services/geocoding_services.dart
 import 'dart:math';
-import 'package:http/http.dart' as http;
+import 'package:geocoding/geocoding.dart' as geo;
 
 /// Ergebnis einer Geocoding-Anfrage
 class GeocodedLocation {
   final double latitude;
   final double longitude;
-  /// ISO-2 lowercase (z. B. "at")
+
+  /// ISO-2 lowercase (z. B. "at") – hier meist null, da das Plugin das nicht liefert
   final String? countryCode;
   final String? displayName;
 
@@ -16,115 +17,101 @@ class GeocodedLocation {
     this.countryCode,
     this.displayName,
   });
+
+  @override
+  String toString() =>
+      'GeocodedLocation(lat=$latitude, lon=$longitude, countryCode=$countryCode, displayName=$displayName)';
 }
 
 class GeocodingService {
-  static const _ua = 'PartyApp/1.0 (support@example.com)';
-
-  /// Haupt-Entry: beste Location nahe einer Bias-Position (falls vorhanden).
-  /// - Versucht zuerst mit Umlauten.
-  /// - Fallback: ersetzt Umlaute (ä->ae, ö->oe, ü->ue, ß->ss).
+  /// Beste Location nahe einer Bias-Position (falls vorhanden).
+  /// Nutzt das Flutter-Plugin `geocoding` – KEIN Google-API-Key nötig.
   static Future<GeocodedLocation?> getBestLocationNear(
       String address, {
-        String? countryCode,
+        String? countryCode, // wird hier ignoriert, ist aber für API kompatibel
         double? biasLat,
         double? biasLng,
       }) async {
-    final lang = _languageForCountry(countryCode);
     final q = _normalize(address);
+    final List<geo.Location> all = [];
 
-    // 1) Primärversuch (mit Umlauten)
-    var list = await _searchRaw(q, countryCode: countryCode, limit: 8, language: lang);
+    try {
+      // 1. Direkt mit Umlauten probieren
+      final locs = await geo.locationFromAddress(q);
+      all.addAll(locs);
+    } catch (_) {}
 
-    // 2) Fallback ohne Umlaute, wenn leer
-    if (list.isEmpty) {
+    if (all.isEmpty) {
+      // 2. Fallback: ohne Umlaute
       final asciiQ = _deUmlaut(q);
       if (asciiQ != q) {
-        list = await _searchRaw(asciiQ, countryCode: countryCode, limit: 8, language: lang);
+        try {
+          final locs = await geo.locationFromAddress(asciiQ);
+          all.addAll(locs);
+        } catch (_) {}
       }
     }
 
-    if (list.isEmpty) return null;
+    if (all.isEmpty) return null;
 
-    // Nächstgelegenen Treffer anhand Bias wählen
     if (biasLat != null && biasLng != null) {
-      list.sort((a, b) {
+      all.sort((a, b) {
         final da = _distKm(biasLat, biasLng, a.latitude, a.longitude);
         final db = _distKm(biasLat, biasLng, b.latitude, b.longitude);
         return da.compareTo(db);
       });
     }
 
-    return list.first;
+    final best = all.first;
+    return GeocodedLocation(
+      latitude: best.latitude,
+      longitude: best.longitude,
+      countryCode: null,
+      displayName: q,
+    );
   }
 
-  /// Convenience: eine beste Location (ohne Bias).
-  /// - Versucht zuerst mit Umlauten, dann Fallback ohne Umlaute.
+  /// Einfachste Variante: erste gefundene Location zurückgeben.
   static Future<GeocodedLocation?> getLocationFromAddress(
       String address, {
-        String? countryCode,
+        String? countryCode, // wird ignoriert, API-kompatibel gelassen
       }) async {
-    final lang = _languageForCountry(countryCode);
     final q = _normalize(address);
 
-    // 1) Primärversuch
-    var list = await _searchRaw(q, countryCode: countryCode, limit: 1, language: lang);
-
-    // 2) Fallback
-    if (list.isEmpty) {
-      final asciiQ = _deUmlaut(q);
-      if (asciiQ != q) {
-        list = await _searchRaw(asciiQ, countryCode: countryCode, limit: 1, language: lang);
+    try {
+      final locs = await geo.locationFromAddress(q);
+      if (locs.isNotEmpty) {
+        final l = locs.first;
+        return GeocodedLocation(
+          latitude: l.latitude,
+          longitude: l.longitude,
+          countryCode: null,
+          displayName: q,
+        );
       }
+    } catch (_) {}
+
+    // Fallback: ohne Umlaute versuchen
+    final asciiQ = _deUmlaut(q);
+    if (asciiQ != q) {
+      try {
+        final locs = await geo.locationFromAddress(asciiQ);
+        if (locs.isNotEmpty) {
+          final l = locs.first;
+          return GeocodedLocation(
+            latitude: l.latitude,
+            longitude: l.longitude,
+            countryCode: null,
+            displayName: asciiQ,
+          );
+        }
+      } catch (_) {}
     }
 
-    return list.isEmpty ? null : list.first;
+    return null;
   }
 
-  // ---------------- intern ----------------
-
-  /// Nominatim-Suche.
-  /// - `countryCode` filtert hart auf Land (ISO2, lowercase)
-  /// - `language` steuert accept-language (z. B. "de")
-  static Future<List<GeocodedLocation>> _searchRaw(
-      String query, {
-        String? countryCode,
-        int limit = 5,
-        String language = 'de',
-      }) async {
-    final params = <String, String>{
-      'format': 'jsonv2',          // jsonv2 ist robuster
-      'limit': '$limit',
-      'addressdetails': '1',
-      'accept-language': language, // Ergebnis-Lokalisierung
-      'q': query,                  // Uri.https encodiert korrekt (inkl. Umlaute)
-    };
-    final cc = (countryCode ?? '').trim().toLowerCase();
-    if (cc.isNotEmpty) params['countrycodes'] = cc;
-
-    final uri = Uri.https('nominatim.openstreetmap.org', '/search', params);
-    final res = await http.get(uri, headers: {'User-Agent': _ua});
-
-    if (res.statusCode != 200) return const [];
-
-    final List data = jsonDecode(res.body) as List;
-    return data.map((e) {
-      final m = e as Map<String, dynamic>;
-      final lat = double.tryParse(m['lat']?.toString() ?? '');
-      final lon = double.tryParse(m['lon']?.toString() ?? '');
-      if (lat == null || lon == null) return null;
-
-      final addr = (m['address'] ?? {}) as Map<String, dynamic>;
-      final hitCc = (addr['country_code']?.toString() ?? '').toLowerCase();
-
-      return GeocodedLocation(
-        latitude: lat,
-        longitude: lon,
-        countryCode: hitCc.isEmpty ? null : hitCc,
-        displayName: m['display_name']?.toString(),
-      );
-    }).whereType<GeocodedLocation>().toList();
-  }
+  // ---------- intern ----------
 
   /// Haversine-Distanz in km
   static double _distKm(double lat1, double lon1, double lat2, double lon2) {
@@ -132,41 +119,26 @@ class GeocodingService {
     final dLat = _deg2rad(lat2 - lat1);
     final dLon = _deg2rad(lon2 - lon1);
     final a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(_deg2rad(lat1)) * cos(_deg2rad(lat2)) *
-            sin(dLon / 2) * sin(dLon / 2);
+        cos(_deg2rad(lat1)) *
+            cos(_deg2rad(lat2)) *
+            sin(dLon / 2) *
+            sin(dLon / 2);
     final c = 2 * atan2(sqrt(a), sqrt(1 - a));
     return R * c;
   }
 
   static double _deg2rad(double d) => d * pi / 180.0;
 
-  /// Whitespace normalisieren
-  static String _normalize(String s) => s.trim().replaceAll(RegExp(r'\s+'), ' ');
+  static String _normalize(String s) =>
+      s.trim().replaceAll(RegExp(r'\s+'), ' ');
 
-  /// Minimaler DE/AT/CH-Fallback (ä→ae, ö→oe, ü→ue, ß→ss)
   static String _deUmlaut(String s) => s
-      .replaceAll('Ä', 'Ae').replaceAll('ä', 'ae')
-      .replaceAll('Ö', 'Oe').replaceAll('ö', 'oe')
-      .replaceAll('Ü', 'Ue').replaceAll('ü', 'ue')
-      .replaceAll('ẞ', 'SS').replaceAll('ß', 'ss');
-
-  /// Einfache Sprachauswahl (gut genug für DACH/CZ/SK/HU/IT)
-  static String _languageForCountry(String? cc) {
-    switch ((cc ?? '').toLowerCase()) {
-      case 'de':
-      case 'at':
-      case 'ch':
-        return 'de';
-      case 'it':
-        return 'it';
-      case 'cz':
-        return 'cs';
-      case 'sk':
-        return 'sk';
-      case 'hu':
-        return 'hu';
-      default:
-        return 'de';
-    }
-  }
+      .replaceAll('Ä', 'Ae')
+      .replaceAll('ä', 'ae')
+      .replaceAll('Ö', 'Oe')
+      .replaceAll('ö', 'oe')
+      .replaceAll('Ü', 'Ue')
+      .replaceAll('ü', 'ue')
+      .replaceAll('ẞ', 'SS')
+      .replaceAll('ß', 'ss');
 }

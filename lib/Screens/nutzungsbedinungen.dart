@@ -1,7 +1,9 @@
-//lib/Screens/terms_screen.dart
+// lib/Screens/terms_screen.dart
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import 'party_map_screen.dart';
+import 'selection_screen.dart';
 
 class TermsScreen extends StatefulWidget {
   const TermsScreen({Key? key}) : super(key: key);
@@ -14,8 +16,7 @@ class _TermsScreenState extends State<TermsScreen> {
   bool _accepted = false;
   bool _isSaving = false;
 
-  // --- Farben: ident mit NewPartyScreen ---
-  static const _bg = Color(0xFF0E0F12);
+  // --- Farben im selben Schema wie Selection/PartyMap ---
   static const _gradTop = Color(0xFF0E0F12);
   static const _gradBottom = Color(0xFF141A22);
   static const _panel = Color(0xFF15171C);
@@ -28,20 +29,39 @@ class _TermsScreenState extends State<TermsScreen> {
 
   Future<void> _acceptTerms() async {
     setState(() => _isSaving = true);
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('termsAccepted', true);
+
+    // Standort-Daten prüfen
+    final savedCity = prefs.getString('city');
+    final savedCountry = prefs.getString('country');
+    final savedLat = prefs.getDouble('selectedLat');
+    final savedLng = prefs.getDouble('selectedLng');
+
+    final hasLocationData =
+        savedCity != null &&
+            savedCountry != null &&
+            savedLat != null &&
+            savedLng != null;
+
     if (!mounted) return;
     setState(() => _isSaving = false);
+
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => const PartyMapScreen()),
+      MaterialPageRoute(
+        builder: (_) => hasLocationData
+            ? const PartyMapScreen()
+            : const SelectionScreen(),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bg,
+      backgroundColor: _gradTop,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -71,7 +91,11 @@ class _TermsScreenState extends State<TermsScreen> {
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: _panelBorder),
                   boxShadow: const [
-                    BoxShadow(color: Color(0x33000000), blurRadius: 14, offset: Offset(0, 10)),
+                    BoxShadow(
+                      color: Color(0x33000000),
+                      blurRadius: 14,
+                      offset: Offset(0, 10),
+                    ),
                   ],
                 ),
                 child: Padding(
@@ -103,7 +127,10 @@ class _TermsScreenState extends State<TermsScreen> {
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: _panelBorder),
                         ),
-                        constraints: const BoxConstraints(minHeight: 260, maxHeight: 360),
+                        constraints: const BoxConstraints(
+                          minHeight: 260,
+                          maxHeight: 360,
+                        ),
                         padding: const EdgeInsets.all(14),
                         child: const Scrollbar(
                           thumbVisibility: true,
@@ -189,7 +216,11 @@ Keine Garantie auf dauerhafte Verfügbarkeit.
 Anwendbares Recht
 Es gilt österreichisches Recht, soweit zwingendes Verbraucherrecht nicht entgegensteht.
 ''',
-                              style: TextStyle(color: _textSecondary, fontSize: 14, height: 1.35),
+                              style: TextStyle(
+                                color: _textSecondary,
+                                fontSize: 14,
+                                height: 1.35,
+                              ),
                             ),
                           ),
                         ),
@@ -202,7 +233,8 @@ Es gilt österreichisches Recht, soweit zwingendes Verbraucherrecht nicht entgeg
                             value: _accepted,
                             activeColor: _accent,
                             side: const BorderSide(color: _panelBorder),
-                            onChanged: (val) => setState(() => _accepted = val ?? false),
+                            onChanged: (val) =>
+                                setState(() => _accepted = val ?? false),
                           ),
                           const SizedBox(width: 6),
                           const Expanded(
@@ -217,23 +249,32 @@ Es gilt österreichisches Recht, soweit zwingendes Verbraucherrecht nicht entgeg
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed: (_accepted && !_isSaving) ? _acceptTerms : null,
+                          onPressed:
+                          (_accepted && !_isSaving) ? _acceptTerms : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: _accent,
-                            disabledBackgroundColor: Colors.grey[700],
+                            disabledBackgroundColor: Colors.grey,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                           ),
                           child: _isSaving
                               ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
                           )
                               : const Text(
                             "Weiter",
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ),

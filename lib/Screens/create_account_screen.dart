@@ -100,7 +100,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowRealNameHint());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _maybeShowRealNameHint());
 
     _usernameController.addListener(() {
       final v = _usernameController.text;
@@ -154,8 +155,10 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
       builder: (context) {
         return AlertDialog(
           backgroundColor: _panel,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          insetPadding:
+          const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           scrollable: true,
           title: Row(
             children: const [
@@ -163,7 +166,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
               SizedBox(width: 8),
               Text(
                 "Echten Namen verwenden",
-                style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
+                style:
+                TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
               ),
             ],
           ),
@@ -179,7 +183,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   children: [
                     Checkbox(
                       value: dontShowAgain,
-                      onChanged: (v) => setStateDialog(() => dontShowAgain = v ?? false),
+                      onChanged: (v) =>
+                          setStateDialog(() => dontShowAgain = v ?? false),
                       activeColor: _accent,
                     ),
                     const Expanded(
@@ -257,7 +262,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   }
 
   // ----------------------
-  // WICHTIG: HIER DER FIX
+  // Speichern: Doc-ID = "Vorname Nachname"
   // ----------------------
   Future<void> _proceed() async {
     if (!_isFormValid) return;
@@ -281,6 +286,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     setState(() => _isSaving = true);
 
     try {
+      // Username weiter als eindeutig prüfen
       final querySnapshot = await FirebaseFirestore.instance
           .collection("users")
           .where("username", isEqualTo: username)
@@ -300,16 +306,17 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         return;
       }
 
-      // Username als Doc-ID → eindeutig
-      await FirebaseFirestore.instance
-          .collection("users")
-          .doc(username)
-          .set({
+      // Doc-ID = "Vorname Nachname"
+      final docId = "$vorname $nachname".trim();
+
+      await FirebaseFirestore.instance.collection("users").doc(docId).set({
         "createdAt": FieldValue.serverTimestamp(),
         "vorname": vorname,
         "nachname": nachname,
+        "fullName": docId,
         "username": username,
         "password": password,
+        "username_lower": username.toLowerCase(), // für Suche
         "age": age,
         "geburtsdatum": {
           "tag": _selectedDay,
@@ -463,8 +470,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                             31,
                                 (index) => Center(
                               child: Text("${index + 1}",
-                                  style: const TextStyle(
-                                      color: _textPrimary)),
+                                  style:
+                                  const TextStyle(color: _textPrimary)),
                             ),
                           ),
                         ),
@@ -481,18 +488,16 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                         child: CupertinoPicker(
                           backgroundColor: _card,
                           itemExtent: 32,
-                          scrollController:
-                          FixedExtentScrollController(
+                          scrollController: FixedExtentScrollController(
                               initialItem: _selectedMonth - 1),
                           onSelectedItemChanged: (index) =>
-                              setState(() =>
-                              _selectedMonth = index + 1),
+                              setState(() => _selectedMonth = index + 1),
                           children: List.generate(
                             12,
                                 (index) => Center(
                               child: Text("${index + 1}",
-                                  style: const TextStyle(
-                                      color: _textPrimary)),
+                                  style:
+                                  const TextStyle(color: _textPrimary)),
                             ),
                           ),
                         ),
@@ -509,11 +514,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                         child: CupertinoPicker(
                           backgroundColor: _card,
                           itemExtent: 32,
-                          scrollController:
-                          FixedExtentScrollController(
+                          scrollController: FixedExtentScrollController(
                               initialItem:
-                              DateTime.now().year -
-                                  _selectedYear),
+                              DateTime.now().year - _selectedYear),
                           onSelectedItemChanged: (index) =>
                               setState(() => _selectedYear =
                                   DateTime.now().year - index),
@@ -522,8 +525,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                                 (index) => Center(
                               child: Text(
                                   "${DateTime.now().year - index}",
-                                  style: const TextStyle(
-                                      color: _textPrimary)),
+                                  style:
+                                  const TextStyle(color: _textPrimary)),
                             ),
                           ),
                         ),
@@ -559,16 +562,14 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              const Icon(Icons.person_add,
-                  size: 56, color: _accent),
+              const Icon(Icons.person_add, size: 56, color: _accent),
               const SizedBox(height: 18),
 
               TextFormField(
                 controller: _vornameController,
                 focusNode: _vornameNode,
                 textInputAction: TextInputAction.next,
-                onFieldSubmitted: (_) =>
-                    _nachnameNode.requestFocus(),
+                onFieldSubmitted: (_) => _nachnameNode.requestFocus(),
                 inputFormatters: [
                   FilteringTextInputFormatter.deny(RegExp(r'^\s'))
                 ],
@@ -585,8 +586,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                 controller: _nachnameController,
                 focusNode: _nachnameNode,
                 textInputAction: TextInputAction.next,
-                onFieldSubmitted: (_) =>
-                    _usernameNode.requestFocus(),
+                onFieldSubmitted: (_) => _usernameNode.requestFocus(),
                 inputFormatters: [
                   FilteringTextInputFormatter.deny(RegExp(r'^\s'))
                 ],
@@ -603,8 +603,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                 controller: _usernameController,
                 focusNode: _usernameNode,
                 textInputAction: TextInputAction.next,
-                onFieldSubmitted: (_) =>
-                    _passwordNode.requestFocus(),
+                onFieldSubmitted: (_) => _passwordNode.requestFocus(),
                 style: const TextStyle(color: _textPrimary),
                 decoration: _dec(
                   label: "Username",
@@ -643,8 +642,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   icon: Icons.lock,
                   hint: "mind. 6 Zeichen",
                   suffix: IconButton(
-                    tooltip:
-                    _pwVisible ? "Verbergen" : "Anzeigen",
+                    tooltip: _pwVisible ? "Verbergen" : "Anzeigen",
                     onPressed: () =>
                         setState(() => _pwVisible = !_pwVisible),
                     icon: Icon(
@@ -665,32 +663,26 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: (_isFormValid && !_isSaving)
-                      ? _proceed
-                      : null,
+                  onPressed: (_isFormValid && !_isSaving) ? _proceed : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _accent,
                     disabledBackgroundColor:
                     Colors.redAccent.withOpacity(0.4),
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 16),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
-                        borderRadius:
-                        BorderRadius.circular(12)),
+                        borderRadius: BorderRadius.circular(12)),
                   ),
                   child: _isSaving
                       ? const SizedBox(
                     width: 22,
                     height: 22,
                     child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2),
+                        color: Colors.white, strokeWidth: 2),
                   )
                       : const Text("Account erstellen",
                       style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold)),
+                          fontSize: 17, fontWeight: FontWeight.bold)),
                 ),
               ),
               const SizedBox(height: 8),
@@ -702,15 +694,13 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                        builder: (_) =>
-                        const LoginScreen()),
+                        builder: (_) => const LoginScreen()),
                   );
                 },
                 child: const Text(
                   "Ich habe schon einen Account",
                   style: TextStyle(
-                      color: _textSecondary,
-                      fontWeight: FontWeight.w600),
+                      color: _textSecondary, fontWeight: FontWeight.w600),
                 ),
               ),
             ],
@@ -731,9 +721,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         centerTitle: true,
         title: const Text(
           "Account erstellen",
-          style: TextStyle(
-              color: _textPrimary,
-              fontWeight: FontWeight.w700),
+          style:
+          TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
         ),
       ),
       body: Container(
@@ -746,11 +735,10 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         ),
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 40),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 40),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                  maxWidth: 560),
+              constraints: const BoxConstraints(maxWidth: 560),
               child: _cardForm(),
             ),
           ),

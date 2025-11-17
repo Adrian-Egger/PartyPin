@@ -7,14 +7,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:geocoding/geocoding.dart' as geo;
 
 import '../Services/geocoding_services.dart';
+import 'map_picker_screen.dart';
 
 class NewPartyScreen extends StatefulWidget {
   final Map<String, dynamic>? existingData;
   final String? docId;
-
-  /// Parent-Callback: unten „Karte“ aktiv + Map refresh/zoom optional
   final void Function({bool updated, Map<String, dynamic>? payload})? onGoToMapAndRefresh;
 
   const NewPartyScreen({
@@ -32,7 +32,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   final _formKey = GlobalKey<FormState>();
   final _scrollCtrl = ScrollController();
 
-  // Controller
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
@@ -41,7 +40,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   final TextEditingController _priceController = TextEditingController();
   final TextEditingController _minAgeController = TextEditingController();
 
-  // Focus
   final _nameNode = FocusNode();
   final _descNode = FocusNode();
   final _guestNode = FocusNode();
@@ -49,7 +47,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   final _ageNode = FocusNode();
   final _addrNode = FocusNode();
 
-  // State
   DateTime? _selectedDate;
   TimeOfDay? _selectedTime;
   bool _isUnlimitedGuests = false;
@@ -61,14 +58,11 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   String _partyType = 'Open';
   String? _addressCountryError;
 
-  // Optional vom Map-Picker
   double? _pickedLat;
   double? _pickedLng;
 
-  // Autosave
   Timer? _draftTimer;
 
-  // Farb-Set: weniger grau, mehr Kontrast
   static const _bg = Color(0xFF0E0F12);
   static const _gradTop = Color(0xFF0E0F12);
   static const _gradBottom = Color(0xFF141A22);
@@ -77,8 +71,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   static const _card = Color(0xFF1C1F26);
   static const _textPrimary = Colors.white;
   static const _textSecondary = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30); // Brand-Rot
-  static const _secondary = Color(0xFF00C2A8); // Türkis als Sekundär
+  static const _accent = Color(0xFFFF3B30);
+  static const _secondary = Color(0xFF00C2A8);
 
   @override
   void initState() {
@@ -112,7 +106,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     super.dispose();
   }
 
-  // ---------- Init Helpers ----------
   void _preloadExisting() {
     if (widget.existingData == null) return;
     final data = widget.existingData!;
@@ -177,7 +170,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     });
   }
 
-  // ---------- Autosave Draft ----------
   void _startAutosave() {
     _draftTimer = Timer.periodic(const Duration(seconds: 2), (_) => _saveDraft());
   }
@@ -243,63 +235,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     });
   }
 
-  // ---------- UI helpers ----------
   String? _validateRequired(String? v, {String label = "Pflichtfeld"}) {
     if (v == null || v.trim().isEmpty) return "$label darf nicht leer sein.";
     return null;
-  }
-
-  String _humanCountryName(String iso2lower) {
-    switch (iso2lower) {
-      case 'at':
-        return 'Österreich';
-      case 'de':
-        return 'Deutschland';
-      case 'ch':
-        return 'Schweiz';
-      case 'it':
-        return 'Italien';
-      case 'cz':
-        return 'Tschechien';
-      case 'sk':
-        return 'Slowakei';
-      case 'hu':
-        return 'Ungarn';
-      default:
-        return iso2lower.toUpperCase();
-    }
-  }
-
-  Future<String?> _getSelectedCountryCode() async {
-    final prefs = await SharedPreferences.getInstance();
-    String? raw = prefs.getString('countryCode') ??
-        prefs.getString('selectedCountryCode') ??
-        prefs.getString('countryISO2') ??
-        prefs.getString('country') ??
-        prefs.getString('country_name');
-
-    if (raw == null || raw.trim().isEmpty) return null;
-    final v = raw.trim().toLowerCase();
-    if (RegExp(r'^[a-z]{2}$').hasMatch(v)) return v;
-
-    const map = {
-      'österreich': 'at',
-      'austria': 'at',
-      'deutschland': 'de',
-      'germany': 'de',
-      'schweiz': 'ch',
-      'switzerland': 'ch',
-      'italien': 'it',
-      'italy': 'it',
-      'tschechien': 'cz',
-      'czechia': 'cz',
-      'czech republic': 'cz',
-      'slowakei': 'sk',
-      'slovakia': 'sk',
-      'ungarn': 'hu',
-      'hungary': 'hu',
-    };
-    return map[v];
   }
 
   InputDecoration _dec(
@@ -362,13 +300,11 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
               ),
               const SizedBox(width: 8),
             ],
-            const Text(
-              " ",
-              style: TextStyle(fontSize: 0), // nur Abstand sichern
-            ),
+            const Text(" ", style: TextStyle(fontSize: 0)),
             Text(
               title,
-              style: const TextStyle(color: _textPrimary, fontSize: 16, fontWeight: FontWeight.w700),
+              style:
+              const TextStyle(color: _textPrimary, fontSize: 16, fontWeight: FontWeight.w700),
             ),
           ]),
           const SizedBox(height: 12),
@@ -398,7 +334,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
             const SizedBox(width: 10),
           ],
           Expanded(
-            child: Text(label, style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600)),
+            child: Text(label,
+                style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600)),
           ),
           Switch(
             value: value,
@@ -442,7 +379,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     );
   }
 
-  // ---------- Date/Time pick ----------
   Future<void> _pickDate() async {
     final date = await showDatePicker(
       context: context,
@@ -485,111 +421,91 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     }
   }
 
-  // ---------- Map Picker ----------
+  /// Vollbild-MapPicker + Reverse-Geocoding der Adresse
   Future<void> _openMapPicker() async {
-    final start = LatLng(_pickedLat ?? 48.2082, _pickedLng ?? 16.3738);
-    LatLng current = start;
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _panel,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+    LatLng initial = LatLng(_pickedLat ?? 48.2082, _pickedLng ?? 16.3738);
+
+    // Startposition auf gespeicherte Stadt legen, wenn noch kein Punkt gewählt wurde
+    if (_pickedLat == null || _pickedLng == null) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final city = prefs.getString('city');
+        final country = prefs.getString('country');
+        String? query;
+        if (city != null && city.trim().isNotEmpty) {
+          query = city.trim();
+          if (country != null && country.trim().isNotEmpty) {
+            query = '$query, ${country.trim()}';
+          }
+        }
+        if (query != null) {
+          final loc = await GeocodingService.getLocationFromAddress(query);
+          if (loc != null) {
+            initial = LatLng(loc.latitude, loc.longitude);
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Map-Screen öffnen, LatLng zurückbekommen
+    final picked = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MapPickerScreen(initial: initial),
       ),
-      builder: (ctx) {
-        GoogleMapController? ctrl;
-        return SizedBox(
-          height: MediaQuery.of(ctx).size.height * 0.75,
-          child: Column(
-            children: [
-              const SizedBox(height: 8),
-              Container(
-                width: 42,
-                height: 5,
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text("Standort wählen",
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 8),
-              Expanded(
-                child: Stack(
-                  children: [
-                    GoogleMap(
-                      initialCameraPosition: CameraPosition(target: start, zoom: 13),
-                      myLocationButtonEnabled: false,
-                      onMapCreated: (c) => ctrl = c,
-                      onCameraMove: (pos) => current = pos.target,
-                    ),
-                    const Center(
-                      child: Icon(Icons.location_on_rounded, color: _accent, size: 34),
-                    ),
-                  ],
-                ),
-              ),
-              SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => Navigator.pop(ctx),
-                          icon: const Icon(Icons.close, color: Colors.white70),
-                          label: const Text("Abbrechen"),
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: Colors.white24),
-                            foregroundColor: Colors.white70,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            _pickedLat = current.latitude;
-                            _pickedLng = current.longitude;
-                            HapticFeedback.lightImpact();
-                            Navigator.pop(ctx);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Standort übernommen")),
-                            );
-                            setState(() {});
-                          },
-                          icon: const Icon(Icons.check_circle_outline),
-                          label: const Text("Übernehmen"),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _secondary,
-                            foregroundColor: Colors.black,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
     );
+
+    if (picked != null && mounted) {
+      setState(() {
+        _pickedLat = picked.latitude;
+        _pickedLng = picked.longitude;
+      });
+
+      // Adresse automatisch aus Koordinaten holen
+      try {
+        final placemarks = await geo.placemarkFromCoordinates(
+          picked.latitude,
+          picked.longitude,
+        );
+        if (placemarks.isNotEmpty) {
+          final p = placemarks.first;
+          final street = [
+            p.street,
+            p.subThoroughfare,
+          ].where((e) => e != null && e.trim().isNotEmpty).join(' ');
+          final city = p.locality ?? p.subAdministrativeArea ?? '';
+          final postal = p.postalCode ?? '';
+          final country = p.country ?? '';
+
+          final addrParts = [
+            street.trim(),
+            [postal, city].where((e) => e.trim().isNotEmpty).join(' '),
+            country.trim(),
+          ].where((e) => e.trim().isNotEmpty).toList();
+
+          if (addrParts.isNotEmpty) {
+            _addressController.text = addrParts.join(', ');
+          }
+        }
+      } catch (_) {
+        // Wenn Reverse-Geocoding fehlschlägt: egal, Lat/Lng sind trotzdem gesetzt
+      }
+
+      HapticFeedback.lightImpact();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Standort übernommen")),
+      );
+    }
   }
 
-  // ---------- Utilities ----------
   void _scrollToFirstError() {
-    _scrollCtrl.animateTo(
+    _scrollCtrl
+        .animateTo(
       _scrollCtrl.position.maxScrollExtent,
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
-    ).then((_) => _scrollCtrl.animateTo(
+    )
+        .then((_) => _scrollCtrl.animateTo(
       0,
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
@@ -627,7 +543,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     if (mounted) Navigator.of(context).pop(result);
   }
 
-  // ---------- Save ----------
   Future<void> _saveParty() async {
     setState(() => _triedSubmit = true);
     _addressCountryError = null;
@@ -659,40 +574,53 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     double? lat = _pickedLat;
     double? lng = _pickedLng;
 
-    // Länder-Restriktion
-    final cc = await _getSelectedCountryCode();
+    final prefs = await SharedPreferences.getInstance();
+    final username = prefs.getString('username') ?? 'unknown_user';
 
-    // Geocoding bevorzugt, sonst Map-Picker-Koordinaten
-    GeocodedLocation? loc;
-    try {
-      loc = await GeocodingService.getLocationFromAddress(address, countryCode: cc);
-    } catch (_) {}
+    if (lat == null || lng == null) {
+      GeocodedLocation? loc;
+      try {
+        loc = await GeocodingService.getLocationFromAddress(address);
+      } catch (_) {}
 
-    if (cc != null) {
-      if (loc == null || (loc.countryCode?.toLowerCase() != cc.toLowerCase())) {
-        final countryName = _humanCountryName(cc);
-        _addressCountryError = "Adresse muss in $countryName liegen.";
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Adresse nicht akzeptiert: nur $countryName erlaubt.")),
-        );
-        return;
+      if (loc == null) {
+        final savedCity = prefs.getString('city');
+        final savedCountry = prefs.getString('country');
+        String? query;
+
+        if (savedCity != null && savedCity.trim().isNotEmpty) {
+          query = '$address, ${savedCity.trim()}';
+          if (savedCountry != null && savedCountry.trim().isNotEmpty) {
+            query = '$query, ${savedCountry.trim()}';
+          }
+        }
+
+        if (query != null) {
+          try {
+            loc = await GeocodingService.getLocationFromAddress(query);
+          } catch (_) {}
+        }
+      }
+
+      if (loc != null) {
+        lat = loc.latitude;
+        lng = loc.longitude;
       }
     }
 
-    if (loc != null) {
-      lat = loc.latitude;
-      lng = loc.longitude;
-    } else if (lat == null || lng == null) {
+    if (lat == null || lng == null) {
+      _addressCountryError =
+      "Adresse nicht gefunden. Bitte genauer angeben, Stadt ergänzen oder Standort auf der Karte wählen.";
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Bitte Adresse prüfen oder Standort per Karte wählen.")),
+        const SnackBar(
+          content: Text(
+            "Adresse nicht gefunden. Bitte genauer angeben oder Standort auf der Karte wählen.",
+          ),
+        ),
       );
       return;
     }
-
-    final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username') ?? 'unknown_user';
 
     final baseData = {
       'name': name,
@@ -757,7 +685,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     }
   }
 
-  // ---------- Build ----------
   @override
   Widget build(BuildContext context) {
     final isEditing = widget.existingData != null;
@@ -834,7 +761,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
               elevation: 0.5,
               title: Text(
                 isEditing ? "Party bearbeiten" : "Neue Party",
-                style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                style:
+                const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
               ),
               leading: IconButton(
                 icon: const Icon(Icons.map_outlined, color: _accent),
@@ -855,7 +783,13 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                       children: [
                         const Icon(Icons.person, size: 16, color: Colors.white70),
                         const SizedBox(width: 6),
-                        Text(_hostName!, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600)),
+                        Text(
+                          _hostName!,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -871,13 +805,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
               ),
               child: SingleChildScrollView(
                 controller: _scrollCtrl,
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 120), // Platz für Sticky-Bar
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
                 child: Form(
                   key: _formKey,
                   autovalidateMode: AutovalidateMode.onUserInteraction,
                   child: Column(
                     children: [
-                      // Basis
                       _section(
                         title: "Basis",
                         icon: Icons.celebration_outlined,
@@ -909,10 +842,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                           ],
                         ),
                       ),
-
                       const SizedBox(height: 14),
-
-                      // Gäste & Preis + Mindestalter
                       _section(
                         title: "Gäste & Preis",
                         icon: Icons.group_outlined,
@@ -936,7 +866,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                       icon: Icons.groups,
                                       errorText: (!_isUnlimitedGuests &&
                                           _triedSubmit &&
-                                          (int.tryParse(_guestLimitController.text.trim()) == null))
+                                          (int.tryParse(
+                                              _guestLimitController.text.trim()) ==
+                                              null))
                                           ? "Gästelimit muss eine Zahl sein."
                                           : null,
                                     ),
@@ -967,7 +899,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                     focusNode: _priceNode,
                                     textInputAction: TextInputAction.next,
                                     onFieldSubmitted: (_) => _ageNode.requestFocus(),
-                                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                    keyboardType:
+                                    const TextInputType.numberWithOptions(decimal: true),
                                     inputFormatters: [
                                       FilteringTextInputFormatter.allow(
                                         RegExp(r'^\d*[,]?\d{0,2}$|^\d*[.]?\d{0,2}$'),
@@ -981,7 +914,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                       icon: Icons.euro,
                                       errorText: (!_isFreeEntry &&
                                           _triedSubmit &&
-                                          (double.tryParse(_priceController.text.replaceAll(',', '.').trim()) ==
+                                          (double.tryParse(_priceController.text
+                                              .replaceAll(',', '.')
+                                              .trim()) ==
                                               null))
                                           ? "Preis muss eine Zahl sein."
                                           : null,
@@ -1022,17 +957,16 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                 final n = int.tryParse(v.trim());
                                 if (n == null) return "Mindestalter muss eine Zahl sein.";
                                 if (n < 0) return "Mindestalter darf nicht negativ sein.";
-                                if (n > 99) return "Bitte ein realistisches Alter (0–99) eingeben.";
+                                if (n > 99) {
+                                  return "Bitte ein realistisches Alter (0–99) eingeben.";
+                                }
                                 return null;
                               },
                             ),
                           ],
                         ),
                       ),
-
                       const SizedBox(height: 14),
-
-                      // Ort
                       _section(
                         title: "Ort",
                         icon: Icons.location_on_outlined,
@@ -1058,10 +992,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                           validator: (v) => _validateRequired(v, label: "Adresse"),
                         ),
                       ),
-
                       const SizedBox(height: 14),
-
-                      // Datum & Zeit
                       _section(
                         title: "Datum & Zeit",
                         icon: Icons.schedule_outlined,
@@ -1076,7 +1007,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                       backgroundColor: _card,
                                       foregroundColor: _textPrimary,
                                       elevation: 0,
-                                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 14, horizontal: 14),
                                       shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(14)),
                                     ),
@@ -1088,7 +1020,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                         _selectedDate == null
                                             ? "Datum wählen"
                                             : "${_selectedDate!.day.toString().padLeft(2, '0')}.${_selectedDate!.month.toString().padLeft(2, '0')}.${_selectedDate!.year}",
-                                        key: ValueKey(_selectedDate?.toIso8601String() ?? 'none'),
+                                        key: ValueKey(
+                                            _selectedDate?.toIso8601String() ?? 'none'),
                                       ),
                                     ),
                                   ),
@@ -1100,7 +1033,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                       backgroundColor: _card,
                                       foregroundColor: _textPrimary,
                                       elevation: 0,
-                                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 14, horizontal: 14),
                                       shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(14)),
                                     ),
@@ -1109,9 +1043,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                     label: AnimatedSwitcher(
                                       duration: const Duration(milliseconds: 150),
                                       child: Text(
-                                        (_selectedTime == null) ? "Uhrzeit wählen" : _timeController.text,
-                                        key: ValueKey(
-                                            _timeController.text.isEmpty ? 'none' : _timeController.text),
+                                        (_selectedTime == null)
+                                            ? "Uhrzeit wählen"
+                                            : _timeController.text,
+                                        key: ValueKey(_timeController.text.isEmpty
+                                            ? 'none'
+                                            : _timeController.text),
                                       ),
                                     ),
                                   ),
@@ -1119,21 +1056,25 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                               ],
                             ),
                             const SizedBox(height: 10),
-                            // Quick Chips
                             Wrap(
                               spacing: 8,
                               children: [
                                 _quickTimeChip("Heute 22:00", () {
                                   final now = DateTime.now();
-                                  _selectedDate = DateTime(now.year, now.month, now.day);
-                                  _selectedTime = const TimeOfDay(hour: 22, minute: 0);
+                                  _selectedDate =
+                                      DateTime(now.year, now.month, now.day);
+                                  _selectedTime =
+                                  const TimeOfDay(hour: 22, minute: 0);
                                   _timeController.text = "22:00";
                                   setState(() {});
                                 }),
                                 _quickTimeChip("Morgen 21:00", () {
-                                  final now = DateTime.now().add(const Duration(days: 1));
-                                  _selectedDate = DateTime(now.year, now.month, now.day);
-                                  _selectedTime = const TimeOfDay(hour: 21, minute: 0);
+                                  final now =
+                                  DateTime.now().add(const Duration(days: 1));
+                                  _selectedDate =
+                                      DateTime(now.year, now.month, now.day);
+                                  _selectedTime =
+                                  const TimeOfDay(hour: 21, minute: 0);
                                   _timeController.text = "21:00";
                                   setState(() {});
                                 }),
@@ -1141,8 +1082,10 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                   final now = DateTime.now();
                                   final diff = (5 - now.weekday + 7) % 7;
                                   final d = now.add(Duration(days: diff == 0 ? 7 : diff));
-                                  _selectedDate = DateTime(d.year, d.month, d.day);
-                                  _selectedTime = const TimeOfDay(hour: 22, minute: 0);
+                                  _selectedDate =
+                                      DateTime(d.year, d.month, d.day);
+                                  _selectedTime =
+                                  const TimeOfDay(hour: 22, minute: 0);
                                   _timeController.text = "22:00";
                                   setState(() {});
                                 }),
@@ -1151,22 +1094,23 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                             if (_triedSubmit && _selectedDate == null)
                               const Padding(
                                 padding: EdgeInsets.only(top: 8),
-                                child: Text("Bitte ein Datum wählen.",
-                                    style: TextStyle(color: Colors.orangeAccent)),
+                                child: Text(
+                                  "Bitte ein Datum wählen.",
+                                  style: TextStyle(color: Colors.orangeAccent),
+                                ),
                               ),
                             if (_triedSubmit && _selectedTime == null)
                               const Padding(
                                 padding: EdgeInsets.only(top: 4),
-                                child: Text("Bitte eine Uhrzeit wählen.",
-                                    style: TextStyle(color: Colors.orangeAccent)),
+                                child: Text(
+                                  "Bitte eine Uhrzeit wählen.",
+                                  style: TextStyle(color: Colors.orangeAccent),
+                                ),
                               ),
                           ],
                         ),
                       ),
-
                       const SizedBox(height: 14),
-
-                      // Party-Typ
                       _section(
                         title: "Party-Typ",
                         icon: Icons.lock_open_outlined,
@@ -1174,8 +1118,14 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                           spacing: 10,
                           runSpacing: 8,
                           children: [
-                            _typeChip(value: "Open", label: "Open", icon: Icons.lock_open_rounded),
-                            _typeChip(value: "Closed", label: "Closed", icon: Icons.lock_rounded),
+                            _typeChip(
+                                value: "Open",
+                                label: "Open",
+                                icon: Icons.lock_open_rounded),
+                            _typeChip(
+                                value: "Closed",
+                                label: "Closed",
+                                icon: Icons.lock_rounded),
                           ],
                         ),
                       ),
@@ -1186,7 +1136,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
             ),
             bottomNavigationBar: stickyBar,
           ),
-
           if (_isLoading)
             Positioned.fill(
               child: IgnorePointer(
@@ -1194,7 +1143,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   color: Colors.black.withOpacity(0.35),
-                  child: const Center(child: CircularProgressIndicator(strokeWidth: 3)),
+                  child:
+                  const Center(child: CircularProgressIndicator(strokeWidth: 3)),
                 ),
               ),
             ),
@@ -1209,7 +1159,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       onPressed: onPressed,
       backgroundColor: _card,
       shape: StadiumBorder(side: BorderSide(color: _panelBorder)),
-      labelStyle: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
+      labelStyle:
+      const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
     );
   }

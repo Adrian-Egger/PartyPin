@@ -2,7 +2,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../Screens/party_map_screen.dart'; // Fallback für Back-to-Map
+import '../Screens/party_map_screen.dart';
 
 class FriendsScreen extends StatefulWidget {
   final String currentUsername; // Username aus SharedPreferences
@@ -43,7 +43,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
   CollectionReference<Map<String, dynamic>> get _ships =>
       FirebaseFirestore.instance.collection('friendships');
 
-  // eigene Doc-ID (kann vom Username abweichen)
+  // eigene Doc-ID (kann vom Username abweichen -> jetzt "Vorname Nachname")
   String? _myDocId;
 
   // kleiner User-Cache (username -> userData)
@@ -70,21 +70,28 @@ class _FriendsScreenState extends State<FriendsScreen> {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 220), () {
       if (!mounted) return;
-      setState(() => _query = _searchCtrl.text.trim());
+      setState(() => _query = _searchCtrl.text.trim().toLowerCase());
     });
   }
 
+  /// Case-insensitive Suche über username_lower (Feld in users).
   Stream<List<String>>? _searchStream() {
     if (_query.isEmpty) return null;
+
     return _users
-        .orderBy(FieldPath.documentId)
+        .orderBy('username_lower')
         .startAt([_query])
         .endAt(['${_query}\uf8ff'])
         .limit(20)
         .snapshots()
         .map((qs) => qs.docs
-        .map((d) => d.id)
-        .where((id) => id.isNotEmpty && id != widget.currentUsername)
+        .map((d) {
+      final data = d.data();
+      return (data['username'] ?? '').toString();
+    })
+        .where((uname) =>
+    uname.isNotEmpty &&
+        uname.toLowerCase() != widget.currentUsername.trim().toLowerCase())
         .toList());
   }
 
@@ -112,17 +119,17 @@ class _FriendsScreenState extends State<FriendsScreen> {
     return '${s[0]}__${s[1]}';
   }
 
+  /// eigene Doc-ID aus users holen (über Feld username, NICHT über docId).
   Future<void> _resolveMyDocId() async {
     final me = widget.currentUsername.trim();
     if (me.isEmpty) return;
     try {
-      final byId = await _users.doc(me).get();
-      if (byId.exists) {
-        _myDocId = byId.id;
-      } else {
-        final qs =
-        await _users.where('username', isEqualTo: me).limit(1).get();
-        if (qs.docs.isNotEmpty) _myDocId = qs.docs.first.id;
+      final qs = await _users
+          .where('username', isEqualTo: me)
+          .limit(1)
+          .get();
+      if (qs.docs.isNotEmpty) {
+        _myDocId = qs.docs.first.id; // das ist jetzt "Vorname Nachname"
       }
     } catch (_) {
       _myDocId = null;
@@ -131,42 +138,38 @@ class _FriendsScreenState extends State<FriendsScreen> {
     }
   }
 
-  /// Benutzer per docId oder username holen (mit Cache).
-  Future<Map<String, dynamic>?> _getUserData(
-      {String? docId, String? username}) async {
+  /// Benutzer per docId ODER username holen (mit Cache).
+  Future<Map<String, dynamic>?> _getUserData({
+    String? docId,
+    String? username,
+  }) async {
     try {
       if (username != null && _userCache.containsKey(username)) {
         return _userCache[username];
       }
 
-      DocumentSnapshot<Map<String, dynamic>>? snap;
+      // 1) docId direkt
       if (docId != null && docId.isNotEmpty) {
-        snap = await _users.doc(docId).get();
+        final snap = await _users.doc(docId).get();
         if (snap.exists) {
-          final data = snap.data()!..putIfAbsent('username', () => docId);
-          final uname = (data['username'] ?? docId).toString();
-          _userCache[uname] = data;
+          final data = snap.data() ?? {};
+          final uname = (data['username'] ?? '').toString();
+          if (uname.isNotEmpty) _userCache[uname] = data;
           return data;
         }
       }
 
+      // 2) Suche über Feld username
       if (username != null && username.isNotEmpty) {
-        // direkt per Doc-ID
-        final byId = await _users.doc(username).get();
-        if (byId.exists) {
-          final data = byId.data()!..putIfAbsent('username', () => byId.id);
-          final uname = (data['username'] ?? byId.id).toString();
-          _userCache[uname] = data;
-          return data;
-        }
-        // Feldsuche
-        final qs =
-        await _users.where('username', isEqualTo: username).limit(1).get();
+        final qs = await _users
+            .where('username', isEqualTo: username)
+            .limit(1)
+            .get();
         if (qs.docs.isNotEmpty) {
           final d = qs.docs.first;
-          final data = d.data()..putIfAbsent('username', () => d.id);
-          final uname = (data['username'] ?? d.id).toString();
-          _userCache[uname] = data;
+          final data = d.data();
+          final uname = (data['username'] ?? '').toString();
+          if (uname.isNotEmpty) _userCache[uname] = data;
           return data;
         }
       }
@@ -174,25 +177,41 @@ class _FriendsScreenState extends State<FriendsScreen> {
     return null;
   }
 
-  /// Ziel ermitteln: Rückgabe docId + username
+  /// Ziel-User ermitteln: Eingabe ist der USERNAME (nicht der volle Name).
+  /// Rückgabe: docId (Vorname Nachname) + username.
   Future<({String docId, String username})?> _resolveTarget(
       String input) async {
     final n = input.trim();
     if (n.isEmpty) return null;
+    final nLower = n.toLowerCase();
 
     try {
-      final byId = await _users.doc(n).get();
-      if (byId.exists) {
-        final data = byId.data() ?? {};
-        final uname = (data['username'] ?? byId.id).toString();
-        return (docId: byId.id, username: uname);
+      // 1) exakte Suche über username_lower
+      final qsLower = await _users
+          .where('username_lower', isEqualTo: nLower)
+          .limit(1)
+          .get();
+      if (qsLower.docs.isNotEmpty) {
+        final d = qsLower.docs.first;
+        final data = d.data();
+        final uname = (data['username'] ?? '').toString();
+        if (uname.isNotEmpty) {
+          return (docId: d.id, username: uname);
+        }
       }
-      final qs = await _users.where('username', isEqualTo: n).limit(1).get();
+
+      // 2) Fallback: exakte Suche über username (falls username_lower fehlt)
+      final qs = await _users
+          .where('username', isEqualTo: n)
+          .limit(1)
+          .get();
       if (qs.docs.isNotEmpty) {
         final d = qs.docs.first;
         final data = d.data();
-        final uname = (data['username'] ?? d.id).toString();
-        return (docId: d.id, username: uname);
+        final uname = (data['username'] ?? '').toString();
+        if (uname.isNotEmpty) {
+          return (docId: d.id, username: uname);
+        }
       }
     } catch (_) {}
     return null;
@@ -215,6 +234,11 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   Future<void> _sendFriendRequest(String targetRaw) async {
     final me = widget.currentUsername.trim();
+    if (me.isEmpty) {
+      _showSnack('Kein aktueller Benutzer.', color: _err, icon: Icons.error);
+      return;
+    }
+
     final target = await _resolveTarget(targetRaw);
 
     if (target == null) {
@@ -222,10 +246,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
           color: _warn, icon: Icons.warning_amber_rounded);
       return;
     }
-    final toDoc = target.docId;
-    final toUsername = target.username;
+    final toDoc = target.docId;       // "Vorname Nachname"
+    final toUsername = target.username; // echter Username
 
-    if (toUsername == me) {
+    if (toUsername.toLowerCase() == me.toLowerCase()) {
       _showSnack('Du kannst dich nicht selbst adden.',
           color: _warn, icon: Icons.warning_amber);
       return;
@@ -252,10 +276,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final rid = '${me}__${toUsername}';
     try {
       await _reqs.doc(rid).set({
-        'from': me,
-        'fromDocId': _myDocId,
-        'to': toUsername,
-        'toDocId': toDoc,
+        'from': me,         // Username
+        'fromDocId': _myDocId, // "Vorname Nachname"
+        'to': toUsername,   // Username
+        'toDocId': toDoc,   // "Vorname Nachname"
         'status': 'pending',
         'ts': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -282,7 +306,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
           'handledAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
         tx.set(_ships.doc(sid), {
-          'members': [fromUsername, toUsername],
+          'members': [fromUsername, toUsername], // beide: USERNAME
           'since': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       });
@@ -345,7 +369,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
     try {
       await FirebaseFirestore.instance.runTransaction((tx) async {
         tx.delete(_ships.doc(sid));
-        // alte Requests in beide Richtungen löschen
         tx.delete(_reqs.doc('${me}__${otherUsername}'));
         tx.delete(_reqs.doc('${otherUsername}__${me}'));
       });
@@ -361,14 +384,12 @@ class _FriendsScreenState extends State<FriendsScreen> {
   // ---------- Navigation ----------
 
   void _backToMap() {
-    // 1) Named Route versuchen
     bool pushed = false;
     try {
       Navigator.of(context)
           .pushNamedAndRemoveUntil(widget.mapRoute, (_) => false);
       pushed = true;
     } catch (_) {}
-    // 2) Fallback: Direkt auf PartyMapScreen
     if (!pushed) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const PartyMapScreen()),
@@ -398,7 +419,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             style:
             TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
         actions: [
-          // Badge-Zähler (clientseitig gefiltert)
+          // Badge-Zähler
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: _reqs.where('status', isEqualTo: 'pending').snapshots(),
             builder: (ctx, snap) {
@@ -493,75 +514,137 @@ class _FriendsScreenState extends State<FriendsScreen> {
             ),
           ),
 
-          // Freunde-Liste (clean Cards)
+          // Entweder Suche oder Freundesliste
           Expanded(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream:
-                _ships.where('members', arrayContains: me).snapshots(),
-                builder: (ctx, snap) {
-                  if (snap.hasError) {
-                    return _ErrorHint(err: snap.error.toString());
-                  }
-                  final docs = snap.data?.docs ?? const [];
-                  if (docs.isEmpty) {
-                    return const _EmptyHint(
-                        text: 'Noch keine Freunde', emoji: '🫤');
-                  }
-
-                  final sorted = [...docs]..sort((a, b) {
-                    final at = a.data()['since'];
-                    final bt = b.data()['since'];
-                    final an = at is Timestamp ? at.toDate() : DateTime(0);
-                    final bn = bt is Timestamp ? bt.toDate() : DateTime(0);
-                    return bn.compareTo(an);
-                  });
-
-                  return ListView.separated(
-                    itemCount: sorted.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (_, i) {
-                      final d = sorted[i].data();
-                      final members =
-                      (d['members'] as List).cast<String>();
-                      final other =
-                      members.first == me ? members.last : members.first;
-
-                      return FutureBuilder<Map<String, dynamic>?>(
-                        future: _getUserData(username: other),
-                        builder: (ctx, uSnap) {
-                          final user = uSnap.data ?? {};
-                          final first =
-                          (user['vorname'] ?? '').toString().trim();
-                          final last =
-                          (user['nachname'] ?? '').toString().trim();
-                          final name = (first + ' ' + last).trim().isEmpty
-                              ? other
-                              : ('$first $last').trim();
-                          final photo =
-                          (user['photoUrl'] ?? '').toString().trim();
-
-                          return _FriendCard(
-                            photoUrl: photo,
-                            title: name,
-                            subtitle: '@$other',
-                            onChat: () => _showSnack(
-                                'Chat mit „$other“ öffnen',
-                                color: _info,
-                                icon: Icons.chat_bubble_outline),
-                            onRemove: () => _confirmAndUnfriend(other),
-                          );
-                        },
-                      );
-                    },
-                  );
-                },
-              ),
+              child: _query.isEmpty
+                  ? _buildFriendsList(me)
+                  : _buildSearchResults(),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  // ---------- UI-Teile ----------
+
+  Widget _buildFriendsList(String me) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _ships.where('members', arrayContains: me).snapshots(),
+      builder: (ctx, snap) {
+        if (snap.hasError) {
+          return _ErrorHint(err: snap.error.toString());
+        }
+        final docs = snap.data?.docs ?? const [];
+        if (docs.isEmpty) {
+          return const _EmptyHint(text: 'Noch keine Freunde', emoji: '🫤');
+        }
+
+        final sorted = [...docs]..sort((a, b) {
+          final at = a.data()['since'];
+          final bt = b.data()['since'];
+          final an = at is Timestamp ? at.toDate() : DateTime(0);
+          final bn = bt is Timestamp ? bt.toDate() : DateTime(0);
+          return bn.compareTo(an);
+        });
+
+        return ListView.separated(
+          itemCount: sorted.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 10),
+          itemBuilder: (_, i) {
+            final d = sorted[i].data();
+            final members = (d['members'] as List).cast<String>();
+            final other = members.first == me ? members.last : members.first;
+
+            return FutureBuilder<Map<String, dynamic>?>(
+              future: _getUserData(username: other),
+              builder: (ctx, uSnap) {
+                final user = uSnap.data ?? {};
+                final first =
+                (user['vorname'] ?? '').toString().trim();
+                final last =
+                (user['nachname'] ?? '').toString().trim();
+                final name = (first + ' ' + last).trim().isEmpty
+                    ? other
+                    : ('$first $last').trim();
+                final photo =
+                (user['photoUrl'] ?? '').toString().trim();
+
+                return _FriendCard(
+                  photoUrl: photo,
+                  title: name,
+                  subtitle: '@$other',
+                  onChat: () => _showSnack(
+                      'Chat mit „$other“ öffnen',
+                      color: _info,
+                      icon: Icons.chat_bubble_outline),
+                  onRemove: () => _confirmAndUnfriend(other),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildSearchResults() {
+    final stream = _searchStream();
+    if (stream == null) {
+      return const _EmptyHint(text: 'Username eingeben', emoji: '🔍');
+    }
+
+    return StreamBuilder<List<String>>(
+      stream: stream,
+      builder: (ctx, snap) {
+        if (snap.hasError) {
+          return _ErrorHint(err: snap.error.toString());
+        }
+        if (!snap.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final users = snap.data!;
+        if (users.isEmpty) {
+          return const _EmptyHint(text: 'Keine User gefunden', emoji: '😶');
+        }
+
+        return ListView.separated(
+          itemCount: users.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (ctx, i) {
+            final uname = users[i];
+            return Card(
+              color: _panel,
+              elevation: 4,
+              shadowColor: Colors.black54,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+              child: ListTile(
+                leading: const Icon(Icons.person, color: Colors.white),
+                title: Text(
+                  uname,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15),
+                ),
+                subtitle: Text(
+                  '@$uname',
+                  style: const TextStyle(
+                      color: Colors.white54, fontWeight: FontWeight.w500),
+                ),
+                trailing: FilledButton.tonalIcon(
+                  onPressed: () => _sendFriendRequest(uname),
+                  icon: const Icon(Icons.person_add_alt_1),
+                  label: const Text('Add'),
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -655,16 +738,17 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
                           return ListView.separated(
                             controller: scrollController,
-                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            padding:
+                            const EdgeInsets.symmetric(vertical: 6),
                             itemCount: docs.length,
                             separatorBuilder: (_, __) =>
                             const SizedBox(height: 10),
                             itemBuilder: (_, i) {
                               final m = docs[i].data();
                               final fromU =
-                              (m['from'] ?? '').toString();
+                              (m['from'] ?? '').toString(); // Username
                               final fromDoc =
-                              (m['fromDocId'] ?? '').toString();
+                              (m['fromDocId'] ?? '').toString(); // fullName
                               final toU = (m['to'] ?? '').toString();
 
                               return FutureBuilder<Map<String, dynamic>?>(
@@ -757,7 +841,8 @@ class _FriendCard extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(subtitle,
                       style: const TextStyle(
-                          color: Colors.white60, fontWeight: FontWeight.w600)),
+                          color: Colors.white60,
+                          fontWeight: FontWeight.w600)),
                 ],
               ),
             ),
@@ -767,13 +852,14 @@ class _FriendCard extends StatelessWidget {
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.white,
                 side: const BorderSide(color: Colors.white24),
-                padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 10),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10)),
               ),
               icon: const Icon(Icons.chat_bubble_outline, size: 18),
-              label: const Text('Chat', style: TextStyle(fontWeight: FontWeight.w700)),
+              label: const Text('Chat',
+                  style: TextStyle(fontWeight: FontWeight.w700)),
             ),
             const SizedBox(width: 8),
             OutlinedButton.icon(
@@ -782,8 +868,8 @@ class _FriendCard extends StatelessWidget {
                 foregroundColor: _FriendsScreenState._err,
                 side: BorderSide(
                     color: _FriendsScreenState._err.withOpacity(.6)),
-                padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 10),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10)),
               ),
@@ -838,7 +924,8 @@ class _RequestCard extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(subtitle,
                       style: const TextStyle(
-                          color: Colors.white60, fontWeight: FontWeight.w600)),
+                          color: Colors.white60,
+                          fontWeight: FontWeight.w600)),
                 ],
               ),
             ),
@@ -848,8 +935,8 @@ class _RequestCard extends StatelessWidget {
               style: ElevatedButton.styleFrom(
                 backgroundColor: _FriendsScreenState._ok,
                 foregroundColor: Colors.white,
-                padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10)),
               ),

@@ -74,13 +74,85 @@ class PartyBottomSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final canSeeFull = !isClosed || baseCanSeeFull;
 
+    // -------- Party löschen (nur Host) --------
+    Future<void> _confirmAndDeleteParty() async {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: Colors.grey[900],
+          title: const Text(
+            "Party löschen?",
+            style: TextStyle(color: Colors.white),
+          ),
+          content: const Text(
+            "Willst du diese Party wirklich löschen? Alle Zusagen, Anfragen und Bewertungen gehen verloren.",
+            style: TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text(
+                "Abbrechen",
+                style: TextStyle(color: Colors.white70),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text(
+                "Löschen",
+                style: TextStyle(color: Colors.redAccent),
+              ),
+            ),
+          ],
+        ),
+      ) ??
+          false;
+
+      if (!confirm) return;
+
+      try {
+        final partyRef =
+        FirebaseFirestore.instance.collection('Party').doc(partyId);
+        final batch = FirebaseFirestore.instance.batch();
+
+        const subCollections = [
+          'rsvps',
+          'coming',
+          'maybe',
+          'requests',
+          'approved',
+          'ratings',
+        ];
+
+        for (final sub in subCollections) {
+          final qs = await partyRef.collection(sub).get();
+          for (final doc in qs.docs) {
+            batch.delete(doc.reference);
+          }
+        }
+
+        batch.delete(partyRef);
+        await batch.commit();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Party gelöscht.")),
+        );
+
+        await onEditedParty();
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Fehler beim Löschen: $e")),
+        );
+      }
+    }
+
     Widget infoRow(IconData ic, String label, String value) => Row(
       children: [
         Icon(ic, color: Colors.white70, size: 18),
         const SizedBox(width: 8),
         Text("$label: ",
-            style:
-            const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.w600)),
         Expanded(
             child: Text(value,
                 style: const TextStyle(color: Colors.white70))),
@@ -142,12 +214,14 @@ class PartyBottomSheet extends StatelessWidget {
           const SizedBox(height: 12),
           const Text(
             "Weitere Details sind verborgen, bis der Host dich zulässt.",
-            style:
-            TextStyle(color: Colors.white54, fontStyle: FontStyle.italic),
+            style: TextStyle(color: Colors.white54, fontStyle: FontStyle.italic),
           ),
         ],
       ),
     );
+
+    final hostNameStr = (data['hostName'] ?? '').toString();
+    final hostLabel = isHost ? "$hostNameStr (du)" : hostNameStr;
 
     return Container(
       width: MediaQuery.of(context).size.width,
@@ -205,7 +279,7 @@ class PartyBottomSheet extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             FutureBuilder<bool>(
-              future: isUserVerified((data['hostName'] ?? '').toString()),
+              future: isUserVerified(hostNameStr),
               builder: (context, snap) {
                 final isVerified = snap.data == true;
                 return Container(
@@ -222,7 +296,7 @@ class PartyBottomSheet extends StatelessWidget {
                             color: Colors.white, size: 18),
                         const SizedBox(width: 8),
                       ],
-                      Text("Host: ${data['hostName'] ?? ''}",
+                      Text("Host: $hostLabel",
                           style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w600)),
@@ -243,24 +317,55 @@ class PartyBottomSheet extends StatelessWidget {
             const SizedBox(height: 20),
             const Divider(color: Color(0x33FFFFFF)),
             const SizedBox(height: 12),
+
+            // ---------- Host vs Guest UI ----------
             if (isHost) ...[
-              if (isClosed) _hostClosedLists(context) else _hostOpenLists(context),
+              if (isClosed)
+                _hostClosedLists(context)
+              else
+                _hostOpenLists(context),
               const SizedBox(height: 16),
               Center(
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(50),
-                      backgroundColor: Colors.orangeAccent,
-                      foregroundColor: Colors.white),
-                  child: const Text("Bearbeiten", style: TextStyle(fontSize: 18)),
-                  onPressed: () async {
-                    await Navigator.push(
-                        context,
-                        MaterialPageRoute(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(50),
+                        backgroundColor: Colors.orangeAccent,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text("Bearbeiten",
+                          style: TextStyle(fontSize: 18)),
+                      onPressed: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
                             builder: (_) => NewPartyScreen(
-                                existingData: data, docId: partyId)));
-                    await onEditedParty();
-                  },
+                              existingData: data,
+                              docId: partyId,
+                            ),
+                          ),
+                        );
+                        await onEditedParty();
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size.fromHeight(46),
+                        foregroundColor: Colors.redAccent,
+                      ),
+                      onPressed: _confirmAndDeleteParty,
+                      icon: const Icon(Icons.delete_forever,
+                          color: Colors.redAccent),
+                      label: const Text(
+                        "Party löschen",
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ] else ...[
@@ -414,7 +519,7 @@ class PartyBottomSheet extends StatelessWidget {
           if (status == 'approved' ||
               status == 'declined' ||
               status == 'pending') {
-            final s = status; // capture
+            final s = status;
             SchedulerBinding.instance.addPostFrameCallback((_) {
               setClosedLockIcon(s);
             });
@@ -434,14 +539,15 @@ class PartyBottomSheet extends StatelessWidget {
                 await onSendJoinRequest();
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                     content: Text("Anfrage gesendet – warte auf Antwort")));
-                setClosedLockIcon('pending'); // aus Button-Handler ok
+                setClosedLockIcon('pending');
               } catch (e) {
                 ScaffoldMessenger.of(context)
                     .showSnackBar(SnackBar(content: Text("Fehler: $e")));
               }
             },
             icon: const Icon(Icons.lock_open_rounded),
-            label: const Text("Anfrage senden", style: TextStyle(fontSize: 18)),
+            label:
+            const Text("Anfrage senden", style: TextStyle(fontSize: 18)),
           );
         } else if (status == 'pending') {
           return _pill("Anfrage gesendet – warte auf Antwort", Colors.green);
@@ -472,8 +578,8 @@ class PartyBottomSheet extends StatelessWidget {
         } else {
           return const ListTile(
             leading: Icon(Icons.cancel, color: Colors.redAccent),
-            title:
-            Text("Anfrage abgelehnt", style: TextStyle(color: Colors.white)),
+            title: Text("Anfrage abgelehnt",
+                style: TextStyle(color: Colors.white)),
             subtitle: Text("Du kannst den Host direkt kontaktieren.",
                 style: TextStyle(color: Colors.white70)),
           );
@@ -497,8 +603,12 @@ class PartyBottomSheet extends StatelessWidget {
             final names = (apprSnap.data?.docs ?? [])
                 .map((d) => d.data()['username']?.toString() ?? 'Unbekannt')
                 .toList();
-            return _bigList("✅ Zugelassen", Icons.verified_user,
-                Colors.lightGreenAccent, names, Icons.verified_user,
+            return _bigList(
+                "✅ Zugelassen",
+                Icons.verified_user,
+                Colors.lightGreenAccent,
+                names,
+                Icons.verified_user,
                 Colors.lightGreenAccent);
           },
         ),
@@ -532,7 +642,8 @@ class PartyBottomSheet extends StatelessWidget {
                   const SizedBox(height: 10),
                   ...docs.map((d) {
                     final m = d.data();
-                    final user = m['username']?.toString() ?? 'Unbekannt';
+                    final user =
+                        m['username']?.toString() ?? 'Unbekannt';
                     final status = (m['status']?.toString() ?? 'pending');
                     Color statusColor = status == 'approved'
                         ? Colors.lightGreenAccent
@@ -555,7 +666,8 @@ class PartyBottomSheet extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                              crossAxisAlignment:
+                              CrossAxisAlignment.start,
                               children: [
                                 Text(user,
                                     style: const TextStyle(
@@ -632,8 +744,12 @@ class PartyBottomSheet extends StatelessWidget {
             final names = (comingListSnap.data?.docs ?? [])
                 .map((d) => d.data()['username']?.toString() ?? 'Unbekannt')
                 .toList();
-            return _bigList("✅ Leute, die kommen", Icons.check_circle,
-                Colors.greenAccent, names, Icons.check_circle,
+            return _bigList(
+                "✅ Leute, die kommen",
+                Icons.check_circle,
+                Colors.greenAccent,
+                names,
+                Icons.check_circle,
                 Colors.greenAccent);
           },
         ),
@@ -648,9 +764,13 @@ class PartyBottomSheet extends StatelessWidget {
             final names = (maybeListSnap.data?.docs ?? [])
                 .map((d) => d.data()['username']?.toString() ?? 'Unbekannt')
                 .toList();
-            return _bigList("🤔 Leute, die eventuell kommen",
-                Icons.help_outline, Colors.orangeAccent, names,
-                Icons.help_outline, Colors.orangeAccent);
+            return _bigList(
+                "🤔 Leute, die eventuell kommen",
+                Icons.help_outline,
+                Colors.orangeAccent,
+                names,
+                Icons.help_outline,
+                Colors.orangeAccent);
           },
         ),
       ],
@@ -773,12 +893,18 @@ class PartyBottomSheet extends StatelessWidget {
         color: c.withOpacity(.15),
         border: Border.all(color: c.withOpacity(.5)),
         borderRadius: BorderRadius.circular(12)),
-    child:
-    Text(text, style: TextStyle(color: c, fontWeight: FontWeight.w600)),
+    child: Text(text,
+        style: TextStyle(
+            color: c, fontWeight: FontWeight.w600)),
   );
 
-  Widget _bigList(String title, IconData titleIcon, Color titleColor,
-      List<String> usernames, IconData rowIcon, Color rowIconColor) {
+  Widget _bigList(
+      String title,
+      IconData titleIcon,
+      Color titleColor,
+      List<String> usernames,
+      IconData rowIcon,
+      Color rowIconColor) {
     return _boxed(
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -794,14 +920,18 @@ class PartyBottomSheet extends StatelessWidget {
           ]),
           const SizedBox(height: 10),
           if (usernames.isEmpty)
-            const Text("Noch niemand", style: TextStyle(color: Colors.white70))
+            const Text("Noch niemand",
+                style: TextStyle(color: Colors.white70))
           else
             ...List.generate(usernames.length, (i) {
               final u = usernames[i];
               return Column(
                 children: [
                   if (i > 0)
-                    Divider(color: Colors.grey[800], height: 16, thickness: 1),
+                    Divider(
+                        color: Colors.grey[800],
+                        height: 16,
+                        thickness: 1),
                   Row(
                     children: [
                       Icon(rowIcon, color: rowIconColor, size: 22),

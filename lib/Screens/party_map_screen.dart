@@ -46,6 +46,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   double _currentLng = 16.3738;
 
   String? _currentUsername;
+  String? _currentFullName;
 
   BitmapDescriptor? _lockIconGrey;
   BitmapDescriptor? _lockIconGreen;
@@ -79,10 +80,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     super.dispose();
   }
 
-  // exakt unter dem AppBar-Titel
+  // Position der Suche: kleiner Rand unter der AppBar
   double _searchTop(BuildContext ctx) {
-    final pad = MediaQuery.of(ctx).padding.top;
-    return pad + kToolbarHeight + 8;
+    return 8; // ggf. auf 12/16 anpassen
   }
 
   // ---------- kleine Helfer ----------
@@ -103,12 +103,19 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     });
   }
 
-  // NUR den echten Username verwenden, der beim Login in SharedPreferences gespeichert wird
+  // Username + voller Name laden
   Future<void> _loadCurrentUser() async {
     final prefs = await SharedPreferences.getInstance();
-    final uname = (prefs.getString('username') ?? '').trim();
+    final uname =
+    (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '')
+        .trim();
+    final vorname = (prefs.getString('vorname') ?? '').trim();
+    final nachname = (prefs.getString('nachname') ?? '').trim();
+    final fullName = ('$vorname $nachname').trim();
+
     setState(() {
       _currentUsername = uname.isEmpty ? null : uname;
+      _currentFullName = fullName.isEmpty ? null : fullName;
     });
   }
 
@@ -291,17 +298,39 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     return DateTime.now().isAfter(nextDayMidnight);
   }
 
+  // ---------- Host-Erkennung (zentral!) ----------
+  bool _isHostForPartyData(Map<String, dynamic> data) {
+    final hostName = (data['hostName'] ?? '').toString().trim();
+    final hostUid = ((data['hostUid'] ?? data['hostId']) ?? '').toString().trim();
+    final cu = _currentUsername?.trim();
+    final cf = _currentFullName?.trim();
+
+    final byUid = cu != null &&
+        cu.isNotEmpty &&
+        hostUid.isNotEmpty &&
+        hostUid == cu;
+
+    final byName = cf != null &&
+        cf.isNotEmpty &&
+        hostName.isNotEmpty &&
+        hostName == cf;
+
+    return byUid || byName;
+  }
+
   // ---------- Verified ----------
-  Future<bool> _isUserVerified(String username) async {
-    if (_verifiedCache.containsKey(username)) return _verifiedCache[username]!;
+  Future<bool> _isUserVerified(String usernameDocId) async {
+    if (_verifiedCache.containsKey(usernameDocId)) {
+      return _verifiedCache[usernameDocId]!;
+    }
     try {
       final snap =
-      await FirebaseFirestore.instance.collection('users').doc(username).get();
+      await FirebaseFirestore.instance.collection('users').doc(usernameDocId).get();
       final verified = (snap.data()?['verified'] == true);
-      _verifiedCache[username] = verified;
+      _verifiedCache[usernameDocId] = verified;
       return verified;
     } catch (_) {
-      _verifiedCache[username] = false;
+      _verifiedCache[usernameDocId] = false;
       return false;
     }
   }
@@ -314,7 +343,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           .collection('Party')
           .doc(partyId)
           .collection('rsvps')
-          .doc(_currentUsername!) // ! weil oben geprüft
+          .doc(_currentUsername!)
           .get();
       return snap.data()?['status'] as String?;
     } catch (_) {
@@ -322,7 +351,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
   }
 
-  void _setOpenMarkerColor(String partyId, {required String? status, required bool isHost}) {
+  void _setOpenMarkerColor(String partyId,
+      {required String? status, required bool isHost}) {
     final mid = partyId;
     final existing = _markers.where((m) => m.markerId.value == mid).toList();
     if (existing.isEmpty) return;
@@ -380,14 +410,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             pos.longitude + (r.nextDouble() - .5) / 500,
           );
 
-          bool isHostForThisParty = false;
+          bool isHostForThisParty = _isHostForPartyData(data);
           String? myStatus;
-          if (_currentUsername != null) {
-            isHostForThisParty =
-                (data['hostName']?.toString().trim() ?? '') == _currentUsername!.trim();
-            if (!isHostForThisParty) {
-              myStatus = await _myRequestStatus(doc.id, _currentUsername!);
-            }
+          if (_currentUsername != null && !isHostForThisParty) {
+            myStatus = await _myRequestStatus(doc.id, _currentUsername!);
           }
 
           _circles.add(Circle(
@@ -404,8 +430,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           _markers.add(Marker(
             markerId: MarkerId('hit_${doc.id}'),
             position: shift,
-            icon:
-            _hitboxIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+            icon: _hitboxIcon ??
+                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
             anchor: const Offset(0.5, 0.5),
             zIndex: 9,
             consumeTapEvents: true,
@@ -433,14 +459,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
           ));
         } else {
-          bool isHostForThisParty = false;
+          bool isHostForThisParty = _isHostForPartyData(data);
           String? myOpenStatus;
-          if (_currentUsername != null) {
-            isHostForThisParty =
-                (data['hostName']?.toString().trim() ?? '') == _currentUsername!.trim();
-            if (!isHostForThisParty) {
-              myOpenStatus = await _myOpenRsvpStatus(doc.id);
-            }
+          if (_currentUsername != null && !isHostForThisParty) {
+            myOpenStatus = await _myOpenRsvpStatus(doc.id);
           }
 
           double hue;
@@ -473,7 +495,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       try {
         final partyDoc = await partyRef.get();
         final arr =
-            (partyDoc.data()?['approvedUsers'] as List?)?.cast<String>() ?? const <String>[];
+            (partyDoc.data()?['approvedUsers'] as List?)?.cast<String>() ??
+                const <String>[];
         if (arr.contains(username)) return 'approved';
       } catch (_) {}
       try {
@@ -520,12 +543,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         if (start != null) {
           start = DateTime(start.year, start.month, start.day, 0, 0);
         }
-        if (start == null || DateTime.now().isBefore(start.add(const Duration(days: 1)))) {
+        if (start == null ||
+            DateTime.now().isBefore(start.add(const Duration(days: 1)))) {
           throw StateError("Bewertung erst ab dem nächsten Tag möglich.");
         }
 
         // User-Dokument des Hosts
-        final userRef = FirebaseFirestore.instance.collection('users').doc(hostDocId);
+        final userRef =
+        FirebaseFirestore.instance.collection('users').doc(hostDocId);
         final userSnap = await tx.get(userRef);
 
         // Vorherige Stimme des aktuellen Users zu dieser Party
@@ -549,8 +574,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         );
 
         // 2) Benutzer-Scoped Rating-Schema mitschreiben: pro Party, pro Rater
-        final perPartyUserRatingRef =
-        userRef.collection('partyRatings').doc(partyId).collection('byUser').doc(username);
+        final perPartyUserRatingRef = userRef
+            .collection('partyRatings')
+            .doc(partyId)
+            .collection('byUser')
+            .doc(username);
         tx.set(
           perPartyUserRatingRef,
           {
@@ -596,8 +624,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content:
-          Text(value == 'good' ? "Danke für die positive Bewertung!" : "Danke für dein Feedback!"),
+          content: Text(
+              value == 'good' ? "Danke für die positive Bewertung!" : "Danke für dein Feedback!"),
         ),
       );
     } on StateError catch (e) {
@@ -634,7 +662,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           .collection('Party')
           .doc(pid)
           .collection('rsvps')
-          .doc(_currentUsername!) // ! weil oben geprüft
+          .doc(_currentUsername!)
           .get();
       final status = myRsvp.data()?['status'] as String?;
       if (status != 'going' && status != 'maybe') continue;
@@ -645,7 +673,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       _ratingPromptShown = true;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text("Wie war „${data['name'] ?? 'die Party'}“? Jetzt bewerten."),
+        content:
+        Text("Wie war „${data['name'] ?? 'die Party'}“? Jetzt bewerten."),
         action: SnackBarAction(label: "ÖFFNEN", onPressed: () => _openPartySheet(data, pid)),
       ));
       break;
@@ -720,8 +749,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     decoration: const InputDecoration(
                       hintText: "z. B. was genau passiert ist…",
                       hintStyle: TextStyle(color: Colors.white38),
-                      enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                      focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.white54)),
+                      enabledBorder:
+                      OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                      focusedBorder:
+                      OutlineInputBorder(borderSide: BorderSide(color: Colors.white54)),
                     ),
                   ),
                 ],
@@ -742,7 +773,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     : () async {
                   if (_currentUsername == null) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Bitte Username in den Einstellungen setzen.")),
+                      const SnackBar(
+                          content:
+                          Text("Bitte Username in den Einstellungen setzen.")),
                     );
                     return;
                   }
@@ -751,7 +784,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     final party = _partyCache[partyId] ?? {};
                     final partyName = (party['name'] ?? '').toString();
 
-                    await FirebaseFirestore.instance.collection('Meldungen').add({
+                    await FirebaseFirestore.instance
+                        .collection('Meldungen')
+                        .add({
                       'partyId': partyId,
                       'partyName': partyName,
                       'partyDate': party['date'] ?? FieldValue.serverTimestamp(),
@@ -773,12 +808,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                         .showSnackBar(const SnackBar(content: Text("Meldung gesendet")));
                   } on FirebaseException catch (e) {
                     setSB(() => isSubmitting = false);
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(SnackBar(content: Text("Fehler: ${e.message ?? e.code}")));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text("Fehler: ${e.message ?? e.code}")));
                   } catch (e) {
                     setSB(() => isSubmitting = false);
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(SnackBar(content: Text("Unerwarteter Fehler: $e")));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text("Unerwarteter Fehler: $e")));
                   }
                 },
                 style: ElevatedButton.styleFrom(
@@ -805,7 +840,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         .collection('Party')
         .doc(partyId)
         .collection('rsvps')
-        .doc(_currentUsername!) // ! weil oben geprüft
+        .doc(_currentUsername!)
         .snapshots();
   }
 
@@ -843,9 +878,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   void _openPartySheet(Map<String, dynamic> data, String partyId) async {
     final isClosed = _isClosedDoc(data);
-    final hostName = (data['hostName'] ?? '').toString();
-    final isHost =
-        _currentUsername != null && hostName.trim() == _currentUsername!.trim();
+
+    final isHost = _isHostForPartyData(data);
 
     DateTime? date;
     if (data['date'] is Timestamp) {
@@ -901,12 +935,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             .collection('maybe')
             .orderBy('timestamp', descending: true)
             .snapshots(),
-        ratingsStream: () =>
-            FirebaseFirestore.instance.collection('Party').doc(partyId).collection('ratings').snapshots(),
+        ratingsStream: () => FirebaseFirestore.instance
+            .collection('Party')
+            .doc(partyId)
+            .collection('ratings')
+            .snapshots(),
         isUserVerified: _isUserVerified,
         recolorOpenMarker: (status) {
-          final isHostForThis =
-              (data['hostName']?.toString().trim() ?? '') == _currentUsername?.trim();
+          final isHostForThis = _isHostForPartyData(data);
           _setOpenMarkerColor(partyId, status: status, isHost: isHostForThis);
         },
         setClosedLockIcon: (status) => _setLockIconForPartyStatus(partyId, status: status),
@@ -943,8 +979,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       }
     });
 
-    final isHost =
-        _partyCache[partyId]?['hostName']?.toString().trim() == _currentUsername?.trim();
+    final data = _partyCache[partyId];
+    final isHost = data != null && _isHostForPartyData(data);
     _setOpenMarkerColor(partyId, status: status, isHost: isHost);
   }
 
@@ -956,8 +992,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       tx.delete(partyRef.collection('maybe').doc(username));
     });
 
-    final isHost =
-        _partyCache[partyId]?['hostName']?.toString().trim() == _currentUsername?.trim();
+    final data = _partyCache[partyId];
+    final isHost = data != null && _isHostForPartyData(data);
     _setOpenMarkerColor(partyId, status: null, isHost: isHost);
   }
 
@@ -976,7 +1012,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     });
   }
 
-  Future<void> _updateRequestStatus(String partyId, String username, String status) async {
+  Future<void> _updateRequestStatus(
+      String partyId, String username, String status) async {
     final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
     final reqRef = partyRef.collection('requests').doc(username);
     final apprRef = partyRef.collection('approved').doc(username);
@@ -1042,8 +1079,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         _markers.add(Marker(
           markerId: MarkerId(hitId),
           position: old.position,
-          icon:
-          _hitboxIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+          icon: _hitboxIcon ??
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
           anchor: const Offset(0.5, 0.5),
           zIndex: 9,
           consumeTapEvents: true,
@@ -1102,9 +1139,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       Container(
                           width: 28,
                           height: 28,
-                          decoration:
-                          const BoxDecoration(shape: BoxShape.circle, color: Colors.green),
-                          child: const Icon(Icons.check_rounded, color: Colors.white, size: 18)),
+                          decoration: const BoxDecoration(
+                              shape: BoxShape.circle, color: Colors.green),
+                          child: const Icon(Icons.check_rounded,
+                              color: Colors.white, size: 18)),
                       const SizedBox(width: 12),
                       Text(text,
                           style: const TextStyle(
@@ -1151,7 +1189,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     final acceptedNow = await _showLegalGateDialog();
     if (acceptedNow) {
       await prefs.setBool('legal_consent_create_v1', true);
-      await prefs.setString('legal_consent_create_v1_date', DateTime.now().toIso8601String());
+      await prefs.setString(
+          'legal_consent_create_v1_date', DateTime.now().toIso8601String());
     }
     return acceptedNow;
   }
@@ -1182,8 +1221,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                   children: [
                     const Text(
                       "Das Erstellen von Fake-Partys ist VERBOTEN. Du bestätigst, dass alle Angaben wahrheitsgemäß sind und die Veranstaltung wirklich stattfindet.",
-                      style:
-                      TextStyle(color: Colors.white70, height: 1.35, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                          color: Colors.white70,
+                          height: 1.35,
+                          fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 12),
                     CheckboxListTile(
@@ -1208,11 +1249,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     Navigator.of(ctx).pop();
                   },
                   icon: const Icon(Icons.close, color: Colors.redAccent),
-                  label: const Text("Abbrechen", style: TextStyle(color: Colors.redAccent)),
+                  label: const Text("Abbrechen",
+                      style: TextStyle(color: Colors.redAccent)),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.redAccent),
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding:
+                    const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
                 if (checkbox)
@@ -1222,12 +1266,15 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       Navigator.of(ctx).pop();
                     },
                     icon: const Icon(Icons.check_circle_outline),
-                    label: const Text("Fertig"),
+                    label:
+                    const Text("Fertig", style: TextStyle(color: Colors.white)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.redAccent,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 18),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding:
+                      const EdgeInsets.symmetric(vertical: 12, horizontal: 18),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
               ],
@@ -1249,10 +1296,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
 
     return Scaffold(
-      extendBodyBehindAppBar: true,
+      // WICHTIG: nicht mehr hinter die AppBar zeichnen
       appBar: AppBar(
         elevation: 0,
-        backgroundColor: Colors.transparent,
+        backgroundColor:Color(0xFF141A22),
         centerTitle: true,
         title: const Text(
           "Party Map",
@@ -1279,8 +1326,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                 : const Icon(Icons.refresh, color: Colors.white),
           ),
           IconButton(
-            onPressed: () =>
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const ProfileSettingsScreen())),
+            onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const ProfileSettingsScreen())),
             icon: const CircleAvatar(
               radius: 16,
               backgroundColor: _accent,
@@ -1306,28 +1355,19 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             ),
           ),
 
-          // Inhalt unter AppBar
-          SafeArea(
-            top: true,
-            bottom: false,
-            child: Column(
-              children: [
-                if (!_legalWarnDismissed) _legalWarningBanner(),
-                Expanded(
-                  child: GoogleMap(
-                    initialCameraPosition: _startPos!,
-                    markers: _markers,
-                    circles: _circles,
-                    zoomControlsEnabled: true,
-                    zoomGesturesEnabled: true,
-                    onMapCreated: (controller) => mapController = controller,
-                  ),
-                ),
-              ],
+          // Google Map füllt den ganzen Body
+          Positioned.fill(
+            child: GoogleMap(
+              initialCameraPosition: _startPos!,
+              markers: _markers,
+              circles: _circles,
+              zoomControlsEnabled: true,
+              zoomGesturesEnabled: true,
+              onMapCreated: (controller) => mapController = controller,
             ),
           ),
 
-          // Suchleiste schwebend direkt unter Titel (unabhängig vom Banner)
+          // Suchleiste schwebend knapp unter Titel
           Positioned(
             left: 12,
             right: 12,
@@ -1335,33 +1375,58 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             child: _SearchCard(
               controller: _searchCtrl,
               onSearch: (input) async {
+                final query = input.trim();
+                if (query.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Bitte eine Adresse eingeben.")),
+                  );
+                  return;
+                }
+
                 final cc = await _getSelectedCountryCode();
                 final withCity =
-                input.trim().isEmpty ? _currentCity : "${input.trim()}, ${_currentCity.trim()}";
+                    "${query}, ${_currentCity.trim().isEmpty ? 'Wien' : _currentCity.trim()}";
 
+                // 1. Versuch: Adresse + aktuelle Stadt
                 GeocodedLocation? location =
-                    await GeocodingService.getLocationFromAddress(withCity, countryCode: cc) ??
-                        await GeocodingService.getLocationFromAddress(input.trim(), countryCode: cc);
+                await GeocodingService.getLocationFromAddress(withCity,
+                    countryCode: cc);
+
+                // 2. Versuch: nur die Eingabe
+                location ??= await GeocodingService.getLocationFromAddress(query,
+                    countryCode: cc);
 
                 if (location != null) {
                   final pos = LatLng(location.latitude, location.longitude);
                   setState(() {
                     _markers.add(Marker(
-                      markerId: MarkerId("${input.trim()}|${_currentCity.trim()}"),
+                      markerId: MarkerId("${query}|${_currentCity.trim()}"),
                       position: pos,
-                      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+                      icon: BitmapDescriptor.defaultMarkerWithHue(
+                          BitmapDescriptor.hueRed),
                     ));
                   });
-                  mapController?.animateCamera(CameraUpdate.newLatLngZoom(pos, 15));
+                  mapController?.animateCamera(
+                      CameraUpdate.newLatLngZoom(pos, 15));
                 } else {
                   if (!mounted) return;
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(const SnackBar(content: Text("Adresse nicht gefunden.")));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Adresse nicht gefunden.")),
+                  );
                 }
               },
               onClear: () => _searchCtrl.clear(),
             ),
           ),
+
+          // Gelbes Legal-Banner knapp unter der Suchleiste
+          if (!_legalWarnDismissed)
+            Positioned(
+              left: 12,
+              right: 12,
+              top: _searchTop(context) + 64,
+              child: _legalWarningBanner(),
+            ),
         ],
       ),
 
@@ -1382,16 +1447,18 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     );
   }
 
+  // NEU: ohne äußeren Top-Margin, damit keine gelben „Striche“ entstehen
   Widget _legalWarningBanner() {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: const Color(0xFFFFF3CD),
         border: Border.all(color: const Color(0xFFFFEEBA)),
         borderRadius: BorderRadius.circular(12),
-        boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 8, offset: Offset(0, 3))],
+        boxShadow: const [
+          BoxShadow(color: Color(0x22000000), blurRadius: 8, offset: Offset(0, 3))
+        ],
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1401,7 +1468,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           const Expanded(
             child: Text(
               "WICHTIG: Das Erstellen von Fake-Partys ist rechtlich VERBOTEN. Nur echte, wahrheitsgemäße Angaben machen.",
-              style: TextStyle(color: Color(0xFF856404), fontWeight: FontWeight.w800),
+              style:
+              TextStyle(color: Color(0xFF856404), fontWeight: FontWeight.w800),
             ),
           ),
           IconButton(
@@ -1429,13 +1497,15 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       final me = (_currentUsername ?? '').trim();
       if (me.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Username fehlt. In den Einstellungen setzen.')),
+          const SnackBar(
+              content: Text('Username fehlt. In den Einstellungen setzen.')),
         );
         return;
       }
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => FriendsScreen(currentUsername: me)),
+        MaterialPageRoute(
+            builder: (_) => FriendsScreen(currentUsername: me)),
       );
     } else if (index == 3) {
       final ok = await _ensureLegalConsentBeforeCreating();
@@ -1492,7 +1562,8 @@ class _SearchCard extends StatelessWidget {
                 onSubmitted: onSearch,
                 decoration: const InputDecoration(
                   hintText: "Adresse eingeben",
-                  hintStyle: TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
+                  hintStyle:
+                  TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
                   border: InputBorder.none,
                 ),
               ),
@@ -1506,7 +1577,8 @@ class _SearchCard extends StatelessWidget {
             else
               IconButton(
                 onPressed: () => onSearch(controller.text),
-                icon: const Icon(Icons.arrow_forward_rounded, color: Colors.white),
+                icon:
+                const Icon(Icons.arrow_forward_rounded, color: Colors.white),
                 tooltip: 'Suchen',
               ),
           ],

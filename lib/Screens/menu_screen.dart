@@ -6,6 +6,18 @@ import '../Screens/party_map_screen.dart';
 import '../Screens/selection_screen.dart';
 import '../Screens/feedback_screen.dart';
 
+// --- Zentrales Farb-Theme wie PartyMap / Selection ---
+const _gradTop = Color(0xFF0E0F12);
+const _gradBottom = Color(0xFF141A22);
+const _panel = Color(0xFF15171C);
+const _panelBorder = Color(0xFF2A2F38);
+const _card = Color(0xFF1C1F26);
+const _textPrimary = Colors.white;
+const _textSecondary = Color(0xFFB6BDC8);
+const _accent = Color(0xFFFF3B30); // kräftiges Rot
+const _secondary = Color(0xFF00C2A8); // Türkis (optional)
+
+// ------------------- Menu Screen -------------------
 class MenuScreen extends StatelessWidget {
   const MenuScreen({super.key});
 
@@ -25,33 +37,71 @@ class MenuScreen extends StatelessWidget {
     return null;
   }
 
+  Widget _menuTile({
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _panelBorder),
+      ),
+      child: ListTile(
+        leading: Icon(icon, color: _accent, size: 28),
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: _textPrimary,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        onTap: onTap,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final lang = LanguageService.currentLanguage;
 
     return Scaffold(
+      backgroundColor: _gradTop,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
         title: Text(
           LanguageService.getText('menu_title', lang),
-          style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white),
+          style: const TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: _textPrimary,
+          ),
         ),
-        backgroundColor: Colors.grey[900],
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          color: Colors.redAccent,
+          color: _accent,
           onPressed: () => Navigator.pop(context),
         ),
       ),
       body: Container(
-        color: Colors.grey[850],
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_gradTop, _gradBottom],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
         child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 12),
           children: [
-            ListTile(
-              leading: const Icon(Icons.map, color: Colors.redAccent, size: 32),
-              title: Text(
-                LanguageService.getText('party_map', lang),
-                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-              ),
+            _menuTile(
+              icon: Icons.map,
+              title: LanguageService.getText('party_map', lang),
               onTap: () async {
                 final location = await _getSavedLocation();
                 if (location != null) {
@@ -64,78 +114,106 @@ class MenuScreen extends StatelessWidget {
                 } else {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (context) => const SelectionScreen()),
+                    MaterialPageRoute(
+                      builder: (context) => const SelectionScreen(),
+                    ),
                   );
                 }
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.language, color: Colors.redAccent, size: 32),
-              title: Text(
-                LanguageService.getText('change_language', lang),
-                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-              ),
+            _menuTile(
+              icon: Icons.language,
+              title: LanguageService.getText('change_language', lang),
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const SelectionScreen()),
+                  MaterialPageRoute(
+                    builder: (context) => const SelectionScreen(),
+                  ),
                 );
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.upcoming, color: Colors.redAccent, size: 32),
-              title: const Text(
-                "Coming Soon",
-                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-              ),
+            _menuTile(
+              icon: Icons.upcoming,
+              title: "Coming Soon",
               onTap: () {
                 showDialog(
                   context: context,
                   builder: (context) => AlertDialog(
-                    backgroundColor: Colors.grey[900],
-                    title: const Text("Coming Soon", style: TextStyle(color: Colors.redAccent)),
+                    backgroundColor: _panel,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: const BorderSide(color: _panelBorder),
+                    ),
+                    title: const Text(
+                      "Coming Soon",
+                      style: TextStyle(
+                        color: _accent,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     content: const Text(
-                      "Bald verfügbar:\n- Freunde-Feature\n- Benachrichtigungen\n- Premium-Accounts\n- Chatting\n- Eure Wünsche\n\n"
-                          "Wir bitten um dein Feedback und deine Ideen, um unsere App nach deinen Wünschen zu gestalten und zu perfektionieren!",
-                      style: TextStyle(color: Colors.white),
+                      "Bald verfügbar:\n\n"
+                          "- Freunde-Feature ✔\n"
+                          "- Benachrichtigungen\n"
+                          "- Premium-Accounts\n"
+                          "- Chatting\n"
+                          "- Eure Wünsche\n\n"
+                          "Wir bitten um dein Feedback und deine Ideen, um unsere App nach deinen Wünschen zu gestalten!",
+                      style: TextStyle(
+                        color: _textSecondary,
+                        height: 1.4,
+                      ),
                     ),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(context),
-                        child: const Text("Schließen", style: TextStyle(color: Colors.redAccent)),
+                        child: const Text(
+                          "Schließen",
+                          style: TextStyle(
+                            color: _accent,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ],
                   ),
                 );
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.feedback, color: Colors.redAccent, size: 32),
-              title: const Text("Feedback", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            _menuTile(
+              icon: Icons.feedback,
+              title: "Feedback",
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const FeedbackScreen()),
+                  MaterialPageRoute(
+                    builder: (context) => const FeedbackScreen(),
+                  ),
                 );
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.info, color: Colors.redAccent, size: 32),
-              title: const Text("Rechtliches", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            _menuTile(
+              icon: Icons.info,
+              title: "Rechtliches",
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const LegalScreen()),
+                  MaterialPageRoute(
+                    builder: (context) => const LegalScreen(),
+                  ),
                 );
               },
             ),
-            ListTile(
-              leading: const Icon(Icons.support_agent, color: Colors.redAccent, size: 32),
-              title: const Text("Support", style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            _menuTile(
+              icon: Icons.support_agent,
+              title: "Support",
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (context) => const SupportScreen()),
+                  MaterialPageRoute(
+                    builder: (context) => const SupportScreen(),
+                  ),
                 );
               },
             ),
@@ -161,15 +239,15 @@ class LegalScreen extends StatelessWidget {
             style: const TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.bold,
-              color: Colors.redAccent,
+              color: _accent,
             ),
           ),
           const SizedBox(height: 6),
           Text(
             content,
             style: const TextStyle(
-              fontSize: 16,
-              color: Colors.white,
+              fontSize: 15,
+              color: _textSecondary,
               height: 1.5,
             ),
           ),
@@ -181,32 +259,53 @@ class LegalScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _gradTop,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
         title: const Text(
           "Rechtliches",
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+            color: _textPrimary,
+          ),
         ),
-        backgroundColor: Colors.grey[900],
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          color: Colors.redAccent,
+          color: _accent,
           onPressed: () => Navigator.pop(context),
         ),
       ),
       body: Container(
-        color: Colors.grey[850],
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_gradTop, _gradBottom],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
         padding: const EdgeInsets.all(16),
         child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _section(
-                "Impressum",
-                "PartyPin\nE-Mail: mypartypin@gmail.com\nAdresse: Beispielstraße 1, 1010 Wien\nGeschäftsführer: Max Mustermann\nUID: ATU12345678",
-              ),
-              _section(
-                "Datenschutzerklärung",
-                """1. Erhobene Daten
+          child: Container(
+            decoration: BoxDecoration(
+              color: _panel,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _panelBorder),
+            ),
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _section(
+                  "Impressum",
+                  "PartyPin\nE-Mail: mypartypin@gmail.com\nAdresse: Beispielstraße 1, 1010 Wien\n"
+                      "Geschäftsführer: Max Mustermann\nUID: ATU12345678",
+                ),
+                _section(
+                  "Datenschutzerklärung",
+                  """1. Erhobene Daten
 - Registrierungsdaten (Vorname, Nachname, Alter, Benutzername)
 - Standortdaten (zur Anzeige von Partys)
 - Profildaten (z. B. Profilbild)
@@ -241,10 +340,10 @@ class LegalScreen extends StatelessWidget {
 9. Anwendbares Recht
 - Recht der Bundesrepublik Österreich, soweit zwingendes Verbraucherrecht nicht entgegensteht
 """,
-              ),
-              _section(
-                "AGB / Nutzungsbedingungen",
-                """1. Geltungsbereich
+                ),
+                _section(
+                  "AGB / Nutzungsbedingungen",
+                  """1. Geltungsbereich
 - App zur Darstellung & Teilnahme an Partys
 
 2. Registrierung
@@ -269,19 +368,33 @@ class LegalScreen extends StatelessWidget {
 7. Anwendbares Recht
 - Österreichisches Recht soweit zulässig
 """,
-              ),
-              const SizedBox(height: 20),
-              Center(
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("Zurück"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
-                    padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 14),
+                ),
+                const SizedBox(height: 20),
+                Center(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _accent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 30,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text(
+                      "Zurück",
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -308,49 +421,91 @@ class SupportScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _gradTop,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
         title: const Text(
           "Support",
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+            color: _textPrimary,
+          ),
         ),
-        backgroundColor: Colors.grey[900],
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          color: Colors.redAccent,
+          color: _accent,
           onPressed: () => Navigator.pop(context),
         ),
       ),
       body: Container(
-        color: Colors.grey[850],
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_gradTop, _gradBottom],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Support & Hilfe",
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.redAccent),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              "Wenn du Fragen hast oder Hilfe benötigst, kontaktiere uns bitte per E-Mail:",
-              style: TextStyle(color: Colors.white),
-            ),
-            const SizedBox(height: 5),
-            const Text(
-              "mypartypin@gmail.com",
-              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.redAccent),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: _sendEmail,
-              icon: const Icon(Icons.email),
-              label: const Text("Support per E-Mail schreiben"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Container(
+          decoration: BoxDecoration(
+            color: _panel,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _panelBorder),
+          ),
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "Support & Hilfe",
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: _accent,
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 10),
+              const Text(
+                "Wenn du Fragen hast oder Hilfe benötigst, kontaktiere uns bitte per E-Mail:",
+                style: TextStyle(color: _textSecondary),
+              ),
+              const SizedBox(height: 5),
+              const Text(
+                "mypartypin@gmail.com",
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: _accent,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Center(
+                child: ElevatedButton.icon(
+                  onPressed: _sendEmail,
+                  icon: const Icon(Icons.email),
+                  label: const Text(
+                    "Support per E-Mail schreiben",
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _accent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
