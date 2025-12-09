@@ -23,6 +23,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   final TextEditingController _nachnameController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  final TextEditingController _barNameController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
 
   final _vornameNode = FocusNode();
   final _nachnameNode = FocusNode();
@@ -33,6 +35,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   bool _pwVisible = false;
   bool _usernameTaken = false;
   bool _usernameChecked = false;
+
+  // false = normaler User, true = Bar/Lokal
+  bool _isBar = false;
 
   int _selectedDay = 1;
   int _selectedMonth = 1;
@@ -49,16 +54,24 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   static const _accent = Color(0xFFFF3B30);
   static const _secondary = Color(0xFF00C2A8);
 
-  bool get _isFormFilled =>
-      _vornameController.text.trim().isNotEmpty &&
+  // Nur Felder, die aktuell angezeigt werden, müssen ausgefüllt sein
+  bool get _isFormFilled {
+    if (_isBar) {
+      // Bar / Lokal
+      return _barNameController.text.trim().isNotEmpty &&
+          _usernameController.text.trim().isNotEmpty &&
+          _passwordController.text.trim().isNotEmpty &&
+          _emailController.text.trim().isNotEmpty;
+    } else {
+      // normaler User
+      return _vornameController.text.trim().isNotEmpty &&
           _nachnameController.text.trim().isNotEmpty &&
           _usernameController.text.trim().isNotEmpty &&
           _passwordController.text.trim().isNotEmpty;
+    }
+  }
 
-  bool get _isFormValid =>
-      _isFormFilled &&
-          (_formKey.currentState?.validate() ?? false) &&
-          !_usernameTaken;
+  bool get _canSubmit => _isFormFilled && !_usernameTaken && !_isSaving;
 
   int _calculateAge(DateTime birthDate) {
     final today = DateTime.now();
@@ -71,17 +84,21 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   }
 
   Future<void> _checkUsernameAvailability(String username) async {
-    if (username.trim().isEmpty) {
+    final trimmed = username.trim();
+    if (trimmed.isEmpty) {
       setState(() {
         _usernameTaken = false;
         _usernameChecked = false;
       });
       return;
     }
+
     try {
+      final collectionName = _isBar ? "bars" : "users";
+
       final query = await FirebaseFirestore.instance
-          .collection("users")
-          .where("username", isEqualTo: username.trim())
+          .collection(collectionName)
+          .where("username", isEqualTo: trimmed)
           .limit(1)
           .get();
 
@@ -92,9 +109,13 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     } catch (_) {
       setState(() {
         _usernameTaken = false;
-        _usernameChecked = false;
+        _usernameChecked = true;
       });
     }
+  }
+
+  void _onFieldChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -124,10 +145,14 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         }
       });
 
-      setState(() {});
+      _onFieldChanged();
     });
 
-    _passwordController.addListener(() => setState(() {}));
+    _passwordController.addListener(_onFieldChanged);
+    _vornameController.addListener(_onFieldChanged);
+    _nachnameController.addListener(_onFieldChanged);
+    _barNameController.addListener(_onFieldChanged);
+    _emailController.addListener(_onFieldChanged);
   }
 
   @override
@@ -136,6 +161,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     _nachnameController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
+    _barNameController.dispose();
+    _emailController.dispose();
     _vornameNode.dispose();
     _nachnameNode.dispose();
     _usernameNode.dispose();
@@ -261,119 +288,6 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     return "stark";
   }
 
-  // ----------------------
-  // Speichern: Doc-ID = "Vorname Nachname"
-  // ----------------------
-  Future<void> _proceed() async {
-    if (!_isFormValid) return;
-
-    final vorname = _vornameController.text.trim();
-    final nachname = _nachnameController.text.trim();
-    final username = _usernameController.text.trim();
-    final password = _passwordController.text.trim();
-
-    final birthDate = DateTime(_selectedYear, _selectedMonth, _selectedDay);
-    final age = _calculateAge(birthDate);
-
-    if (age < 12) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Du musst mindestens 12 Jahre alt sein!")),
-      );
-      return;
-    }
-
-    setState(() => _isSaving = true);
-
-    try {
-      // Username weiter als eindeutig prüfen
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection("users")
-          .where("username", isEqualTo: username)
-          .limit(1)
-          .get();
-
-      if (querySnapshot.docs.isNotEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Dieser Username ist bereits vergeben!")),
-        );
-        setState(() {
-          _isSaving = false;
-          _usernameTaken = true;
-          _usernameChecked = true;
-        });
-        return;
-      }
-
-      // Doc-ID = "Vorname Nachname"
-      final docId = "$vorname $nachname".trim();
-
-      await FirebaseFirestore.instance.collection("users").doc(docId).set({
-        "createdAt": FieldValue.serverTimestamp(),
-        "vorname": vorname,
-        "nachname": nachname,
-        "fullName": docId,
-        "username": username,
-        "password": password,
-        "username_lower": username.toLowerCase(), // für Suche
-        "age": age,
-        "geburtsdatum": {
-          "tag": _selectedDay,
-          "monat": _selectedMonth,
-          "jahr": _selectedYear,
-        },
-      });
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString("vorname", vorname);
-      await prefs.setString("nachname", nachname);
-      await prefs.setString("username", username);
-
-      // LOGIN STATUS SPEICHERN
-      await prefs.setBool("isLoggedIn", true);
-      await prefs.setString("currentUsername", username);
-
-      await _checkTermsAndSelection();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler beim Speichern: $e")),
-      );
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
-    }
-  }
-
-  InputDecoration _dec({
-    required String label,
-    String? hint,
-    IconData? icon,
-    Widget? suffix,
-  }) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(color: _textSecondary),
-      hintText: hint,
-      hintStyle: const TextStyle(color: _textSecondary),
-      prefixIcon: icon != null ? Icon(icon, color: _accent) : null,
-      suffixIcon: suffix,
-      filled: true,
-      fillColor: _card,
-      contentPadding:
-      const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Colors.transparent),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: _accent, width: 1.2),
-      ),
-      errorStyle: const TextStyle(color: _accent),
-    );
-  }
-
   String? _nameValidator(String? v) {
     if (v == null || v.trim().isEmpty) return "Pflichtfeld";
     if (v.trim().length < 2) return "Zu kurz";
@@ -395,6 +309,43 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     if (pw.isEmpty) return "Pflichtfeld";
     if (pw.length < 6) return "Mind. 6 Zeichen";
     return null;
+  }
+
+  String? _emailValidator(String? v) {
+    final val = v?.trim() ?? '';
+    if (_isBar) {
+      if (val.isEmpty) return "Pflichtfeld";
+      if (!val.contains("@")) return "Ungültige E-Mail";
+    }
+    return null;
+  }
+
+  InputDecoration _dec({
+    required String label,
+    String? hint,
+    IconData? icon,
+    Widget? suffix,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: _textSecondary),
+      hintText: hint,
+      hintStyle: const TextStyle(color: _textSecondary),
+      prefixIcon: icon != null ? Icon(icon, color: _accent) : null,
+      suffixIcon: suffix,
+      filled: true,
+      fillColor: _card,
+      contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Colors.transparent),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _accent, width: 1.2),
+      ),
+      errorStyle: const TextStyle(color: _accent),
+    );
   }
 
   Widget _passwordMeter() {
@@ -525,8 +476,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                                 (index) => Center(
                               child: Text(
                                   "${DateTime.now().year - index}",
-                                  style:
-                                  const TextStyle(color: _textPrimary)),
+                                  style: const TextStyle(
+                                      color: _textPrimary)),
                             ),
                           ),
                         ),
@@ -540,6 +491,166 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _onSubmit() async {
+    if (_isSaving) return;
+    final isValid = _formKey.currentState?.validate() ?? false;
+    if (!isValid) return;
+    await _proceed();
+  }
+
+  Future<void> _proceed() async {
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text.trim();
+
+    setState(() => _isSaving = true);
+
+    try {
+      final collectionName = _isBar ? "bars" : "users";
+      final query = await FirebaseFirestore.instance
+          .collection(collectionName)
+          .where("username", isEqualTo: username)
+          .limit(1)
+          .get();
+
+      if (query.docs.isNotEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Dieser Username ist bereits vergeben!")),
+        );
+        setState(() {
+          _isSaving = false;
+          _usernameTaken = true;
+          _usernameChecked = true;
+        });
+        return;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+
+      if (_isBar) {
+        final barName = _barNameController.text.trim();
+        final email = _emailController.text.trim();
+        final docId = username;
+
+        await FirebaseFirestore.instance.collection("bars").doc(docId).set({
+          "createdAt": FieldValue.serverTimestamp(),
+          "barName": barName,
+          "username": username,
+          "username_lower": username.toLowerCase(),
+          "password": password,
+          "email": email,
+
+          // Vorbereitung für späteren Telefonlogin:
+          "phoneNumber": null,
+          "phoneVerified": false,
+          "authVersion": 1, // 1 = Username/Passwort-Login
+
+          "status": "pending",
+        });
+
+        await prefs.setBool("isBar", true);
+        await prefs.setString("barName", barName);
+        await prefs.setString("username", username);
+        await prefs.setBool("isLoggedIn", true);
+        await prefs.setString("currentUsername", username);
+        await prefs.setInt("authVersion", 1);
+        await prefs.setBool("phoneVerified", false);
+        await prefs.remove("phoneNumber");
+
+        if (!mounted) return;
+
+        await showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            backgroundColor: _panel,
+            shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text(
+              "Account wird konfiguriert",
+              style: TextStyle(color: _textPrimary),
+            ),
+            content: const Text(
+              "Wir richten deinen Bar-Account ein und prüfen deine Daten.\n"
+                  "Wir melden uns telefonisch oder per E-Mail, sobald dein Account freigeschaltet ist.\n\n"
+                  "Du kannst die Map trotzdem schon nutzen und deine Stadt auswählen.",
+              style: TextStyle(color: _textSecondary),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  "Weiter",
+                  style: TextStyle(color: _textPrimary),
+                ),
+              )
+            ],
+          ),
+        );
+
+        if (!mounted) return;
+        await _checkTermsAndSelection();
+      } else {
+        final vorname = _vornameController.text.trim();
+        final nachname = _nachnameController.text.trim();
+        final birthDate =
+        DateTime(_selectedYear, _selectedMonth, _selectedDay);
+        final age = _calculateAge(birthDate);
+
+        if (age < 12) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+                content: Text("Du musst mindestens 12 Jahre alt sein!")),
+          );
+          setState(() => _isSaving = false);
+          return;
+        }
+
+        final docId = "$vorname $nachname".trim();
+
+        await FirebaseFirestore.instance.collection("users").doc(docId).set({
+          "createdAt": FieldValue.serverTimestamp(),
+          "vorname": vorname,
+          "nachname": nachname,
+          "fullName": docId,
+          "username": username,
+          "password": password,
+          "username_lower": username.toLowerCase(),
+          "age": age,
+          "geburtsdatum": {
+            "tag": _selectedDay,
+            "monat": _selectedMonth,
+            "jahr": _selectedYear,
+          },
+
+          // Vorbereitung für späteren Telefonlogin:
+          "phoneNumber": null,
+          "phoneVerified": false,
+          "authVersion": 1, // 1 = Username/Passwort-Login
+        });
+
+        await prefs.setString("vorname", vorname);
+        await prefs.setString("nachname", nachname);
+        await prefs.setString("username", username);
+        await prefs.setBool("isBar", false);
+        await prefs.setBool("isLoggedIn", true);
+        await prefs.setString("currentUsername", username);
+        await prefs.setInt("authVersion", 1);
+        await prefs.setBool("phoneVerified", false);
+        await prefs.remove("phoneNumber");
+
+        await _checkTermsAndSelection();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Fehler beim Speichern: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   Widget _cardForm() {
@@ -562,42 +673,90 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              const Icon(Icons.person_add, size: 56, color: _accent),
-              const SizedBox(height: 18),
+              const Icon(Icons.person_add, size: 52, color: _accent),
+              const SizedBox(height: 8),
 
-              TextFormField(
-                controller: _vornameController,
-                focusNode: _vornameNode,
-                textInputAction: TextInputAction.next,
-                onFieldSubmitted: (_) => _nachnameNode.requestFocus(),
-                inputFormatters: [
-                  FilteringTextInputFormatter.deny(RegExp(r'^\s'))
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ChoiceChip(
+                    label: const Text('Normaler User'),
+                    selected: !_isBar,
+                    onSelected: (v) {
+                      setState(() {
+                        _isBar = false;
+                        _checkUsernameAvailability(
+                            _usernameController.text.trim());
+                      });
+                    },
+                  ),
+                  const SizedBox(width: 12),
+                  ChoiceChip(
+                    label: const Text('Lokal / Bar'),
+                    selected: _isBar,
+                    onSelected: (v) {
+                      setState(() {
+                        _isBar = true;
+                        _checkUsernameAvailability(
+                            _usernameController.text.trim());
+                      });
+                    },
+                  ),
                 ],
-                style: const TextStyle(color: _textPrimary),
-                decoration: _dec(
-                    label: "Vorname",
-                    icon: Icons.person,
-                    hint: "z. B. Adrian"),
-                validator: _nameValidator,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
 
-              TextFormField(
-                controller: _nachnameController,
-                focusNode: _nachnameNode,
-                textInputAction: TextInputAction.next,
-                onFieldSubmitted: (_) => _usernameNode.requestFocus(),
-                inputFormatters: [
-                  FilteringTextInputFormatter.deny(RegExp(r'^\s'))
-                ],
-                style: const TextStyle(color: _textPrimary),
-                decoration: _dec(
-                    label: "Nachname",
-                    icon: Icons.person_outline,
-                    hint: "z. B. Egger"),
-                validator: _nameValidator,
-              ),
-              const SizedBox(height: 12),
+              if (_isBar) ...[
+                TextFormField(
+                  controller: _barNameController,
+                  textInputAction: TextInputAction.next,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.deny(RegExp(r'^\s'))
+                  ],
+                  style: const TextStyle(color: _textPrimary),
+                  decoration: _dec(
+                    label: "Name des Lokals / der Bar",
+                    icon: Icons.storefront,
+                    hint: "z. B. Club XY",
+                  ),
+                  validator: _nameValidator,
+                ),
+                const SizedBox(height: 12),
+              ] else ...[
+                TextFormField(
+                  controller: _vornameController,
+                  focusNode: _vornameNode,
+                  textInputAction: TextInputAction.next,
+                  onFieldSubmitted: (_) => _nachnameNode.requestFocus(),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.deny(RegExp(r'^\s'))
+                  ],
+                  style: const TextStyle(color: _textPrimary),
+                  decoration: _dec(
+                      label: "Vorname",
+                      icon: Icons.person,
+                      hint: "z. B. Adrian"),
+                  validator: _nameValidator,
+                ),
+                const SizedBox(height: 12),
+
+                TextFormField(
+                  controller: _nachnameController,
+                  focusNode: _nachnameNode,
+                  textInputAction: TextInputAction.next,
+                  onFieldSubmitted: (_) => _usernameNode.requestFocus(),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.deny(RegExp(r'^\s'))
+                  ],
+                  style: const TextStyle(color: _textPrimary),
+                  decoration: _dec(
+                      label: "Nachname",
+                      icon: Icons.person_outline,
+                      hint: "z. B. Egger"),
+                  validator: _nameValidator,
+                ),
+                const SizedBox(height: 12),
+              ],
 
               TextFormField(
                 controller: _usernameController,
@@ -634,7 +793,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
               TextFormField(
                 controller: _passwordController,
                 focusNode: _passwordNode,
-                textInputAction: TextInputAction.done,
+                textInputAction: TextInputAction.next,
                 obscureText: !_pwVisible,
                 style: const TextStyle(color: _textPrimary),
                 decoration: _dec(
@@ -655,15 +814,31 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                 validator: _passwordValidator,
               ),
               _passwordMeter(),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
 
-              _birthRow(),
-              const SizedBox(height: 22),
+              if (_isBar) ...[
+                TextFormField(
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  style: const TextStyle(color: _textPrimary),
+                  decoration: _dec(
+                    label: "E-Mail",
+                    icon: Icons.email,
+                    hint: "mail@club.at",
+                  ),
+                  validator: _emailValidator,
+                ),
+                const SizedBox(height: 16),
+              ] else ...[
+                const SizedBox(height: 8),
+                _birthRow(),
+                const SizedBox(height: 18),
+              ],
 
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: (_isFormValid && !_isSaving) ? _proceed : null,
+                  onPressed: _canSubmit ? _onSubmit : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _accent,
                     disabledBackgroundColor:
@@ -714,10 +889,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
-      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
+        backgroundColor: Colors.black,
+        elevation: 4,
         centerTitle: true,
         title: const Text(
           "Account erstellen",
@@ -736,7 +910,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         child: Center(
           child: SingleChildScrollView(
             padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 40),
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 560),
               child: _cardForm(),

@@ -1,4 +1,5 @@
 // lib/Screens/party_map_screen.dart
+import 'dart:async'; // für Countdown
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -6,15 +7,20 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:party_pin/Social/friends_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http; // für Bild-Download
 
 import '../Screens/new_party.dart';
 import '../Screens/menu_screen.dart';
 import '../Screens/profil_settings_screen.dart';
 import '../Screens/feedback_screen.dart';
-import '../Social/friends.dart';
+import '../Screens/bar_event_screen.dart';
+import '../Screens/bar_feedback_screen.dart'; // NEU: Feedback-Screen für Bars
+import '../Social/friends_model.dart';
 import '../Services/geocoding_services.dart';
 import '../widgets/party_bottom_sheet.dart';
+import '../Screens/bar_bottom_sheet.dart'; // globales BarBottomSheet
 
 class PartyMapScreen extends StatefulWidget {
   const PartyMapScreen({super.key});
@@ -32,6 +38,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   static const _muted = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30);
 
+  // Basis-Durchmesser für eigene Icons
+  static const int _lockBaseDiameter = 80;
+  static const int _friendsBaseDiameter = 80;
+  static const int _hitBaseDiameter = 160;
+  static const int _barBaseDiameter = 80;
+
   GoogleMapController? mapController;
   CameraPosition? _startPos;
 
@@ -39,7 +51,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   final Set<Circle> _circles = {};
   final Map<String, Map<String, dynamic>> _partyCache = {};
 
-  // Indizes: 0=Feedback, 1=Map, 2=Freunde, 3=Neue Party
+  // Bar-Marker-Icons (Profilbild im Kreis) cachen
+  final Map<String, BitmapDescriptor> _barIconCache = {};
+
+  // Normale User: 0=Feedback, 1=Map, 2=Freunde, 3=Neue Party
+  // Bar-Account: 0=Map, 1=Event hosten, 2=Feedback
   int _currentIndex = 1;
   String _currentCity = "";
   double _currentLat = 48.2082;
@@ -48,19 +64,44 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   String? _currentUsername;
   String? _currentFullName;
 
+  bool _isBarAccount = false;
+  String? _barId;
+
   BitmapDescriptor? _lockIconGrey;
   BitmapDescriptor? _lockIconGreen;
   BitmapDescriptor? _lockIconBlue;
   BitmapDescriptor? _lockIconRed;
   BitmapDescriptor? _hitboxIcon;
 
+  // Friends-only Icon (eigener Marker)
+  BitmapDescriptor? _friendsOnlyIcon;
+
   final Map<String, bool> _verifiedCache = {};
   bool _ratingPromptShown = false;
   bool _legalWarnDismissed = false;
   bool _isReloading = false;
 
+  // ----- Filter-State -----
+  bool _showParties = true;
+  bool _showBars = true;
+  int? _minAgeFilter; // Interpretation: dein Alter → Party-Mindestalter darf NICHT höher sein
+  double? _maxEntryFilter; // maximaler Eintritt in €
+  bool _onlyFree = false; // nur Partys mit Eintritt 0 €
+
   // Suche
   final TextEditingController _searchCtrl = TextEditingController();
+
+  // FriendsModel + Cache meiner Freunde
+  final FriendsModel _friendsModel = FriendsModel();
+  Set<String> _myFriendsSet = {};
+
+  // Zoom-State
+  double _currentZoom = 13;
+  CameraPosition? _lastCameraPosition;
+  bool _isUpdatingZoomIcons = false;
+
+  // Status-Cache für geschlossene Partys (für Lock-Farbe)
+  final Map<String, String?> _closedPartyStatus = {}; // partyId -> 'approved'/'declined'/null
 
   @override
   void initState() {
@@ -80,14 +121,15 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     super.dispose();
   }
 
-  // Position der Suche: kleiner Rand unter der AppBar
-  double _searchTop(BuildContext ctx) {
-    return 8; // ggf. auf 12/16 anpassen
-  }
+  // Position der Suche
+  double _searchTop(BuildContext ctx) => 8;
 
   // ---------- kleine Helfer ----------
-  String _safeDocId(String input) =>
-      input.trim().replaceAll('/', '_').replaceAll('#', '_').replaceAll('?', '_');
+  String _safeDocId(String input) => input
+      .trim()
+      .replaceAll('/', '_')
+      .replaceAll('#', '_')
+      .replaceAll('?', '_');
 
   // ---------- Setup ----------
   Future<void> _loadSavedLocation() async {
@@ -100,10 +142,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         target: LatLng(_currentLat, _currentLng),
         zoom: 13,
       );
+      _currentZoom = 13;
     });
   }
 
-  // Username + voller Name laden
+  // Username + voller Name + Bar-Info laden
   Future<void> _loadCurrentUser() async {
     final prefs = await SharedPreferences.getInstance();
     final uname =
@@ -113,14 +156,42 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     final nachname = (prefs.getString('nachname') ?? '').trim();
     final fullName = ('$vorname $nachname').trim();
 
+    // dieselben Keys wie im Login
+    final isBar = prefs.getBool('isBarAccount') ?? false;
+    final barId = prefs.getString('barId');
+
     setState(() {
       _currentUsername = uname.isEmpty ? null : uname;
       _currentFullName = fullName.isEmpty ? null : fullName;
+      _isBarAccount = isBar;
+      _barId = barId;
+      if (_isBarAccount) {
+        _currentIndex = 0; // Bar: Map auf Index 0
+      } else {
+        _currentIndex = 1; // Normal: Map auf Index 1
+      }
     });
+
+    // Freunde laden
+    if (_currentUsername != null && _currentUsername!.isNotEmpty) {
+      try {
+        final list = await _friendsModel.myFriends(_currentUsername!);
+        _myFriendsSet = list.toSet();
+      } catch (_) {
+        _myFriendsSet = {};
+      }
+    }
   }
 
   Future<void> _loadLegalWarnState() async {
     final prefs = await SharedPreferences.getInstance();
+    // Für Bar-Accounts sofort unterdrücken
+    if (_isBarAccount) {
+      setState(() {
+        _legalWarnDismissed = true;
+      });
+      return;
+    }
     setState(() {
       _legalWarnDismissed = prefs.getBool('legalWarnDismissed_v1') ?? false;
     });
@@ -134,35 +205,44 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   Future<void> _prepareIcons() async {
     _lockIconBlue = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: 112,
+      diameter: _lockBaseDiameter,
       circleColor: const Color(0xFF1976D2),
       icon: Icons.lock_rounded,
       iconColor: Colors.white,
-      iconScale: .52,
+      iconScale: .60,
     ));
     _lockIconGrey = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: 128,
+      diameter: _lockBaseDiameter,
       circleColor: const Color(0xFF424242),
       icon: Icons.lock_rounded,
       iconColor: Colors.white,
-      iconScale: .55,
+      iconScale: .60,
     ));
     _lockIconGreen = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: 128,
+      diameter: _lockBaseDiameter,
       circleColor: const Color(0xFF2E7D32),
       icon: Icons.lock_rounded,
       iconColor: Colors.white,
-      iconScale: .55,
+      iconScale: .60,
     ));
     _lockIconRed = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: 128,
+      diameter: _lockBaseDiameter,
       circleColor: const Color(0xFFD32F2F),
       icon: Icons.lock_rounded,
       iconColor: Colors.white,
-      iconScale: .55,
+      iconScale: .60,
     ));
-    _hitboxIcon =
-        BitmapDescriptor.fromBytes(await _drawTransparentCircle(diameter: 240));
+    _hitboxIcon = BitmapDescriptor.fromBytes(
+        await _drawTransparentCircle(diameter: _hitBaseDiameter));
+
+    _friendsOnlyIcon = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
+      diameter: _friendsBaseDiameter,
+      circleColor: const Color(0xFF6A1B9A),
+      icon: Icons.people_alt_rounded,
+      iconColor: Colors.white,
+      iconScale: .60,
+    ));
+
     if (mounted) setState(() {});
   }
 
@@ -212,6 +292,59 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     final img = await picture.toImage(diameter, diameter);
     final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
     return bytes!.buffer.asUint8List();
+  }
+
+  // NEU: Kreis-Marker mit Profilbild für Bars
+  Future<BitmapDescriptor> _createBarMarkerIcon(String? imageUrl) async {
+    const int diameter = _barBaseDiameter;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final size = ui.Size(diameter.toDouble(), diameter.toDouble());
+    final center = Offset(size.width / 2, size.height / 2);
+
+    // Rand
+    final borderPaint = Paint()..color = Colors.white;
+    canvas.drawCircle(center, diameter / 2, borderPaint);
+
+    // Hintergrund
+    final innerPaint = Paint()..color = const Color(0xFF1C1F26);
+    final innerRadius = diameter / 2 - 4;
+    canvas.drawCircle(center, innerRadius, innerPaint);
+
+    if (imageUrl != null && imageUrl.trim().isNotEmpty) {
+      try {
+        final uri = Uri.parse(imageUrl);
+        final resp = await http.get(uri);
+        if (resp.statusCode == 200) {
+          final bytes = resp.bodyBytes;
+          final ui.Codec codec = await ui.instantiateImageCodec(
+            bytes,
+            targetWidth: diameter,
+            targetHeight: diameter,
+          );
+          final ui.FrameInfo frameInfo = await codec.getNextFrame();
+          final ui.Image image = frameInfo.image;
+
+          final srcRect =
+          Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+          final dstRect =
+          Rect.fromCircle(center: center, radius: innerRadius - 4);
+
+          canvas.save();
+          final clipPath = Path()..addOval(dstRect);
+          canvas.clipPath(clipPath);
+          canvas.drawImageRect(image, srcRect, dstRect, Paint());
+          canvas.restore();
+        }
+      } catch (_) {
+        // Bild-Fehler ignorieren -> leerer Kreis
+      }
+    }
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(diameter, diameter);
+    final pngBytes = await img.toByteData(format: ui.ImageByteFormat.png);
+    return BitmapDescriptor.fromBytes(pngBytes!.buffer.asUint8List());
   }
 
   String _monthName(int month) {
@@ -284,7 +417,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   bool _isExpiredWithGrace(Map<String, dynamic> d) {
     final start = _partyStart(d);
     if (start == null) return false;
-    final cutoff = start.add(const Duration(hours: 12));
+    final cutoff = start.add(const Duration(hours: 24));
     return DateTime.now().isAfter(cutoff);
   }
 
@@ -298,22 +431,19 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     return DateTime.now().isAfter(nextDayMidnight);
   }
 
-  // ---------- Host-Erkennung (zentral!) ----------
+  // ---------- Host-Erkennung ----------
   bool _isHostForPartyData(Map<String, dynamic> data) {
     final hostName = (data['hostName'] ?? '').toString().trim();
-    final hostUid = ((data['hostUid'] ?? data['hostId']) ?? '').toString().trim();
+    final hostUid =
+    ((data['hostUid'] ?? data['hostId']) ?? '').toString().trim();
     final cu = _currentUsername?.trim();
     final cf = _currentFullName?.trim();
 
-    final byUid = cu != null &&
-        cu.isNotEmpty &&
-        hostUid.isNotEmpty &&
-        hostUid == cu;
+    final byUid =
+        cu != null && cu.isNotEmpty && hostUid.isNotEmpty && hostUid == cu;
 
-    final byName = cf != null &&
-        cf.isNotEmpty &&
-        hostName.isNotEmpty &&
-        hostName == cf;
+    final byName =
+        cf != null && cf.isNotEmpty && hostName.isNotEmpty && hostName == cf;
 
     return byUid || byName;
   }
@@ -324,8 +454,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       return _verifiedCache[usernameDocId]!;
     }
     try {
-      final snap =
-      await FirebaseFirestore.instance.collection('users').doc(usernameDocId).get();
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(usernameDocId)
+          .get();
       final verified = (snap.data()?['verified'] == true);
       _verifiedCache[usernameDocId] = verified;
       return verified;
@@ -385,7 +517,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     _partyCache.clear();
     _markers.clear();
     _circles.clear();
+    _closedPartyStatus.clear();
+    // _barIconCache NICHT leeren -> Bar-Icons bleiben im Speicher
+
     await _loadPartiesFromFirebase();
+    await _loadBarsFromFirebase(); // Bars nach den Partys laden
+
     if (mounted) setState(() {});
   }
 
@@ -396,10 +533,96 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       try {
         final data = doc.data();
         _partyCache[doc.id] = data;
+
+        // --- FILTER: nur anwenden, wenn Partys überhaupt angezeigt werden sollen ---
+        if (!_showParties) {
+          continue; // alles skippen, wenn Partys ausgeblendet sind
+        }
+
+        // ALTER-FILTER:
+        // Du gibst z. B. 16 ein → es dürfen nur Partys mit Mindestalter <= 16 angezeigt werden.
+        if (_minAgeFilter != null) {
+          int partyAge = 0;
+
+          if (data['minAge'] is int) {
+            partyAge = data['minAge'] as int;
+          } else {
+            final ageStr = (data['minAge'] ??
+                data['age'] ??
+                data['eventAge'] ??
+                '')
+                .toString()
+                .toLowerCase()
+                .trim();
+            final digits = RegExp(r'\d+').stringMatch(ageStr);
+            if (digits != null) {
+              partyAge = int.tryParse(digits) ?? 0;
+            }
+          }
+
+          // Party ohne Altersangabe (0) → wird immer angezeigt.
+          // Wenn Party-Mindestalter größer ist als dein Filter → raus.
+          if (partyAge > _minAgeFilter! && partyAge > 0) {
+            continue;
+          }
+        }
+
+        // Eintritt (z. B. Feld "entryFee" oder "price")
+        final dynamic rawEntry = data['entryFee'] ?? data['price'];
+        double? entryFee;
+
+        if (rawEntry is num) {
+          entryFee = rawEntry.toDouble();
+        } else {
+          final String? entryStr =
+          rawEntry == null ? null : rawEntry.toString();
+          if (entryStr != null && entryStr.isNotEmpty) {
+            final cleaned = entryStr.replaceAll(',', '.');
+            entryFee = double.tryParse(cleaned);
+          }
+        }
+
+        // Nur gratis (Eintritt 0 oder null)
+        if (_onlyFree) {
+          final fee = entryFee ?? 0.0;
+          if (fee > 0.0) {
+            continue;
+          }
+        }
+
+        // Maximaler Eintritt gesetzt?
+        if (_maxEntryFilter != null && entryFee != null) {
+          if (entryFee > _maxEntryFilter!) {
+            continue;
+          }
+        }
+
         if (_isExpiredWithGrace(data)) continue;
 
         final pos = _parseLatLng(data);
         if (pos == null) continue;
+
+        // ONLY4FRIENDS
+        final visibility = (data['visibility'] ?? 'public').toString();
+        final excluded =
+            (data['excludedFriends'] as List?)?.cast<String>() ??
+                const <String>[];
+        final isFriendOnly = visibility == 'friends';
+
+        final isHostForThisParty = _isHostForPartyData(data);
+        final hostUsername =
+        ((data['hostId'] ?? data['hostUid']) ?? '').toString().trim();
+
+        if (isFriendOnly && !isHostForThisParty) {
+          final me = _currentUsername?.trim();
+          final isFriend =
+              me != null && me.isNotEmpty && _myFriendsSet.contains(hostUsername);
+          final isExcluded = me != null && excluded.contains(me);
+
+          if (!isFriend || isExcluded) {
+            continue;
+          }
+        }
 
         final isClosed = _isClosedDoc(data);
 
@@ -410,11 +633,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             pos.longitude + (r.nextDouble() - .5) / 500,
           );
 
-          bool isHostForThisParty = _isHostForPartyData(data);
           String? myStatus;
           if (_currentUsername != null && !isHostForThisParty) {
             myStatus = await _myRequestStatus(doc.id, _currentUsername!);
           }
+          _closedPartyStatus[doc.id] = myStatus;
 
           _circles.add(Circle(
             circleId: CircleId(doc.id),
@@ -431,7 +654,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             markerId: MarkerId('hit_${doc.id}'),
             position: shift,
             icon: _hitboxIcon ??
-                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+                BitmapDescriptor.defaultMarkerWithHue(
+                    BitmapDescriptor.hueAzure),
             anchor: const Offset(0.5, 0.5),
             zIndex: 9,
             consumeTapEvents: true,
@@ -459,7 +683,19 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
           ));
         } else {
-          bool isHostForThisParty = _isHostForPartyData(data);
+          // OPEN
+          if (isFriendOnly) {
+            _markers.add(Marker(
+              markerId: MarkerId(doc.id),
+              position: pos,
+              icon: _friendsOnlyIcon ??
+                  BitmapDescriptor.defaultMarkerWithHue(
+                      BitmapDescriptor.hueAzure),
+              onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
+            ));
+            continue;
+          }
+
           String? myOpenStatus;
           if (_currentUsername != null && !isHostForThisParty) {
             myOpenStatus = await _myOpenRsvpStatus(doc.id);
@@ -489,9 +725,76 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
   }
 
+  // ---------- Bars laden & Marker setzen ----------
+  Future<void> _loadBarsFromFirebase() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('bars')
+          .where('status', isEqualTo: 'approved')
+          .get();
+
+      final now = DateTime.now();
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+
+        // --- FILTER: Bars ein-/ausblenden ---
+        if (!_showBars) {
+          continue; // Bars komplett ausblenden
+        }
+
+        // optional: altes Event auto-cleanen (z.B. 6h nach Start)
+        if (data['eventActive'] == true && data['eventDate'] is Timestamp) {
+          final dt = (data['eventDate'] as Timestamp).toDate();
+          if (now.isAfter(dt.add(const Duration(hours: 6)))) {
+            FirebaseFirestore.instance.collection('bars').doc(doc.id).set(
+              {
+                'eventActive': false,
+                'eventTitle': FieldValue.delete(),
+                'eventDescription': FieldValue.delete(),
+                'eventDate': FieldValue.delete(),
+                'eventTime': FieldValue.delete(),
+                'eventUpdatedAt': FieldValue.serverTimestamp(),
+              },
+              SetOptions(merge: true),
+            );
+          }
+        }
+
+        final pos = _parseLatLng(data);
+        if (pos == null) continue;
+
+        final barName = (data['barName'] ?? 'Bar').toString();
+        final imageUrl = (data['profileImageUrl'] ?? '').toString().trim();
+        final cacheKey = imageUrl.isEmpty ? '__default' : imageUrl;
+
+        BitmapDescriptor icon;
+        if (_barIconCache.containsKey(cacheKey)) {
+          icon = _barIconCache[cacheKey]!;
+        } else {
+          icon = await _createBarMarkerIcon(imageUrl.isEmpty ? null : imageUrl);
+          _barIconCache[cacheKey] = icon;
+        }
+
+        _markers.add(
+          Marker(
+            markerId: MarkerId('bar_${doc.id}'),
+            position: pos,
+            icon: icon,
+            infoWindow: InfoWindow(title: barName),
+            onTap: () => _openBarSheet(data, doc.id),
+          ),
+        );
+      }
+    } catch (_) {
+      // optional logging
+    }
+  }
+
   Future<String?> _myRequestStatus(String partyId, String username) async {
     try {
-      final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+      final partyRef =
+      FirebaseFirestore.instance.collection('Party').doc(partyId);
       try {
         final partyDoc = await partyRef.get();
         final arr =
@@ -500,7 +803,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         if (arr.contains(username)) return 'approved';
       } catch (_) {}
       try {
-        final reqSnap = await partyRef.collection('requests').doc(username).get();
+        final reqSnap =
+        await partyRef.collection('requests').doc(username).get();
         final m = reqSnap.data();
         if (m == null) return null;
         final s = m['status'] as String?;
@@ -513,8 +817,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   }
 
   // ---------- Ratings ----------
-  Future<void> _setRating(String partyId, String username, String value) async {
-    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+  Future<void> _setRating(
+      String partyId, String username, String value) async {
+    final partyRef =
+    FirebaseFirestore.instance.collection('Party').doc(partyId);
     final ratingRef = partyRef.collection('ratings').doc(username);
 
     try {
@@ -523,16 +829,16 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         final partyData = partySnap.data() ?? {};
         final ratingSnap = await tx.get(ratingRef);
 
-        // Host sauber bestimmen: hostUid bevorzugen, sonst sicherer Name
         final hostUid =
-        ((partyData['hostUid'] ?? partyData['hostId']) ?? '').toString().trim();
+        ((partyData['hostUid'] ?? partyData['hostId']) ?? '')
+            .toString()
+            .trim();
         final hostName = (partyData['hostName'] ?? '').toString().trim();
         final hostDocId = hostUid.isNotEmpty ? hostUid : _safeDocId(hostName);
         if (hostDocId.isEmpty) {
           throw StateError("Kein Host für Aggregation vorhanden.");
         }
 
-        // Bewertung erst ab dem Folgetag
         DateTime? start;
         final v = partyData['date'];
         if (v is Timestamp) {
@@ -548,12 +854,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           throw StateError("Bewertung erst ab dem nächsten Tag möglich.");
         }
 
-        // User-Dokument des Hosts
         final userRef =
         FirebaseFirestore.instance.collection('users').doc(hostDocId);
         final userSnap = await tx.get(userRef);
 
-        // Vorherige Stimme des aktuellen Users zu dieser Party
         final prevVal = (ratingSnap.data()?['value'] as String?);
         int deltaGood = 0, deltaBad = 0;
         if (value == 'good') deltaGood++;
@@ -562,7 +866,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         if (prevVal == 'bad') deltaBad--;
         final changed = (deltaGood != 0 || deltaBad != 0);
 
-        // 1) Party-spezifische Stimme speichern
         tx.set(
           ratingRef,
           {
@@ -573,7 +876,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           SetOptions(merge: true),
         );
 
-        // 2) Benutzer-Scoped Rating-Schema mitschreiben: pro Party, pro Rater
         final perPartyUserRatingRef = userRef
             .collection('partyRatings')
             .doc(partyId)
@@ -590,7 +892,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           SetOptions(merge: true),
         );
 
-        // 3) Aggregation aktualisieren
         if (changed) {
           tx.set(
             partyRef,
@@ -601,8 +902,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             SetOptions(merge: true),
           );
 
-          final currentGood = (userSnap.data()?['partyScoreGood'] ?? 0) as int;
-          final currentBad = (userSnap.data()?['partyScoreBad'] ?? 0) as int;
+          final currentGood =
+          (userSnap.data()?['partyScoreGood'] ?? 0) as int;
+          final currentBad =
+          (userSnap.data()?['partyScoreBad'] ?? 0) as int;
           final newGood = currentGood + deltaGood;
           final newBad = currentBad + deltaBad;
           final total = newGood + newBad;
@@ -625,7 +928,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-              value == 'good' ? "Danke für die positive Bewertung!" : "Danke für dein Feedback!"),
+              value == 'good'
+                  ? "Danke für die positive Bewertung!"
+                  : "Danke für dein Feedback!"),
         ),
       );
     } on StateError catch (e) {
@@ -672,11 +977,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
       _ratingPromptShown = true;
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content:
-        Text("Wie war „${data['name'] ?? 'die Party'}“? Jetzt bewerten."),
-        action: SnackBarAction(label: "ÖFFNEN", onPressed: () => _openPartySheet(data, pid)),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              "Wie war „${data['name'] ?? 'die Party'}“? Jetzt bewerten."),
+          action: SnackBarAction(
+              label: "ÖFFNEN", onPressed: () => _openPartySheet(data, pid)),
+        ),
+      );
       break;
     }
   }
@@ -691,7 +999,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       'Gefährlich Illegal',
       'Unangemessene Inhalte',
       'Ort Adresse falsch',
-      'Lärmbläschen',
+      'Lärmbelästigung',
       'Sonstiges',
     ];
 
@@ -707,14 +1015,18 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           onWillPop: () async => !isSubmitting,
           child: AlertDialog(
             backgroundColor: Colors.grey[900],
-            title: const Text("Party melden", style: TextStyle(color: Colors.white)),
+            title: const Text("Party melden",
+                style: TextStyle(color: Colors.white)),
             content: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text("Grund auswählen:",
-                      style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                  const Text(
+                    "Grund auswählen:",
+                    style: TextStyle(
+                        color: Colors.white70, fontWeight: FontWeight.w700),
+                  ),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
@@ -724,23 +1036,31 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       return ChoiceChip(
                         label: Text(r),
                         selected: selected,
-                        onSelected: (v) => setSB(() => selectedReason = v ? r : null),
+                        onSelected: (v) =>
+                            setSB(() => selectedReason = v ? r : null),
                         labelStyle: TextStyle(
-                            color: selected ? Colors.white : Colors.white70,
-                            fontWeight: FontWeight.w700),
+                          color:
+                          selected ? Colors.white : Colors.white70,
+                          fontWeight: FontWeight.w700,
+                        ),
                         selectedColor: Colors.redAccent,
                         backgroundColor: Colors.grey[800],
                         shape: StadiumBorder(
                           side: BorderSide(
-                            color: selected ? Colors.redAccent : Colors.grey[700]!,
+                            color: selected
+                                ? Colors.redAccent
+                                : Colors.grey[700]!,
                           ),
                         ),
                       );
                     }).toList(),
                   ),
                   const SizedBox(height: 14),
-                  const Text("Optionaler Hinweis:",
-                      style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+                  const Text(
+                    "Optionaler Hinweis:",
+                    style: TextStyle(
+                        color: Colors.white70, fontWeight: FontWeight.w700),
+                  ),
                   const SizedBox(height: 6),
                   TextField(
                     controller: controller,
@@ -749,22 +1069,24 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     decoration: const InputDecoration(
                       hintText: "z. B. was genau passiert ist…",
                       hintStyle: TextStyle(color: Colors.white38),
-                      enabledBorder:
-                      OutlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                      focusedBorder:
-                      OutlineInputBorder(borderSide: BorderSide(color: Colors.white54)),
+                      enabledBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white24)),
+                      focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white54)),
                     ),
                   ),
                 ],
               ),
             ),
-            actionsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            actionsPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             actions: [
               TextButton(
                 onPressed: isSubmitting
                     ? null
                     : () => Navigator.of(dialogCtx, rootNavigator: true).pop(),
-                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                style: TextButton.styleFrom(
+                    foregroundColor: Colors.redAccent),
                 child: const Text("Abbrechen"),
               ),
               ElevatedButton(
@@ -774,8 +1096,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                   if (_currentUsername == null) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                          content:
-                          Text("Bitte Username in den Einstellungen setzen.")),
+                        content: Text(
+                            "Bitte Username in den Einstellungen setzen."),
+                      ),
                     );
                     return;
                   }
@@ -789,10 +1112,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                         .add({
                       'partyId': partyId,
                       'partyName': partyName,
-                      'partyDate': party['date'] ?? FieldValue.serverTimestamp(),
-                      'partyAddress': (party['address'] ?? '').toString(),
-                      'hostName': (party['hostName'] ?? '').toString(),
-                      'hostId': (party['hostId'] ?? '').toString(),
+                      'partyDate': party['date'] ??
+                          FieldValue.serverTimestamp(),
+                      'partyAddress':
+                      (party['address'] ?? '').toString(),
+                      'hostName':
+                      (party['hostName'] ?? '').toString(),
+                      'hostId':
+                      (party['hostId'] ?? '').toString(),
                       'reporterName': _currentUsername,
                       'reason': selectedReason,
                       'note': controller.text.trim(),
@@ -804,27 +1131,41 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     if (Navigator.of(outerContext).canPop()) {
                       Navigator.of(outerContext).pop();
                     }
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(const SnackBar(content: Text("Meldung gesendet")));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text("Meldung gesendet"),
+                      ),
+                    );
                   } on FirebaseException catch (e) {
                     setSB(() => isSubmitting = false);
                     ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text("Fehler: ${e.message ?? e.code}")));
+                      SnackBar(
+                        content:
+                        Text("Fehler: ${e.message ?? e.code}"),
+                      ),
+                    );
                   } catch (e) {
                     setSB(() => isSubmitting = false);
                     ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text("Unerwarteter Fehler: $e")));
+                      SnackBar(
+                        content:
+                        Text("Unerwarteter Fehler: $e"),
+                      ),
+                    );
                   }
                 },
                 style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(96, 44)),
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(96, 44),
+                ),
                 child: isSubmitting
                     ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                )
                     : const Text("Senden"),
               ),
             ],
@@ -834,7 +1175,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     );
   }
 
-  Stream<DocumentSnapshot<Map<String, dynamic>>>? _rsvpStream(String partyId) {
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _rsvpStream(
+      String partyId) {
     if (_currentUsername == null) return null;
     return FirebaseFirestore.instance
         .collection('Party')
@@ -878,7 +1220,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   void _openPartySheet(Map<String, dynamic> data, String partyId) async {
     final isClosed = _isClosedDoc(data);
-
     final isHost = _isHostForPartyData(data);
 
     DateTime? date;
@@ -916,38 +1257,46 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         currentUsername: _currentUsername,
         inRatingWindow: inRatingWindow,
         isActive: _isActive(data),
-        onSetRsvp: (status) => _setRsvpStatus(partyId, _currentUsername!, status),
+        onSetRsvp: (status) =>
+            _setRsvpStatus(partyId, _currentUsername!, status),
         onClearRsvp: () => _clearRsvp(partyId, _currentUsername!),
-        onSendJoinRequest: () => _sendJoinRequest(partyId, _currentUsername!),
-        onUpdateRequestStatus: (u, s) => _updateRequestStatus(partyId, u, s),
+        onSendJoinRequest: () =>
+            _sendJoinRequest(partyId, _currentUsername!),
+        onUpdateRequestStatus: (u, s) =>
+            _updateRequestStatus(partyId, u, s),
         onSetRating: (val) => _setRating(partyId, _currentUsername!, val),
         onReport: () => _sendReportDialog(partyId),
         rsvpStream: () => _rsvpStream(partyId),
-        comingStream: () => FirebaseFirestore.instance
-            .collection('Party')
-            .doc(partyId)
-            .collection('coming')
-            .orderBy('timestamp', descending: true)
-            .snapshots(),
-        maybeStream: () => FirebaseFirestore.instance
-            .collection('Party')
-            .doc(partyId)
-            .collection('maybe')
-            .orderBy('timestamp', descending: true)
-            .snapshots(),
-        ratingsStream: () => FirebaseFirestore.instance
-            .collection('Party')
-            .doc(partyId)
-            .collection('ratings')
-            .snapshots(),
+        comingStream: () =>
+            FirebaseFirestore.instance
+                .collection('Party')
+                .doc(partyId)
+                .collection('coming')
+                .orderBy('timestamp', descending: true)
+                .snapshots(),
+        maybeStream: () =>
+            FirebaseFirestore.instance
+                .collection('Party')
+                .doc(partyId)
+                .collection('maybe')
+                .orderBy('timestamp', descending: true)
+                .snapshots(),
+        ratingsStream: () =>
+            FirebaseFirestore.instance
+                .collection('Party')
+                .doc(partyId)
+                .collection('ratings')
+                .snapshots(),
         isUserVerified: _isUserVerified,
         recolorOpenMarker: (status) {
           final isHostForThis = _isHostForPartyData(data);
-          _setOpenMarkerColor(partyId, status: status, isHost: isHostForThis);
+          _setOpenMarkerColor(partyId,
+              status: status, isHost: isHostForThis);
         },
-        setClosedLockIcon: (status) => _setLockIconForPartyStatus(partyId, status: status),
+        setClosedLockIcon: (status) =>
+            _setLockIconForPartyStatus(partyId, status: status),
         onEditedParty: () async {
-          setState(() => _currentIndex = 1);
+          setState(() => _currentIndex = _isBarAccount ? 0 : 1);
           await _refreshMap();
           if (mounted) Navigator.pop(context);
         },
@@ -955,8 +1304,24 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     );
   }
 
-  Future<void> _setRsvpStatus(String partyId, String username, String status) async {
-    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+  // ---------- Bar BottomSheet ----------
+  void _openBarSheet(Map<String, dynamic> data, String barId) async {
+    if (!mounted) return;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => BarBottomSheet(
+        barId: barId,
+        barData: data,
+      ),
+    );
+  }
+
+  Future<void> _setRsvpStatus(
+      String partyId, String username, String status) async {
+    final partyRef =
+    FirebaseFirestore.instance.collection('Party').doc(partyId);
     final rsvpRef = partyRef.collection('rsvps').doc(username);
     final comingRef = partyRef.collection('coming').doc(username);
     final maybeRef = partyRef.collection('maybe').doc(username);
@@ -971,10 +1336,16 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           },
           SetOptions(merge: true));
       if (status == 'going') {
-        tx.set(comingRef, {'username': username, 'timestamp': FieldValue.serverTimestamp()});
+        tx.set(comingRef, {
+          'username': username,
+          'timestamp': FieldValue.serverTimestamp()
+        });
         tx.delete(maybeRef);
       } else {
-        tx.set(maybeRef, {'username': username, 'timestamp': FieldValue.serverTimestamp()});
+        tx.set(maybeRef, {
+          'username': username,
+          'timestamp': FieldValue.serverTimestamp()
+        });
         tx.delete(comingRef);
       }
     });
@@ -985,7 +1356,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   }
 
   Future<void> _clearRsvp(String partyId, String username) async {
-    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+    final partyRef =
+    FirebaseFirestore.instance.collection('Party').doc(partyId);
     await FirebaseFirestore.instance.runTransaction((tx) async {
       tx.delete(partyRef.collection('rsvps').doc(username));
       tx.delete(partyRef.collection('coming').doc(username));
@@ -998,7 +1370,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   }
 
   Future<void> _sendJoinRequest(String partyId, String username) async {
-    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+    final partyRef =
+    FirebaseFirestore.instance.collection('Party').doc(partyId);
     final reqRef = partyRef.collection('requests').doc(username);
     await FirebaseFirestore.instance.runTransaction((tx) async {
       tx.set(
@@ -1014,7 +1387,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   Future<void> _updateRequestStatus(
       String partyId, String username, String status) async {
-    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+    final partyRef =
+    FirebaseFirestore.instance.collection('Party').doc(partyId);
     final reqRef = partyRef.collection('requests').doc(username);
     final apprRef = partyRef.collection('approved').doc(username);
 
@@ -1028,26 +1402,39 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           },
           SetOptions(merge: true));
       if (status == 'approved') {
-        tx.set(apprRef, {'username': username, 'timestamp': FieldValue.serverTimestamp()});
-        tx.set(partyRef, {
-          'approvedUsers': FieldValue.arrayUnion([username])
-        }, SetOptions(merge: true));
+        tx.set(apprRef, {
+          'username': username,
+          'timestamp': FieldValue.serverTimestamp()
+        });
+        tx.set(
+            partyRef,
+            {
+              'approvedUsers': FieldValue.arrayUnion([username])
+            },
+            SetOptions(merge: true));
       } else {
         tx.delete(apprRef);
-        tx.set(partyRef, {
-          'approvedUsers': FieldValue.arrayRemove([username])
-        }, SetOptions(merge: true));
+        tx.set(
+            partyRef,
+            {
+              'approvedUsers': FieldValue.arrayRemove([username])
+            },
+            SetOptions(merge: true));
       }
     });
 
     if (_currentUsername == username) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _setLockIconForPartyStatus(partyId, status: status);
+        if (mounted) {
+          _setLockIconForPartyStatus(partyId, status: status);
+        }
       });
     }
   }
 
   void _setLockIconForPartyStatus(String partyId, {required String? status}) {
+    _closedPartyStatus[partyId] = status;
+
     final lockId = 'lock_$partyId';
     final hitId = 'hit_$partyId';
 
@@ -1080,7 +1467,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           markerId: MarkerId(hitId),
           position: old.position,
           icon: _hitboxIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+              BitmapDescriptor.defaultMarkerWithHue(
+                  BitmapDescriptor.hueAzure),
           anchor: const Offset(0.5, 0.5),
           zIndex: 9,
           consumeTapEvents: true,
@@ -1088,6 +1476,792 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         ));
       }
     });
+  }
+
+  // ---------- Zoom → Icon-Scale ----------
+
+  double _zoomToScale(double zoom) {
+    // 4–18 -> 0.6–1.0
+    final z = zoom.clamp(4.0, 18.0);
+    final t = (z - 4.0) / (18.0 - 4.0); // 0..1
+    return 0.6 + 0.4 * t; // 0.6 bis 1.0
+  }
+
+  Future<void> _onCameraIdle() async {
+    if (_lastCameraPosition == null) return;
+
+    final newZoom = _lastCameraPosition!.zoom;
+    if ((newZoom - _currentZoom).abs() < 0.5) return; // kleine Änderungen ignorieren
+
+    _currentZoom = newZoom;
+
+    if (_isUpdatingZoomIcons) return;
+    _isUpdatingZoomIcons = true;
+
+    try {
+      await _updateCustomMarkerSizesForZoom();
+    } finally {
+      _isUpdatingZoomIcons = false;
+    }
+  }
+
+  Future<void> _updateCustomMarkerSizesForZoom() async {
+    final scale = _zoomToScale(_currentZoom);
+
+    final lockDiameter = (_lockBaseDiameter * scale).round();
+    final friendsDiameter = (_friendsBaseDiameter * scale).round();
+    final hitDiameter = (_hitBaseDiameter * scale).round();
+
+    // Neue Icons rendern (nur lokal, kein Firestore)
+    _lockIconBlue = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
+      diameter: lockDiameter,
+      circleColor: const Color(0xFF1976D2),
+      icon: Icons.lock_rounded,
+      iconColor: Colors.white,
+      iconScale: .60,
+    ));
+    _lockIconGrey = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
+      diameter: lockDiameter,
+      circleColor: const Color(0xFF424242),
+      icon: Icons.lock_rounded,
+      iconColor: Colors.white,
+      iconScale: .60,
+    ));
+    _lockIconGreen = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
+      diameter: lockDiameter,
+      circleColor: const Color(0xFF2E7D32),
+      icon: Icons.lock_rounded,
+      iconColor: Colors.white,
+      iconScale: .60,
+    ));
+    _lockIconRed = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
+      diameter: lockDiameter,
+      circleColor: const Color(0xFFD32F2F),
+      icon: Icons.lock_rounded,
+      iconColor: Colors.white,
+      iconScale: .60,
+    ));
+
+    _hitboxIcon = BitmapDescriptor.fromBytes(
+      await _drawTransparentCircle(diameter: hitDiameter),
+    );
+
+    _friendsOnlyIcon = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
+      diameter: friendsDiameter,
+      circleColor: const Color(0xFF6A1B9A),
+      icon: Icons.people_alt_rounded,
+      iconColor: Colors.white,
+      iconScale: .60,
+    ));
+
+    _rebuildMarkersWithNewIcons();
+  }
+
+  void _rebuildMarkersWithNewIcons() {
+    final newMarkers = <Marker>{};
+
+    for (final m in _markers) {
+      final id = m.markerId.value;
+
+      if (id.startsWith('lock_')) {
+        newMarkers.add(Marker(
+          markerId: m.markerId,
+          position: m.position,
+          icon: _iconForLockMarker(id),
+          anchor: m.anchor,
+          zIndex: m.zIndex,
+          consumeTapEvents: m.consumeTapEvents,
+          onTap: m.onTap,
+          infoWindow: m.infoWindow,
+        ));
+      } else if (id.startsWith('hit_')) {
+        newMarkers.add(Marker(
+          markerId: m.markerId,
+          position: m.position,
+          icon: _hitboxIcon ?? m.icon,
+          anchor: m.anchor,
+          zIndex: m.zIndex,
+          consumeTapEvents: m.consumeTapEvents,
+          onTap: m.onTap,
+          infoWindow: m.infoWindow,
+        ));
+      } else if (_isFriendsOnlyMarker(id)) {
+        newMarkers.add(Marker(
+          markerId: m.markerId,
+          position: m.position,
+          icon: _friendsOnlyIcon ?? m.icon,
+          onTap: m.onTap,
+          infoWindow: m.infoWindow,
+        ));
+      } else {
+        newMarkers.add(m);
+      }
+    }
+
+    setState(() {
+      _markers
+        ..clear()
+        ..addAll(newMarkers);
+    });
+  }
+
+  bool _isFriendsOnlyMarker(String markerId) {
+    final data = _partyCache[markerId];
+    if (data == null) return false;
+    final visibility = (data['visibility'] ?? 'public').toString();
+    return visibility == 'friends' && !_isClosedDoc(data);
+  }
+
+  BitmapDescriptor _iconForLockMarker(String lockMarkerId) {
+    final partyId = lockMarkerId.replaceFirst('lock_', '');
+    final data = _partyCache[partyId];
+    if (data == null) {
+      return _lockIconGrey ?? BitmapDescriptor.defaultMarker;
+    }
+
+    final isHost = _isHostForPartyData(data);
+    if (isHost) {
+      return _lockIconBlue ?? BitmapDescriptor.defaultMarker;
+    }
+
+    final status = _closedPartyStatus[partyId];
+    if (status == 'approved') {
+      return _lockIconGreen ?? BitmapDescriptor.defaultMarker;
+    } else if (status == 'declined') {
+      return _lockIconRed ?? BitmapDescriptor.defaultMarker;
+    } else {
+      return _lockIconGrey ?? BitmapDescriptor.defaultMarker;
+    }
+  }
+
+  // ---------- Bar-Event Check ----------
+  Future<void> _openBarEventScreenWithCheck() async {
+    if (_barId == null || _barId!.trim().isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Kein Bar-Account verknüpft. Bitte Bar-ID in den Einstellungen setzen.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('bars')
+          .doc(_barId!)
+          .get();
+
+      final data = snap.data();
+      if (data == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Bar-Daten konnten nicht gefunden werden.'),
+          ),
+        );
+        return;
+      }
+
+      final status = (data['status'] ?? '').toString().toLowerCase();
+      final reasonRaw =
+      (data['statusReason'] ?? data['moderationNote'] ?? '')
+          .toString()
+          .trim();
+
+      if (status != 'approved') {
+        if (!mounted) return;
+
+        String baseText;
+        if (status == 'pending') {
+          baseText =
+          "Dein Bar-Account ist aktuell noch in Prüfung (Status: pending). "
+              "Solange die Freigabe noch nicht erfolgt ist, kannst du leider keine Events hosten.";
+        } else if (status == 'declined') {
+          baseText =
+          "Dein Bar-Account ist aktuell nicht freigeschaltet (Status: declined). "
+              "Deshalb kannst du momentan keine Events hosten.";
+        } else {
+          baseText =
+          "Dein Bar-Account ist aktuell nicht freigeschaltet. "
+              "Events können im Moment nicht gehostet werden.";
+        }
+
+        final reasonText = reasonRaw.isNotEmpty ? "\n\nGrund: $reasonRaw" : "";
+
+        final fullText = baseText +
+            reasonText +
+            "\n\nDu kannst dich jederzeit beim Support melden, wenn du Fragen hast.";
+
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: Colors.grey[900],
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            title: const Text(
+              "Events aktuell nicht möglich",
+              style: TextStyle(color: Colors.white),
+            ),
+            content: Text(
+              fullText,
+              style: const TextStyle(
+                color: Colors.white70,
+                height: 1.35,
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text(
+                  "OK",
+                  style: TextStyle(color: Colors.redAccent),
+                ),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            "Bar-Status konnte nicht geprüft werden. Versuche es später erneut.",
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BarEventScreen(barId: _barId!),
+      ),
+    );
+  }
+
+  // ---------- Filter-Sheet ----------
+  Future<void> _openFilterSheet() async {
+    bool showParties = _showParties;
+    bool showBars = _showBars;
+    bool onlyFree = _onlyFree;
+    int? minAge = _minAgeFilter;
+    double? maxEntry = _maxEntryFilter;
+
+    final ageCtrl = TextEditingController(
+      text: minAge != null ? minAge.toString() : '',
+    );
+    final entryCtrl = TextEditingController(
+      text: maxEntry != null ? maxEntry.toString() : '',
+    );
+
+    final result = await showModalBottomSheet<Map<String, dynamic>?>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.grey[900],
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 12,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+          ),
+          child: StatefulBuilder(
+            builder: (ctx, setSB) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: const [
+                      Icon(Icons.filter_list, color: Colors.white),
+                      SizedBox(width: 8),
+                      Text(
+                        "Filter",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  SwitchListTile(
+                    value: showParties,
+                    onChanged: (v) => setSB(() => showParties = v),
+                    activeColor: _accent,
+                    title: const Text(
+                      "Partys anzeigen",
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                  SwitchListTile(
+                    value: showBars,
+                    onChanged: (v) => setSB(() => showBars = v),
+                    activeColor: _accent,
+                    title: const Text(
+                      "Bars anzeigen",
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                  const Divider(color: Colors.white24, height: 24),
+                  SwitchListTile(
+                    value: onlyFree,
+                    onChanged: (v) => setSB(() => onlyFree = v),
+                    activeColor: _accent,
+                    title: const Text(
+                      "Nur gratis Partys (0 € Eintritt)",
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  TextField(
+                    controller: ageCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: "Dein Alter (z. B. 16, 18, 21)",
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white38)),
+                      focusedBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: _accent)),
+                    ),
+                    onChanged: (_) {
+                      final val = int.tryParse(ageCtrl.text.trim());
+                      minAge = val;
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: entryCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: "Max. Eintritt (€)",
+                      labelStyle: TextStyle(color: Colors.white70),
+                      enabledBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: Colors.white38)),
+                      focusedBorder: UnderlineInputBorder(
+                          borderSide: BorderSide(color: _accent)),
+                    ),
+                    onChanged: (_) {
+                      final val = double.tryParse(
+                          entryCtrl.text.trim().replaceAll(',', '.'));
+                      maxEntry = val;
+                    },
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      TextButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop(<String, dynamic>{
+                            'reset': true,
+                          });
+                        },
+                        child: const Text(
+                          "Zurücksetzen",
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _accent,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        onPressed: () {
+                          final localMinAge =
+                          int.tryParse(ageCtrl.text.trim());
+                          final localMaxEntry = double.tryParse(
+                              entryCtrl.text
+                                  .trim()
+                                  .replaceAll(',', '.'));
+
+                          Navigator.of(ctx).pop(<String, dynamic>{
+                            'showParties': showParties,
+                            'showBars': showBars,
+                            'onlyFree': onlyFree,
+                            'minAge': localMinAge,
+                            'maxEntry': localMaxEntry,
+                            'reset': false,
+                          });
+                        },
+                        child: const Text("Übernehmen"),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+
+    if (result == null) return;
+
+    if (result['reset'] == true) {
+      setState(() {
+        _showParties = true;
+        _showBars = true;
+        _onlyFree = false;
+        _minAgeFilter = null;
+        _maxEntryFilter = null;
+      });
+      await _refreshMap();
+      return;
+    }
+
+    setState(() {
+      _showParties = result['showParties'] as bool? ?? _showParties;
+      _showBars = result['showBars'] as bool? ?? _showBars;
+      _onlyFree = result['onlyFree'] as bool? ?? _onlyFree;
+      _minAgeFilter = result['minAge'] as int?;
+      _maxEntryFilter = result['maxEntry'] as double?;
+    });
+    await _refreshMap();
+  }
+
+  // ---------- UI ----------
+  @override
+  Widget build(BuildContext context) {
+    if (_startPos == null) {
+      return const Scaffold(
+          body: Center(child: CircularProgressIndicator(color: _accent)));
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        elevation: 0,
+        backgroundColor: const Color(0xFF141A22),
+        centerTitle: true,
+        title: const Text(
+          "Party Map",
+          style: TextStyle(
+            color: _text,
+            fontSize: 24,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        // Menü + Filter links
+        leadingWidth: 96,
+        leading: Row(
+          mainAxisAlignment: MainAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.menu, color: _accent),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const MenuScreen()),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Filter',
+              onPressed: _openFilterSheet,
+              icon: const Icon(Icons.filter_list, color: Colors.white),
+            ),
+          ],
+        ),
+        // rechts: Reload + Profil
+        actions: [
+          IconButton(
+            tooltip: 'Neu laden',
+            onPressed: _isReloading ? null : _reload,
+            icon: _isReloading
+                ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white),
+            )
+                : const Icon(Icons.refresh, color: Colors.white),
+          ),
+          IconButton(
+            onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const ProfileSettingsScreen())),
+            icon: const CircleAvatar(
+              radius: 16,
+              backgroundColor: _accent,
+              child: Icon(Icons.person, color: Colors.white, size: 18),
+            ),
+          ),
+          const SizedBox(width: 6),
+        ],
+      ),
+      body: Stack(
+        children: [
+          const Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [_bgTop, _bgBottom],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: GoogleMap(
+              initialCameraPosition: _startPos!,
+              markers: _markers,
+              circles: _circles,
+              zoomControlsEnabled: true,
+              zoomGesturesEnabled: true,
+              onMapCreated: (controller) => mapController = controller,
+              onCameraMove: (pos) {
+                _lastCameraPosition = pos;
+              },
+              onCameraIdle: _onCameraIdle,
+            ),
+          ),
+          Positioned(
+            left: 12,
+            right: 12,
+            top: _searchTop(context),
+            child: _SearchCard(
+              controller: _searchCtrl,
+              onSearch: (input) async {
+                final query = input.trim();
+                if (query.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Bitte eine Adresse eingeben."),
+                    ),
+                  );
+                  return;
+                }
+
+                final cc = await _getSelectedCountryCode();
+                final withCity =
+                    "$query, ${_currentCity.trim().isEmpty ? 'Wien' : _currentCity.trim()}";
+
+                GeocodedLocation? location =
+                await GeocodingService.getLocationFromAddress(
+                  withCity,
+                  countryCode: cc,
+                );
+
+                location ??= await GeocodingService.getLocationFromAddress(
+                  query,
+                  countryCode: cc,
+                );
+
+                if (location != null) {
+                  final pos = LatLng(location.latitude, location.longitude);
+                  setState(() {
+                    _markers.removeWhere(
+                            (m) => m.markerId.value == '__search_marker');
+                    _markers.add(
+                      Marker(
+                        markerId: const MarkerId('__search_marker'),
+                        position: pos,
+                        icon: BitmapDescriptor.defaultMarkerWithHue(
+                            BitmapDescriptor.hueRed),
+                      ),
+                    );
+                  });
+                  mapController?.animateCamera(
+                      CameraUpdate.newLatLngZoom(pos, 15));
+                } else {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Adresse nicht gefunden."),
+                    ),
+                  );
+                }
+              },
+              onClear: () => _searchCtrl.clear(),
+            ),
+          ),
+          if (!_legalWarnDismissed && !_isBarAccount)
+            Positioned(
+              left: 12,
+              right: 12,
+              top: _searchTop(context) + 64,
+              child: _legalWarningBanner(),
+            ),
+        ],
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        backgroundColor: _panel,
+        selectedItemColor: _accent,
+        unselectedItemColor: _muted,
+        currentIndex: _currentIndex,
+        onTap: _onBottomNavTapped,
+        type: BottomNavigationBarType.fixed,
+        items: _isBarAccount
+            ? const [
+          BottomNavigationBarItem(
+              icon: Icon(Icons.map), label: "Map"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.celebration), label: "Event hosten"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.feedback), label: "Feedback"),
+        ]
+            : const [
+          BottomNavigationBarItem(
+              icon: Icon(Icons.feedback), label: "Feedback"),
+          BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.people), label: "Freunde"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.add), label: "Neue Party"),
+        ],
+      ),
+    );
+  }
+
+  Widget _legalWarningBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3CD),
+        border: Border.all(color: const Color(0xFFFFEEBA)),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x22000000),
+              blurRadius: 8,
+              offset: Offset(0, 3))
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: Color(0xFF856404)),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              "WICHTIG: Das Erstellen von Fake-Partys ist rechtlich VERBOTEN. Nur echte, wahrheitsgemäße Angaben machen.",
+              style: TextStyle(
+                  color: Color(0xFF856404),
+                  fontWeight: FontWeight.w800),
+            ),
+          ),
+          IconButton(
+            tooltip: "Hinweis ausblenden",
+            onPressed: _dismissLegalWarn,
+            icon: const Icon(Icons.close, color: Color(0xFF856404)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onBottomNavTapped(int index) async {
+    // BAR-ACCOUNT: Map, Event hosten, Feedback (eigener Screen)
+    if (_isBarAccount) {
+      if (index == 0) {
+        if (_currentIndex != 0) {
+          setState(() => _currentIndex = 0);
+        }
+        return;
+      }
+
+      if (index == 1) {
+        setState(() => _currentIndex = 1);
+
+        await _openBarEventScreenWithCheck();
+
+        if (!mounted) return;
+        setState(() => _currentIndex = 0);
+        await _refreshMap();
+        return;
+      }
+
+      if (index == 2) {
+        setState(() => _currentIndex = 2);
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const BarFeedbackScreen()),
+        );
+        if (!mounted) return;
+        setState(() => _currentIndex = 0); // zurück zur Map
+        return;
+      }
+
+      return;
+    }
+
+    // NORMALER ACCOUNT
+    if (index == 1) {
+      if (_currentIndex != 1) {
+        setState(() => _currentIndex = 1);
+      }
+      return;
+    }
+
+    if (index == 0) {
+      setState(() => _currentIndex = 0);
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const FeedbackScreen()),
+      );
+      if (!mounted) return;
+      setState(() => _currentIndex = 1);
+    } else if (index == 2) {
+      final me = (_currentUsername ?? '').trim();
+      if (me.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Username fehlt. In den Einstellungen setzen.'),
+          ),
+        );
+        return;
+      }
+
+      setState(() => _currentIndex = 2);
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => FriendsScreen(currentUsername: me),
+        ),
+      );
+      if (!mounted) return;
+      setState(() => _currentIndex = 1);
+    } else if (index == 3) {
+      setState(() => _currentIndex = 3);
+
+      final ok = await _ensureLegalConsentBeforeCreating();
+      if (!ok) {
+        if (!mounted) return;
+        setState(() => _currentIndex = 1);
+        return;
+      }
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const NewPartyScreen()),
+      );
+
+      if (!mounted) return;
+      setState(() => _currentIndex = 1);
+      await _refreshMap();
+    }
   }
 
   Future<void> _showCenterSuccess(String text) async {
@@ -1121,35 +2295,45 @@ class _PartyMapScreenState extends State<PartyMapScreen>
               child: ScaleTransition(
                 scale: scale,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 18, vertical: 14),
                   decoration: BoxDecoration(
                     color: Colors.grey[900]!.withOpacity(0.96),
                     borderRadius: BorderRadius.circular(14),
                     boxShadow: [
                       BoxShadow(
-                          color: Colors.black.withOpacity(0.35),
-                          blurRadius: 18,
-                          offset: const Offset(0, 10))
+                        color: Colors.black.withOpacity(0.35),
+                        blurRadius: 18,
+                        offset: const Offset(0, 10),
+                      ),
                     ],
-                    border: Border.all(color: Colors.greenAccent.withOpacity(0.35)),
+                    border: Border.all(
+                      color: Colors.greenAccent.withOpacity(0.35),
+                    ),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                          width: 28,
-                          height: 28,
-                          decoration: const BoxDecoration(
-                              shape: BoxShape.circle, color: Colors.green),
-                          child: const Icon(Icons.check_rounded,
-                              color: Colors.white, size: 18)),
+                        width: 28,
+                        height: 28,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.green,
+                        ),
+                        child: const Icon(Icons.check_rounded,
+                            color: Colors.white, size: 18),
+                      ),
                       const SizedBox(width: 12),
-                      Text(text,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: .2)),
+                      Text(
+                        text,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: .2,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -1183,7 +2367,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   Future<bool> _ensureLegalConsentBeforeCreating() async {
     final prefs = await SharedPreferences.getInstance();
-    final alreadyAccepted = prefs.getBool('legal_consent_create_v1') ?? false;
+    final alreadyAccepted =
+        prefs.getBool('legal_consent_create_v1') ?? false;
     if (alreadyAccepted) return true;
 
     final acceptedNow = await _showLegalGateDialog();
@@ -1207,12 +2392,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           builder: (ctx, setSB) {
             return AlertDialog(
               backgroundColor: Colors.grey[900],
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
               title: Row(
                 children: const [
                   Icon(Icons.gavel_outlined, color: Colors.redAccent),
                   SizedBox(width: 8),
-                  Text("Rechtlicher Hinweis", style: TextStyle(color: Colors.white)),
+                  Text("Rechtlicher Hinweis",
+                      style: TextStyle(color: Colors.white)),
                 ],
               ),
               content: SingleChildScrollView(
@@ -1241,7 +2428,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                   ],
                 ),
               ),
-              actionsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              actionsPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               actions: [
                 OutlinedButton.icon(
                   onPressed: () {
@@ -1253,8 +2441,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       style: TextStyle(color: Colors.redAccent)),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.redAccent),
-                    padding:
-                    const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 12, horizontal: 16),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10)),
                   ),
@@ -1266,13 +2454,13 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       Navigator.of(ctx).pop();
                     },
                     icon: const Icon(Icons.check_circle_outline),
-                    label:
-                    const Text("Fertig", style: TextStyle(color: Colors.white)),
+                    label: const Text("Fertig",
+                        style: TextStyle(color: Colors.white)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.redAccent,
                       foregroundColor: Colors.white,
-                      padding:
-                      const EdgeInsets.symmetric(vertical: 12, horizontal: 18),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 12, horizontal: 18),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10)),
                     ),
@@ -1285,238 +2473,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     );
 
     return accepted;
-  }
-
-  // ---------- UI ----------
-  @override
-  Widget build(BuildContext context) {
-    if (_startPos == null) {
-      return const Scaffold(
-          body: Center(child: CircularProgressIndicator(color: _accent)));
-    }
-
-    return Scaffold(
-      // WICHTIG: nicht mehr hinter die AppBar zeichnen
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor:Color(0xFF141A22),
-        centerTitle: true,
-        title: const Text(
-          "Party Map",
-          style: TextStyle(
-            color: _text,
-            fontSize: 24,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        leading: IconButton(
-          icon: const Icon(Icons.menu, color: _accent),
-          onPressed: () =>
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const MenuScreen())),
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Neu laden',
-            onPressed: _isReloading ? null : _reload,
-            icon: _isReloading
-                ? const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.refresh, color: Colors.white),
-          ),
-          IconButton(
-            onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const ProfileSettingsScreen())),
-            icon: const CircleAvatar(
-              radius: 16,
-              backgroundColor: _accent,
-              child: Icon(Icons.person, color: Colors.white, size: 18),
-            ),
-          ),
-          const SizedBox(width: 6),
-        ],
-      ),
-
-      body: Stack(
-        children: [
-          // Hintergrund-Gradient
-          const Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [_bgTop, _bgBottom],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-              ),
-            ),
-          ),
-
-          // Google Map füllt den ganzen Body
-          Positioned.fill(
-            child: GoogleMap(
-              initialCameraPosition: _startPos!,
-              markers: _markers,
-              circles: _circles,
-              zoomControlsEnabled: true,
-              zoomGesturesEnabled: true,
-              onMapCreated: (controller) => mapController = controller,
-            ),
-          ),
-
-          // Suchleiste schwebend knapp unter Titel
-          Positioned(
-            left: 12,
-            right: 12,
-            top: _searchTop(context),
-            child: _SearchCard(
-              controller: _searchCtrl,
-              onSearch: (input) async {
-                final query = input.trim();
-                if (query.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Bitte eine Adresse eingeben.")),
-                  );
-                  return;
-                }
-
-                final cc = await _getSelectedCountryCode();
-                final withCity =
-                    "${query}, ${_currentCity.trim().isEmpty ? 'Wien' : _currentCity.trim()}";
-
-                // 1. Versuch: Adresse + aktuelle Stadt
-                GeocodedLocation? location =
-                await GeocodingService.getLocationFromAddress(withCity,
-                    countryCode: cc);
-
-                // 2. Versuch: nur die Eingabe
-                location ??= await GeocodingService.getLocationFromAddress(query,
-                    countryCode: cc);
-
-                if (location != null) {
-                  final pos = LatLng(location.latitude, location.longitude);
-                  setState(() {
-                    _markers.add(Marker(
-                      markerId: MarkerId("${query}|${_currentCity.trim()}"),
-                      position: pos,
-                      icon: BitmapDescriptor.defaultMarkerWithHue(
-                          BitmapDescriptor.hueRed),
-                    ));
-                  });
-                  mapController?.animateCamera(
-                      CameraUpdate.newLatLngZoom(pos, 15));
-                } else {
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Adresse nicht gefunden.")),
-                  );
-                }
-              },
-              onClear: () => _searchCtrl.clear(),
-            ),
-          ),
-
-          // Gelbes Legal-Banner knapp unter der Suchleiste
-          if (!_legalWarnDismissed)
-            Positioned(
-              left: 12,
-              right: 12,
-              top: _searchTop(context) + 64,
-              child: _legalWarningBanner(),
-            ),
-        ],
-      ),
-
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: _panel,
-        selectedItemColor: _accent,
-        unselectedItemColor: _muted,
-        currentIndex: _currentIndex,
-        onTap: _onBottomNavTapped,
-        type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.feedback), label: "Feedback"),
-          BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
-          BottomNavigationBarItem(icon: Icon(Icons.people), label: "Freunde"),
-          BottomNavigationBarItem(icon: Icon(Icons.add), label: "Neue Party"),
-        ],
-      ),
-    );
-  }
-
-  // NEU: ohne äußeren Top-Margin, damit keine gelben „Striche“ entstehen
-  Widget _legalWarningBanner() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF3CD),
-        border: Border.all(color: const Color(0xFFFFEEBA)),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: const [
-          BoxShadow(color: Color(0x22000000), blurRadius: 8, offset: Offset(0, 3))
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.warning_amber_rounded, color: Color(0xFF856404)),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Text(
-              "WICHTIG: Das Erstellen von Fake-Partys ist rechtlich VERBOTEN. Nur echte, wahrheitsgemäße Angaben machen.",
-              style:
-              TextStyle(color: Color(0xFF856404), fontWeight: FontWeight.w800),
-            ),
-          ),
-          IconButton(
-            tooltip: "Hinweis ausblenden",
-            onPressed: _dismissLegalWarn,
-            icon: const Icon(Icons.close, color: Color(0xFF856404)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _onBottomNavTapped(int index) async {
-    if (_currentIndex == index) return;
-    setState(() => _currentIndex = index);
-
-    if (index == 0) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const FeedbackScreen()),
-      );
-    } else if (index == 1) {
-      await _refreshMap();
-    } else if (index == 2) {
-      final me = (_currentUsername ?? '').trim();
-      if (me.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text('Username fehlt. In den Einstellungen setzen.')),
-        );
-        return;
-      }
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-            builder: (_) => FriendsScreen(currentUsername: me)),
-      );
-    } else if (index == 3) {
-      final ok = await _ensureLegalConsentBeforeCreating();
-      if (!ok) return;
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const NewPartyScreen()),
-      );
-      setState(() => _currentIndex = 1);
-      await _refreshMap();
-    }
   }
 }
 
@@ -1540,7 +2496,8 @@ class _SearchCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.grey[850],
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.redAccent.withOpacity(.85), width: 1.2),
+          border: Border.all(
+              color: Colors.redAccent.withOpacity(.85), width: 1.2),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(.5),
@@ -1562,8 +2519,8 @@ class _SearchCard extends StatelessWidget {
                 onSubmitted: onSearch,
                 decoration: const InputDecoration(
                   hintText: "Adresse eingeben",
-                  hintStyle:
-                  TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
+                  hintStyle: TextStyle(
+                      color: Colors.white54, fontWeight: FontWeight.w600),
                   border: InputBorder.none,
                 ),
               ),
@@ -1571,14 +2528,15 @@ class _SearchCard extends StatelessWidget {
             if (controller.text.isNotEmpty)
               IconButton(
                 onPressed: onClear,
-                icon: const Icon(Icons.close, color: Colors.white70, size: 18),
+                icon: const Icon(Icons.close,
+                    color: Colors.white70, size: 18),
                 tooltip: 'Löschen',
               )
             else
               IconButton(
                 onPressed: () => onSearch(controller.text),
-                icon:
-                const Icon(Icons.arrow_forward_rounded, color: Colors.white),
+                icon: const Icon(Icons.arrow_forward_rounded,
+                    color: Colors.white),
                 tooltip: 'Suchen',
               ),
           ],

@@ -2,7 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../Screens/party_map_screen.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+import 'party_map_screen.dart';
 
 class SelectionScreen extends StatefulWidget {
   const SelectionScreen({super.key});
@@ -12,7 +14,7 @@ class SelectionScreen extends StatefulWidget {
 }
 
 class _SelectionScreenState extends State<SelectionScreen> {
-  // --- Farben im selben Schema wie Terms/NewParty/CreateAccount ---
+  // --- Farben ---
   static const _gradTop = Color(0xFF0E0F12);
   static const _gradBottom = Color(0xFF141A22);
   static const _panel = Color(0xFF15171C);
@@ -21,17 +23,14 @@ class _SelectionScreenState extends State<SelectionScreen> {
   static const _textPrimary = Colors.white;
   static const _textSecondary = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30); // Rot
-  static const _secondary = Color(0xFF00C2A8); // Türkis (optional)
 
-  String _selectedLanguage = 'de'; // Immer Deutsch (disabled)
+  String _selectedLanguage = 'de';
   String _selectedCountry = 'Austria';
   String _enteredCity = '';
 
   final List<String> _countries = const ['Austria', 'Germany', 'Switzerland'];
 
-  // Controller als State, nicht in build
   final TextEditingController _cityController = TextEditingController();
-
   bool _isSearching = false;
 
   @override
@@ -63,11 +62,42 @@ class _SelectionScreenState extends State<SelectionScreen> {
       double lng,
       ) async {
     final prefs = await SharedPreferences.getInstance();
+
+    // lokal
     await prefs.setString('city', city);
     await prefs.setString('language', 'de');
     await prefs.setString('country', country);
     await prefs.setDouble('selectedLat', lat);
     await prefs.setDouble('selectedLng', lng);
+    await prefs.setBool('hasLocationSetup', true);
+
+    // in Firestore beim User/BAR hinterlegen
+    final username = prefs.getString('currentUsername');
+    final isBar = prefs.getBool('isBar') ?? false;
+
+    if (username == null || username.trim().isEmpty) return;
+
+    final colName = isBar ? 'bars' : 'users';
+    final col = FirebaseFirestore.instance.collection(colName);
+
+    final query = await col
+        .where('username', isEqualTo: username)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) return;
+
+    await query.docs.first.reference.set(
+      {
+        'language': 'de',
+        'country': country,
+        'city': city,
+        'selectedLat': lat,
+        'selectedLng': lng,
+        'hasLocationSetup': true,
+      },
+      SetOptions(merge: true),
+    );
   }
 
   Future<void> _goToPartyMap() async {
@@ -132,13 +162,15 @@ class _SelectionScreenState extends State<SelectionScreen> {
   }) {
     return InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(color: _textSecondary, fontWeight: FontWeight.w600),
+      labelStyle:
+      const TextStyle(color: _textSecondary, fontWeight: FontWeight.w600),
       hintText: hint,
       hintStyle: const TextStyle(color: Color(0xFF93A0B4)),
       prefixIcon: icon != null ? Icon(icon, color: _accent) : null,
       filled: true,
       fillColor: _card,
-      contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+      contentPadding:
+      const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
         borderSide: const BorderSide(color: Colors.transparent),
@@ -181,7 +213,8 @@ class _SelectionScreenState extends State<SelectionScreen> {
         ),
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 560),
               child: Container(
@@ -190,18 +223,23 @@ class _SelectionScreenState extends State<SelectionScreen> {
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: _panelBorder),
                   boxShadow: const [
-                    BoxShadow(color: Color(0x24000000), blurRadius: 14, offset: Offset(0, 10)),
+                    BoxShadow(
+                        color: Color(0x24000000),
+                        blurRadius: 14,
+                        offset: Offset(0, 10)),
                   ],
                 ),
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   children: [
-                    // Header Icon
                     const Icon(Icons.public, size: 56, color: _accent),
                     const SizedBox(height: 10),
                     const Text(
                       "App-Sprache, Land & Stadt",
-                      style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w800, fontSize: 18),
+                      style: TextStyle(
+                          color: _textPrimary,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18),
                     ),
                     const SizedBox(height: 16),
 
@@ -213,11 +251,13 @@ class _SelectionScreenState extends State<SelectionScreen> {
                         items: const [
                           DropdownMenuItem(
                             value: 'de',
-                            child: Text("Deutsch", style: TextStyle(color: _textPrimary)),
+                            child: Text("Deutsch",
+                                style: TextStyle(color: _textPrimary)),
                           ),
                         ],
                         onChanged: (_) {},
-                        decoration: _dec(label: "Sprache", icon: Icons.language),
+                        decoration:
+                        _dec(label: "Sprache", icon: Icons.language),
                         dropdownColor: _card,
                         style: const TextStyle(color: _textPrimary),
                         iconEnabledColor: _textSecondary,
@@ -232,12 +272,16 @@ class _SelectionScreenState extends State<SelectionScreen> {
                           .map(
                             (c) => DropdownMenuItem(
                           value: c,
-                          child: Text(c, style: const TextStyle(color: _textPrimary)),
+                          child: Text(c,
+                              style: const TextStyle(
+                                  color: _textPrimary)),
                         ),
                       )
                           .toList(),
-                      onChanged: (val) => setState(() => _selectedCountry = val!),
-                      decoration: _dec(label: "Land", icon: Icons.flag_outlined),
+                      onChanged: (val) =>
+                          setState(() => _selectedCountry = val!),
+                      decoration:
+                      _dec(label: "Land", icon: Icons.flag_outlined),
                       dropdownColor: _card,
                       style: const TextStyle(color: _textPrimary),
                       iconEnabledColor: _textSecondary,
@@ -259,11 +303,11 @@ class _SelectionScreenState extends State<SelectionScreen> {
 
                     const SizedBox(height: 20),
 
-                    // Hinweis
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: const [
-                        Icon(Icons.info_outline, size: 16, color: _textSecondary),
+                        Icon(Icons.info_outline,
+                            size: 16, color: _textSecondary),
                         SizedBox(width: 6),
                         Flexible(
                           child: Text(
@@ -276,22 +320,29 @@ class _SelectionScreenState extends State<SelectionScreen> {
 
                     const SizedBox(height: 20),
 
-                    // Button
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
                         onPressed: _isSearching ? null : _goToPartyMap,
                         icon: _isSearching
                             ? const SizedBox(
-                            width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2),
+                        )
                             : const Icon(Icons.map_outlined),
-                        label: Text(_isSearching ? "Suche…" : "Zur Karte"),
+                        label:
+                        Text(_isSearching ? "Suche…" : "Zur Karte"),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _accent,
-                          disabledBackgroundColor: _accent.withOpacity(0.4),
+                          disabledBackgroundColor:
+                          _accent.withOpacity(0.4),
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
                         ),
                       ),
                     ),

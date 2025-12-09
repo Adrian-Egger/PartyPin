@@ -1,10 +1,13 @@
+// lib/Screens/login_screen.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import 'party_map_screen.dart';
 import 'selection_screen.dart';
 import 'create_account_screen.dart';
 import 'nutzungsbedinungen.dart';
+import 'package:party_pin/Upgrade/phone_upgrade_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
@@ -16,7 +19,9 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+
   bool _isLoading = false;
+  bool _loginAsBar = false; // NEU: Auswahl, ob als Bar-Account eingeloggt werden soll
 
   bool get _isFormValid {
     return _usernameController.text.trim().isNotEmpty &&
@@ -29,17 +34,18 @@ class _LoginScreenState extends State<LoginScreen> {
     final savedLanguage = prefs.getString('language');
     final savedCountry = prefs.getString('country');
     final savedCity = prefs.getString('city');
+    final savedLat = prefs.getDouble('selectedLat');
+    final savedLng = prefs.getDouble('selectedLng');
     final termsAccepted = prefs.getBool("termsAccepted") ?? false;
 
-    if (savedLanguage == null || savedCountry == null || savedCity == null) {
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const SelectionScreen()),
-      );
-      return;
-    }
+    final hasLocationData =
+        savedCity != null &&
+            savedCountry != null &&
+            savedLat != null &&
+            savedLng != null &&
+            savedLanguage != null;
 
+    // 1) Terms / AGB
     if (!termsAccepted) {
       if (!mounted) return;
       Navigator.pushReplacement(
@@ -49,6 +55,17 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
+    // 2) Location-Auswahl
+    if (!hasLocationData) {
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const SelectionScreen()),
+      );
+      return;
+    }
+
+    // 3) Alles gesetzt → Map
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
@@ -57,8 +74,8 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
-    final username = _usernameController.text.trim();
-    final password = _passwordController.text.trim();
+    final usernameInput = _usernameController.text.trim();
+    final passwordInput = _passwordController.text.trim();
 
     if (!_isFormValid) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -70,45 +87,177 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final users = FirebaseFirestore.instance.collection("users");
       Map<String, dynamic>? userData;
+      String? userType;   // "user" oder "bar"
+      String? barDocId;   // tatsächliche Bar-Doc-ID in Firestore
 
-      try {
-        final byId = await users.doc(username).get();
-        userData = byId.data();
-      } catch (_) {
-        userData = null;
-      }
+      // 1) In users suchen (über Feld "username")
+      final userQuery = await FirebaseFirestore.instance
+          .collection("users")
+          .where("username", isEqualTo: usernameInput)
+          .limit(1)
+          .get();
 
-      if (userData == null) {
-        final query =
-        await users.where("username", isEqualTo: username).limit(1).get();
-        if (query.docs.isNotEmpty) {
-          userData = query.docs.first.data();
+      if (userQuery.docs.isNotEmpty) {
+        userData = userQuery.docs.first.data();
+        userType = "user";
+      } else {
+        // 2) In bars suchen (zuerst docId = username, dann Feld "username")
+        final barsCol = FirebaseFirestore.instance.collection("bars");
+
+        final barDocById = await barsCol.doc(usernameInput).get();
+        if (barDocById.data() != null) {
+          userData = barDocById.data();
+          userType = "bar";
+          barDocId = barDocById.id;
+        } else {
+          final barQuery = await barsCol
+              .where("username", isEqualTo: usernameInput)
+              .limit(1)
+              .get();
+          if (barQuery.docs.isNotEmpty) {
+            final barDoc = barQuery.docs.first;
+            userData = barDoc.data();
+            userType = "bar";
+            barDocId = barDoc.id;
+          }
         }
       }
 
-      if (userData == null) {
+      if (userData == null || userType == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Username nicht gefunden!")),
         );
         return;
       }
 
-      if (userData["password"] != password) {
+      // Passwort prüfen
+      final storedPw = (userData["password"] ?? "").toString();
+      if (storedPw != passwordInput) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Falsches Passwort!")),
         );
         return;
       }
 
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString("vorname", (userData["vorname"] ?? "").toString());
-      await prefs.setString("nachname", (userData["nachname"] ?? "").toString());
-      await prefs.setString("username", username);
-      await prefs.setBool("isLoggedIn", true);
-      await prefs.setString("currentUsername", username);
+      // Harter Check: Auswahl (User/Bar) muss zum Account-Typ passen
+      if (_loginAsBar && userType != "bar") {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text("Dieser Account ist kein Bar-Account.")),
+        );
+        return;
+      }
+      if (!_loginAsBar && userType != "user") {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+              Text("Dieser Account ist ein Bar-Account. Bitte als Bar einloggen.")),
+        );
+        return;
+      }
 
+      // auth / phone
+      final authVersion = (userData["authVersion"] ?? 1) as int;
+      final phoneNumber = userData["phoneNumber"] as String?;
+      final phoneVerified = userData["phoneVerified"] == true;
+
+      // Terms / Location aus Firestore lesen
+      final firestoreTermsAccepted = userData["termsAccepted"] == true;
+      final firestoreLanguage = (userData["language"] ?? "") as String;
+      final firestoreCountry = (userData["country"] ?? "") as String;
+      final firestoreCity = (userData["city"] ?? "") as String;
+
+      final latRaw = userData["selectedLat"];
+      final lngRaw = userData["selectedLng"];
+      final double? firestoreLat =
+      latRaw is num ? latRaw.toDouble() : null;
+      final double? firestoreLng =
+      lngRaw is num ? lngRaw.toDouble() : null;
+
+      final prefs = await SharedPreferences.getInstance();
+
+      // Gemeinsame Infos
+      final storedUsername = (userData["username"] ?? usernameInput).toString();
+      await prefs.setString("username", storedUsername);
+      await prefs.setString("currentUsername", storedUsername);
+      await prefs.setBool("isLoggedIn", true);
+
+      await prefs.setInt("authVersion", authVersion);
+      await prefs.setBool("phoneVerified", phoneVerified);
+      if (phoneNumber != null && phoneNumber.isNotEmpty) {
+        await prefs.setString("phoneNumber", phoneNumber);
+      } else {
+        await prefs.remove("phoneNumber");
+      }
+
+      // Terms aus Firestore in Local spiegeln
+      await prefs.setBool("termsAccepted", firestoreTermsAccepted);
+
+      // Location aus Firestore in Local spiegeln (falls vorhanden)
+      final hasFirestoreLocation =
+          firestoreCity.isNotEmpty &&
+              firestoreCountry.isNotEmpty &&
+              firestoreLat != null &&
+              firestoreLng != null &&
+              firestoreLanguage.isNotEmpty;
+
+      if (hasFirestoreLocation) {
+        await prefs.setString("city", firestoreCity);
+        await prefs.setString("country", firestoreCountry);
+        await prefs.setString("language", firestoreLanguage);
+        await prefs.setDouble("selectedLat", firestoreLat);
+        await prefs.setDouble("selectedLng", firestoreLng);
+      } else {
+        await prefs.remove("city");
+        await prefs.remove("country");
+        await prefs.remove("language");
+        await prefs.remove("selectedLat");
+        await prefs.remove("selectedLng");
+      }
+
+      // User vs Bar-spezifische Infos + Flags für PartyMapScreen
+      if (userType == "user") {
+        // normaler User
+        await prefs.setBool("isBar", false);         // dein altes Flag
+        await prefs.setBool("isBarAccount", false);  // NEU: von PartyMapScreen verwendet
+        await prefs.remove("barId");                 // keine Bar verknüpft
+
+        await prefs.setString(
+            "vorname", (userData["vorname"] ?? "").toString());
+        await prefs.setString(
+            "nachname", (userData["nachname"] ?? "").toString());
+      } else {
+        // Bar-Account
+        await prefs.setBool("isBar", true);          // dein altes Flag
+        await prefs.setBool("isBarAccount", true);   // NEU: von PartyMapScreen verwendet
+
+        if (barDocId != null) {
+          await prefs.setString("barId", barDocId);
+        } else {
+          // sollte eigentlich nicht passieren, zur Sicherheit:
+          await prefs.remove("barId");
+        }
+
+        await prefs.setString(
+            "barName", (userData["barName"] ?? "").toString());
+      }
+
+      // Phone-Upgrade (wenn du es wieder aktivieren willst, hier sauber einbauen) !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      // final mustUpgradePhone =
+      //     phoneNumber == null || phoneNumber.trim().isEmpty;
+      // if (mustUpgradePhone) {
+      //   if (!mounted) return;
+      //   Navigator.pushReplacement(
+      //     context,
+      //     MaterialPageRoute(
+      //       builder: (_) => const PhoneUpgradeScreen(),
+      //     ),
+      //   );
+      //   return;
+      // }
+
+      // Wenn Telefonnummer vorhanden bzw. Phone-Upgrade deaktiviert -> normale Navigation
       await _checkNavigation();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -207,7 +356,26 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 25),
+                      const SizedBox(height: 12),
+
+                      // NEU: Auswahl, ob als Bar einloggen
+                      CheckboxListTile(
+                        value: _loginAsBar,
+                        onChanged: (v) {
+                          setState(() {
+                            _loginAsBar = v ?? false;
+                          });
+                        },
+                        controlAffinity: ListTileControlAffinity.leading,
+                        contentPadding: EdgeInsets.zero,
+                        activeColor: Colors.redAccent,
+                        title: const Text(
+                          "Als Bar-Account einloggen",
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ),
+
+                      const SizedBox(height: 20),
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
@@ -247,7 +415,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           Navigator.pushReplacement(
                             context,
                             MaterialPageRoute(
-                                builder: (_) => const CreateAccountScreen()),
+                                builder: (_) =>
+                                const CreateAccountScreen()),
                           );
                         },
                         child: const Text(

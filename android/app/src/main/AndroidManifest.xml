@@ -1,16 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.partypin.party_pin">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Netzwerk -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
-    <!-- Medien / Kamera (optional – nach Bedarf anpassen) -->
     <uses-permission android:name="android.permission.CAMERA"/>
-    <!-- Android 13+ -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-    <!-- Für Android 12 und älter -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
@@ -23,13 +18,13 @@
         android:label="party_pin"
         android:icon="@mipmap/ic_launcher">
 
-        <!-- Google Maps API-Key -->
+        <!-- DEIN ANDROID API KEY -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
-            android:value="AIzaSyAyafL4DWD_uFeGtIABHYj-JNHYb0EYLa4"/>
+            android:value="AIzaSyD87LYkHyCjLJbh5dH3Mc6yeiXF9zH_ly8"/>
 
         <activity
-            android:name="com.partypin.party_pin.MainActivity"
+            android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/LaunchTheme"
@@ -47,13 +42,11 @@
             </intent-filter>
         </activity>
 
-        <!-- Flutter embedding v2 -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
     </application>
 
-    <!-- Optional: Queries für Intent-Filter -->
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>

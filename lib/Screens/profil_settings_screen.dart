@@ -29,8 +29,8 @@ class ProfileSettingsScreen extends StatefulWidget {
 class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   String _docId = "";
   String _username = "";
-  String? _avatarPath;
-  String _password = "";
+  String? _avatar; // kann URL oder lokaler Pfad sein
+  String _passwordFromDb = "";
 
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _currentPasswordController =
@@ -61,49 +61,51 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   Future<void> _loadUserData() async {
     final prefs = await SharedPreferences.getInstance();
     final username = prefs.getString('username') ?? "";
-    final avatar = prefs.getString('avatar');
-    final password = prefs.getString('password') ?? "";
+    final localAvatar = prefs.getString('avatar'); // optional localer Pfad
 
-    setState(() {
-      _usernameController.text = username;
-      _username = username;
-      _avatarPath = avatar;
-      _password = password;
-    });
+    String? avatar;
+    String password = "";
 
     if (username.isNotEmpty) {
       final query = await FirebaseFirestore.instance
           .collection("users")
           .where("username", isEqualTo: username)
+          .limit(1)
           .get();
 
       if (query.docs.isNotEmpty) {
         final doc = query.docs.first;
+        final data = doc.data();
+
+        avatar = (data['avatarUrl'] ?? data['avatar'])?.toString();
+        password = (data['password'] ?? '').toString();
+
         setState(() {
           _docId = doc.id;
-          _usernameController.text = doc["username"];
-          _username = doc["username"];
-          _avatarPath =
-          doc.data().containsKey("avatar") ? doc["avatar"] : avatar;
-          _password =
-          doc.data().containsKey("password") ? doc["password"] : password;
+          _username = (data['username'] ?? username).toString();
+          _usernameController.text = _username;
+          _avatar = avatar ?? localAvatar;
+          _passwordFromDb = password;
         });
+        return;
       }
     }
+
+    // Fallback: nur Prefs, falls Firestore nichts gefunden hat
+    setState(() {
+      _username = username;
+      _usernameController.text = username;
+      _avatar = localAvatar;
+      _passwordFromDb = password;
+    });
   }
 
-  Future<void> _updateFirestoreField(String field, String value) async {
+  Future<void> _updateFirestoreField(String field, dynamic value) async {
     if (_docId.isEmpty) return;
-
     await FirebaseFirestore.instance
         .collection("users")
         .doc(_docId)
         .update({field: value});
-
-    final prefs = await SharedPreferences.getInstance();
-    if (field == "username") await prefs.setString('username', value);
-    if (field == "avatar") await prefs.setString('avatar', value);
-    if (field == "password") await prefs.setString('password', value);
   }
 
   // ---------- Avatar / Foto ----------
@@ -143,10 +145,19 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     );
 
     if (image != null) {
+      // Aktuell: lokaler Pfad → in Prefs speichern, in Firestore nur als "avatar" merken.
+      // Sauber wäre: hier in Firebase Storage hochladen und downloadUrl als avatarUrl speichern.
+      final path = image.path;
+
       setState(() {
-        _avatarPath = image.path;
+        _avatar = path;
       });
-      await _updateFirestoreField("avatar", image.path);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('avatar', path);
+
+      await _updateFirestoreField("avatar", path);
+
       _showSnack("Profilbild aktualisiert.");
     }
   }
@@ -216,37 +227,99 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
   Future<void> _saveUsername() async {
     final newUsername = _usernameController.text.trim();
-    if (newUsername.isEmpty) return;
+    if (newUsername.isEmpty) {
+      _showSnack("Username darf nicht leer sein.");
+      return;
+    }
 
-    await _updateFirestoreField("username", newUsername);
+    if (newUsername == _username) {
+      setState(() => _editingUsername = false);
+      return;
+    }
+
+    if (_docId.isEmpty) {
+      _showSnack("User-Dokument nicht gefunden.");
+      return;
+    }
+
+    final lower = newUsername.toLowerCase();
+
+    // Unique-Check über username_lower
+    final dup = await FirebaseFirestore.instance
+        .collection("users")
+        .where("username_lower", isEqualTo: lower)
+        .limit(1)
+        .get();
+
+    if (dup.docs.isNotEmpty && dup.docs.first.id != _docId) {
+      _showSnack("Dieser Username ist bereits vergeben.");
+      return;
+    }
+
+    // Firestore updaten
+    await FirebaseFirestore.instance.collection("users").doc(_docId).update({
+      "username": newUsername,
+      "username_lower": lower,
+    });
+
+    // SharedPreferences updaten (username + currentUsername)
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('username', newUsername);
+    await prefs.setString('currentUsername', newUsername);
+
     setState(() {
       _username = newUsername;
       _editingUsername = false;
     });
 
     _showSnack("Username erfolgreich geändert.");
+
+    // Hinweis: Alle Referenzen in anderen Collections (friendRequests, friendships, Party.hostId etc.)
+    // hängen aktuell vermutlich am Username. Für ein sauberes System solltest du langfristig auf stabile IDs (uid) umstellen.
   }
 
   Future<void> _savePassword() async {
     final current = _currentPasswordController.text.trim();
     final newPass = _newPasswordController.text.trim();
 
-    if (current != _password) {
+    if (newPass.isEmpty) {
+      _showSnack("Neues Passwort darf nicht leer sein.");
+      return;
+    }
+
+    if (_docId.isEmpty) {
+      _showSnack("User-Dokument nicht gefunden.");
+      return;
+    }
+
+    // Passwort NICHT mehr aus SharedPreferences, sondern immer frisch aus Firestore holen
+    final snap = await FirebaseFirestore.instance
+        .collection("users")
+        .doc(_docId)
+        .get();
+
+    final data = snap.data();
+    final pwInDb = (data?['password'] ?? '').toString();
+
+    if (current != pwInDb) {
       _showSnack("Aktuelles Passwort ist falsch.");
       return;
     }
 
-    if (newPass.isEmpty) return;
-
     await _updateFirestoreField("password", newPass);
+
     setState(() {
       _editingPassword = false;
       _currentPasswordController.clear();
       _newPasswordController.clear();
-      _password = newPass;
+      _passwordFromDb = newPass;
     });
 
     _showSnack("Passwort erfolgreich geändert.");
+
+    // Richtig wäre: Passwort überhaupt nicht in Firestore speichern,
+    // sondern FirebaseAuth verwenden. Dein aktuelles Login-System
+    // hängt aber offensichtlich an diesem Feld.
   }
 
   // ---------- Logout / Account löschen ----------
@@ -267,7 +340,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Abbrechen", style: TextStyle(color: _textSecondary)),
+            child: const Text("Abbrechen",
+                style: TextStyle(color: _textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
@@ -305,7 +379,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Nein", style: TextStyle(color: _textSecondary)),
+            child:
+            const Text("Nein", style: TextStyle(color: _textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
@@ -333,11 +408,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Abbrechen", style: TextStyle(color: _textSecondary)),
+            child: const Text("Abbrechen",
+                style: TextStyle(color: _textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(
+            child: const Text(
               "Ja, löschen",
               style: TextStyle(color: Colors.redAccent),
             ),
@@ -379,7 +455,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     return Scaffold(
       backgroundColor: _gradTop,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0A0B0D), // etwas dunkler als _gradTop
+        backgroundColor: const Color(0xFF0A0B0D),
         elevation: 0.5,
         centerTitle: true,
         title: const Text(
@@ -395,13 +471,13 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [_gradTop, _gradBottom], // 2-farbiger Hintergrund
+            colors: [_gradTop, _gradBottom],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
         ),
         child: SafeArea(
-          top: false, // AppBar kümmert sich oben um den Hintergrund
+          top: false,
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(20),
             child: Column(
@@ -411,7 +487,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                   child: Stack(
                     alignment: Alignment.bottomRight,
                     children: [
-                      // Einfarbig roter Ring um das Profilbild
                       Container(
                         padding: const EdgeInsets.all(3),
                         decoration: const BoxDecoration(
@@ -421,10 +496,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         child: CircleAvatar(
                           radius: 50,
                           backgroundColor: _card,
-                          backgroundImage: _avatarPath != null
-                              ? FileImage(File(_avatarPath!))
-                              : const AssetImage('lib/Pics/profile_pic.png')
-                          as ImageProvider,
+                          backgroundImage: _buildAvatarImageProvider(),
                         ),
                       ),
                       Container(
@@ -501,7 +573,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         decoration: const InputDecoration(
                           border: UnderlineInputBorder(),
                           hintText: "Aktuelles Passwort",
-                          hintStyle: TextStyle(color: _textSecondary),
+                          hintStyle:
+                          TextStyle(color: _textSecondary),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -512,7 +585,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         decoration: const InputDecoration(
                           border: UnderlineInputBorder(),
                           hintText: "Neues Passwort",
-                          hintStyle: TextStyle(color: _textSecondary),
+                          hintStyle:
+                          TextStyle(color: _textSecondary),
                         ),
                       ),
                     ],
@@ -560,7 +634,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                   width: double.infinity,
                   child: OutlinedButton.icon(
                     onPressed: _deleteAccount,
-                    icon: const Icon(Icons.delete_forever, color: _accent),
+                    icon:
+                    const Icon(Icons.delete_forever, color: _accent),
                     label: const Text(
                       "Account löschen",
                       style: TextStyle(color: _accent),
@@ -581,6 +656,23 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         ),
       ),
     );
+  }
+
+  ImageProvider _buildAvatarImageProvider() {
+    final avatar = _avatar;
+    if (avatar == null || avatar.trim().isEmpty) {
+      return const AssetImage('lib/Pics/profile_pic.png');
+    }
+
+    if (avatar.startsWith('http://') || avatar.startsWith('https://')) {
+      return NetworkImage(avatar);
+    }
+
+    if (File(avatar).existsSync()) {
+      return FileImage(File(avatar));
+    }
+
+    return const AssetImage('lib/Pics/profile_pic.png');
   }
 
   Widget _profileCard({

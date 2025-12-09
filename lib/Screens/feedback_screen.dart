@@ -7,8 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'party_map_screen.dart';
-
 class FeedbackScreen extends StatefulWidget {
   const FeedbackScreen({super.key});
 
@@ -40,7 +38,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   int _usedInWindow = 0;
   DateTime? _lockUntilLocal;
   Timer? _ticker;
-  Key _streamKey = UniqueKey();
+
+  // Feedback-Liste (statt StreamBuilder)
+  List<QueryDocumentSnapshot> _feedbackDocs = [];
+  bool _isLoadingFeedback = true;
+  bool _feedbackError = false;
 
   // kurzer Erfolgs-Flash
   bool _sentFlash = false;
@@ -60,6 +62,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   void initState() {
     super.initState();
     _loadUserName();
+    _loadFeedbacks();
   }
 
   @override
@@ -111,6 +114,30 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     await _refreshQuota24h();
   }
 
+  // Feedback-Liste einmalig / auf Knopfdruck laden
+  Future<void> _loadFeedbacks() async {
+    setState(() {
+      _isLoadingFeedback = true;
+      _feedbackError = false;
+    });
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection("feedbacks")
+          .orderBy("timestamp", descending: true)
+          .get();
+
+      setState(() {
+        _feedbackDocs = snap.docs;
+        _isLoadingFeedback = false;
+      });
+    } catch (_) {
+      setState(() {
+        _feedbackError = true;
+        _isLoadingFeedback = false;
+      });
+    }
+  }
+
   // Quota
   Future<void> _refreshQuota24h() async {
     _ticker?.cancel();
@@ -148,7 +175,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         }
       }
 
-      subsUtc = subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
+      subsUtc =
+      subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
 
       DateTime? lockUntil;
       if (subsUtc.length >= kWindowLimit) {
@@ -200,8 +228,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   Future<void> _reloadAll() async {
-    setState(() => _streamKey = UniqueKey());
     await _refreshQuota24h();
+    await _loadFeedbacks();
     // keine Snackbars
   }
 
@@ -248,7 +276,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         }
 
         final windowStartUtc = nowUtc.subtract(kWindow);
-        subsUtc = subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
+        subsUtc =
+        subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
 
         if (subsUtc.length >= kWindowLimit) {
           throw FirebaseException(
@@ -274,6 +303,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _feedbackController.clear();
       HapticFeedback.lightImpact();
       await _refreshQuota24h();
+      await _loadFeedbacks(); // Liste nur hier (und beim Refresh-Button) neu laden
 
       // kurzer grüner Flash
       if (mounted) {
@@ -299,15 +329,14 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         tooltip: "Zurück",
         icon: const Icon(Icons.arrow_back, color: _accent),
         onPressed: () {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const PartyMapScreen()),
-          );
+          // WICHTIG: keine neue Map-Instanz bauen, einfach zurück
+          Navigator.pop(context);
         },
       ),
       title: const Text(
         "Feedback",
-        style: TextStyle(color: _text, fontWeight: FontWeight.w800, fontSize: 22),
+        style:
+        TextStyle(color: _text, fontWeight: FontWeight.w800, fontSize: 22),
       ),
       actions: [
         Container(
@@ -389,13 +418,17 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         ),
         title: Text(
           message,
-          style: const TextStyle(color: _text, fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(
+              color: _text, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         subtitle: Text(
           "Von: $user",
           style: const TextStyle(color: _muted),
         ),
-        trailing: Text(date, style: const TextStyle(color: _muted, fontSize: 12)),
+        trailing: Text(
+          date,
+          style: const TextStyle(color: _muted, fontSize: 12),
+        ),
       ),
     );
   }
@@ -422,17 +455,19 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   decoration: InputDecoration(
                     hintText: locked ? "Gesperrt …" : _hint,
                     hintStyle: const TextStyle(color: _muted),
-                    contentPadding:
-                    const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                    contentPadding: const EdgeInsets.symmetric(
+                        vertical: 14, horizontal: 12),
                     filled: true,
                     fillColor: _panel,
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: borderColor, width: _sentFlash ? 1.2 : 0),
+                      borderSide: BorderSide(
+                          color: borderColor, width: _sentFlash ? 1.2 : 0),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: _sentFlash ? _ok : _accent, width: 1),
+                      borderSide: BorderSide(
+                          color: _sentFlash ? _ok : _accent, width: 1),
                     ),
                   ),
                   textInputAction: TextInputAction.newline,
@@ -447,15 +482,16 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                 return ValueListenableBuilder<Duration>(
                   valueListenable: _remainingVN,
                   builder: (_, rem, __) => ElevatedButton(
-                    onPressed: (locked || _feedbackController.text.trim().isEmpty)
+                    onPressed: (locked ||
+                        _feedbackController.text.trim().isEmpty)
                         ? null
                         : _sendFeedback,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: sendColor,
                       disabledBackgroundColor: Colors.white12,
                       foregroundColor: Colors.white,
-                      padding:
-                      const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 14, horizontal: 18),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                     ),
@@ -470,6 +506,44 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildFeedbackList() {
+    if (_isLoadingFeedback) {
+      return const Center(
+        child: CircularProgressIndicator(color: _accent),
+      );
+    }
+    if (_feedbackError) {
+      return const Center(
+        child: Text(
+          "Fehler beim Laden",
+          style: TextStyle(color: _accent),
+        ),
+      );
+    }
+    if (_feedbackDocs.isEmpty) {
+      return const Center(
+        child: Text(
+          "Noch kein Feedback vorhanden",
+          style: TextStyle(color: _muted),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 100, top: 8),
+      itemCount: _feedbackDocs.length,
+      itemBuilder: (context, i) {
+        final raw = _feedbackDocs[i].data() as Map<String, dynamic>;
+        final msg = (raw["message"] as String?) ?? "";
+        final user = (raw["userName"] as String?) ?? "Unbekannt";
+        final ts = raw["timestamp"] as Timestamp?;
+        final date = ts == null ? "—" : _fmt(ts.toDate());
+        return _messageTile(message: msg, user: user, date: date);
+      },
     );
   }
 
@@ -496,46 +570,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             children: [
               _quotaBanner(),
               Expanded(
-                child: StreamBuilder<QuerySnapshot>(
-                  key: _streamKey,
-                  stream: FirebaseFirestore.instance
-                      .collection("feedbacks")
-                      .orderBy("timestamp", descending: true)
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return const Center(
-                        child: Text("Fehler beim Laden",
-                            style: TextStyle(color: _accent)),
-                      );
-                    }
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(
-                          child: CircularProgressIndicator(color: _accent));
-                    }
-                    final docs = snapshot.data?.docs ?? [];
-                    if (docs.isEmpty) {
-                      return const Center(
-                        child: Text("Noch kein Feedback vorhanden",
-                            style: TextStyle(color: _muted)),
-                      );
-                    }
-
-                    return ListView.builder(
-                      physics: const BouncingScrollPhysics(),
-                      padding: const EdgeInsets.only(bottom: 100, top: 8),
-                      itemCount: docs.length,
-                      itemBuilder: (context, i) {
-                        final raw = docs[i].data() as Map<String, dynamic>;
-                        final msg = (raw["message"] as String?) ?? "";
-                        final user = (raw["userName"] as String?) ?? "Unbekannt";
-                        final ts = raw["timestamp"] as Timestamp?;
-                        final date = ts == null ? "—" : _fmt(ts.toDate());
-                        return _messageTile(message: msg, user: user, date: date);
-                      },
-                    );
-                  },
-                ),
+                child: _buildFeedbackList(),
               ),
               _inputBar(),
             ],

@@ -1,6 +1,7 @@
 // lib/Screens/terms_screen.dart
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'party_map_screen.dart';
 import 'selection_screen.dart';
@@ -31,9 +32,36 @@ class _TermsScreenState extends State<TermsScreen> {
     setState(() => _isSaving = true);
 
     final prefs = await SharedPreferences.getInstance();
+
+    // Lokal markieren
     await prefs.setBool('termsAccepted', true);
 
-    // Standort-Daten prüfen
+    // In Firestore beim aktuellen Account speichern
+    final username = prefs.getString('currentUsername');
+    final isBar = prefs.getBool('isBar') ?? false;
+
+    if (username != null && username.isNotEmpty) {
+      final collectionName = isBar ? 'bars' : 'users';
+      final col = FirebaseFirestore.instance.collection(collectionName);
+
+      // wie im Rest der App: über Feld "username" suchen
+      final snap = await col
+          .where('username', isEqualTo: username)
+          .limit(1)
+          .get();
+
+      if (snap.docs.isNotEmpty) {
+        await snap.docs.first.reference.set(
+          {
+            'termsAccepted': true,
+            'termsAcceptedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+    }
+
+    // Standort-Daten prüfen (lokal – wie bisher)
     final savedCity = prefs.getString('city');
     final savedCountry = prefs.getString('country');
     final savedLat = prefs.getDouble('selectedLat');
@@ -51,9 +79,8 @@ class _TermsScreenState extends State<TermsScreen> {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (_) => hasLocationData
-            ? const PartyMapScreen()
-            : const SelectionScreen(),
+        builder: (_) =>
+        hasLocationData ? const PartyMapScreen() : const SelectionScreen(),
       ),
     );
   }

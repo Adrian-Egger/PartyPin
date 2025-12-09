@@ -5,6 +5,7 @@ import '../Services/language_services.dart';
 import '../Screens/party_map_screen.dart';
 import '../Screens/selection_screen.dart';
 import '../Screens/feedback_screen.dart';
+import '../Screens/AdminCreatesBarScreen.dart'; // Admin-Screen
 
 // --- Zentrales Farb-Theme wie PartyMap / Selection ---
 const _gradTop = Color(0xFF0E0F12);
@@ -21,6 +22,9 @@ const _secondary = Color(0xFF00C2A8); // Türkis (optional)
 class MenuScreen extends StatelessWidget {
   const MenuScreen({super.key});
 
+  // Username, der den Admin-Eintrag sieht
+  static const String _adminUsername = "admin_pp";
+
   Future<Map<String, dynamic>?> _getSavedLocation() async {
     final prefs = await SharedPreferences.getInstance();
     final city = prefs.getString('city');
@@ -35,6 +39,12 @@ class MenuScreen extends StatelessWidget {
       };
     }
     return null;
+  }
+
+  Future<bool> _isCurrentUserAdmin() async {
+    final prefs = await SharedPreferences.getInstance();
+    final username = prefs.getString('currentUsername') ?? '';
+    return username == _adminUsername;
   }
 
   Widget _menuTile({
@@ -103,6 +113,14 @@ class MenuScreen extends StatelessWidget {
               icon: Icons.map,
               title: LanguageService.getText('party_map', lang),
               onTap: () async {
+                // Kosteneffizient: wenn unter dem Menü bereits die Map im Stack liegt,
+                // einfach zurückpoppen statt eine neue PartyMapScreen zu erstellen.
+                if (Navigator.of(context).canPop()) {
+                  Navigator.of(context).pop(); // zurück zur bestehenden Map (oder Screen darunter)
+                  return;
+                }
+
+                // Fallback, falls das Menü jemals als Root-Screen laufen sollte:
                 final location = await _getSavedLocation();
                 if (location != null) {
                   Navigator.pushReplacement(
@@ -214,6 +232,28 @@ class MenuScreen extends StatelessWidget {
                   MaterialPageRoute(
                     builder: (context) => const SupportScreen(),
                   ),
+                );
+              },
+            ),
+
+            // --------- ADMIN-EINTRAG GANZ UNTEN (nur admin_pp) ----------
+            FutureBuilder<bool>(
+              future: _isCurrentUserAdmin(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData || snapshot.data != true) {
+                  return const SizedBox.shrink();
+                }
+                return _menuTile(
+                  icon: Icons.admin_panel_settings,
+                  title: "Admin Bereich💻",
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const AdminCreateBarScreen(),
+                      ),
+                    );
+                  },
                 );
               },
             ),

@@ -1,16 +1,14 @@
-// lib/Social/friends.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../Screens/party_map_screen.dart';
+import 'friends_model.dart';
 
 class FriendsScreen extends StatefulWidget {
-  final String currentUsername; // Username aus SharedPreferences
-  final String mapRoute;        // Optional: Named Route der Map
+  final String currentUsername;
+
   const FriendsScreen({
     super.key,
     required this.currentUsername,
-    this.mapRoute = '/map',
   });
 
   @override
@@ -18,53 +16,45 @@ class FriendsScreen extends StatefulWidget {
 }
 
 class _FriendsScreenState extends State<FriendsScreen> {
-  // Farben
-  static const Color _bg     = Color(0xFF0B1220);
-  static const Color _panel  = Color(0xFF111A2E);
+  static const Color _bg = Color(0xFF0B1220);
+  static const Color _panel = Color(0xFF111A2E);
   static const Color _border = Color(0xFF2C3B63);
   static const Color _accent = Color(0xFF7C4DFF);
+  static const Color _ok = Color(0xFF2E7D32);
+  static const Color _warn = Color(0xFFFFA000);
+  static const Color _err = Color(0xFFD32F2F);
+  static const Color _info = Color(0xFF1976D2);
 
-  // Snack-Farben
-  static const Color _ok   = Color(0xFF2E7D32);   // grün
-  static const Color _warn = Color(0xFFFFA000);   // gelb
-  static const Color _err  = Color(0xFFD32F2F);   // rot
-  static const Color _info = Color(0xFF1976D2);   // blau
+  final FriendsModel _model = FriendsModel();
 
-  // Suche
   final TextEditingController _searchCtrl = TextEditingController();
   String _query = '';
   Timer? _debounce;
 
-  // Firestore
-  CollectionReference<Map<String, dynamic>> get _users =>
-      FirebaseFirestore.instance.collection('users');
-  CollectionReference<Map<String, dynamic>> get _reqs =>
-      FirebaseFirestore.instance.collection('friendRequests');
-  CollectionReference<Map<String, dynamic>> get _ships =>
-      FirebaseFirestore.instance.collection('friendships');
-
-  // eigene Doc-ID (kann vom Username abweichen -> jetzt "Vorname Nachname")
-  String? _myDocId;
-
-  // kleiner User-Cache (username -> userData)
-  final Map<String, Map<String, dynamic>> _userCache = {};
+  final TextEditingController _friendsFilterCtrl = TextEditingController();
+  String _friendsFilter = '';
+  Timer? _friendsDebounce;
 
   @override
   void initState() {
     super.initState();
     _searchCtrl.addListener(_onSearchChanged);
-    _resolveMyDocId();
+    _friendsFilterCtrl.addListener(_onFriendsFilterChanged);
+    _model.loadMyDocId(widget.currentUsername.trim()).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _friendsDebounce?.cancel();
     _searchCtrl.removeListener(_onSearchChanged);
+    _friendsFilterCtrl.removeListener(_onFriendsFilterChanged);
     _searchCtrl.dispose();
+    _friendsFilterCtrl.dispose();
     super.dispose();
   }
-
-  // ---------- Helpers ----------
 
   void _onSearchChanged() {
     _debounce?.cancel();
@@ -74,11 +64,18 @@ class _FriendsScreenState extends State<FriendsScreen> {
     });
   }
 
-  /// Case-insensitive Suche über username_lower (Feld in users).
+  void _onFriendsFilterChanged() {
+    _friendsDebounce?.cancel();
+    _friendsDebounce = Timer(const Duration(milliseconds: 220), () {
+      if (!mounted) return;
+      setState(() =>
+      _friendsFilter = _friendsFilterCtrl.text.trim().toLowerCase());
+    });
+  }
+
   Stream<List<String>>? _searchStream() {
     if (_query.isEmpty) return null;
-
-    return _users
+    return _model.users
         .orderBy('username_lower')
         .startAt([_query])
         .endAt(['${_query}\uf8ff'])
@@ -91,7 +88,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
     })
         .where((uname) =>
     uname.isNotEmpty &&
-        uname.toLowerCase() != widget.currentUsername.trim().toLowerCase())
+        uname.toLowerCase() !=
+            widget.currentUsername.trim().toLowerCase())
         .toList());
   }
 
@@ -114,80 +112,13 @@ class _FriendsScreenState extends State<FriendsScreen> {
     );
   }
 
-  String _shipId(String a, String b) {
-    final s = [a, b]..sort();
-    return '${s[0]}__${s[1]}';
-  }
-
-  /// eigene Doc-ID aus users holen (über Feld username, NICHT über docId).
-  Future<void> _resolveMyDocId() async {
-    final me = widget.currentUsername.trim();
-    if (me.isEmpty) return;
-    try {
-      final qs = await _users
-          .where('username', isEqualTo: me)
-          .limit(1)
-          .get();
-      if (qs.docs.isNotEmpty) {
-        _myDocId = qs.docs.first.id; // das ist jetzt "Vorname Nachname"
-      }
-    } catch (_) {
-      _myDocId = null;
-    } finally {
-      if (mounted) setState(() {});
-    }
-  }
-
-  /// Benutzer per docId ODER username holen (mit Cache).
-  Future<Map<String, dynamic>?> _getUserData({
-    String? docId,
-    String? username,
-  }) async {
-    try {
-      if (username != null && _userCache.containsKey(username)) {
-        return _userCache[username];
-      }
-
-      // 1) docId direkt
-      if (docId != null && docId.isNotEmpty) {
-        final snap = await _users.doc(docId).get();
-        if (snap.exists) {
-          final data = snap.data() ?? {};
-          final uname = (data['username'] ?? '').toString();
-          if (uname.isNotEmpty) _userCache[uname] = data;
-          return data;
-        }
-      }
-
-      // 2) Suche über Feld username
-      if (username != null && username.isNotEmpty) {
-        final qs = await _users
-            .where('username', isEqualTo: username)
-            .limit(1)
-            .get();
-        if (qs.docs.isNotEmpty) {
-          final d = qs.docs.first;
-          final data = d.data();
-          final uname = (data['username'] ?? '').toString();
-          if (uname.isNotEmpty) _userCache[uname] = data;
-          return data;
-        }
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  /// Ziel-User ermitteln: Eingabe ist der USERNAME (nicht der volle Name).
-  /// Rückgabe: docId (Vorname Nachname) + username.
   Future<({String docId, String username})?> _resolveTarget(
       String input) async {
     final n = input.trim();
     if (n.isEmpty) return null;
     final nLower = n.toLowerCase();
-
     try {
-      // 1) exakte Suche über username_lower
-      final qsLower = await _users
+      final qsLower = await _model.users
           .where('username_lower', isEqualTo: nLower)
           .limit(1)
           .get();
@@ -195,42 +126,19 @@ class _FriendsScreenState extends State<FriendsScreen> {
         final d = qsLower.docs.first;
         final data = d.data();
         final uname = (data['username'] ?? '').toString();
-        if (uname.isNotEmpty) {
-          return (docId: d.id, username: uname);
-        }
+        if (uname.isNotEmpty) return (docId: d.id, username: uname);
       }
-
-      // 2) Fallback: exakte Suche über username (falls username_lower fehlt)
-      final qs = await _users
-          .where('username', isEqualTo: n)
-          .limit(1)
-          .get();
+      final qs =
+      await _model.users.where('username', isEqualTo: n).limit(1).get();
       if (qs.docs.isNotEmpty) {
         final d = qs.docs.first;
         final data = d.data();
         final uname = (data['username'] ?? '').toString();
-        if (uname.isNotEmpty) {
-          return (docId: d.id, username: uname);
-        }
+        if (uname.isNotEmpty) return (docId: d.id, username: uname);
       }
     } catch (_) {}
     return null;
   }
-
-  Future<bool> _isAlreadyFriends(String a, String b) async {
-    final id = _shipId(a, b);
-    final snap = await _ships.doc(id).get();
-    return snap.exists;
-  }
-
-  Future<String?> _existingRequestStatus(String from, String toUsername) async {
-    final id = '${from}__${toUsername}';
-    final snap = await _reqs.doc(id).get();
-    if (!snap.exists) return null;
-    return (snap.data()?['status'] ?? '').toString();
-  }
-
-  // ---------- Aktionen ----------
 
   Future<void> _sendFriendRequest(String targetRaw) async {
     final me = widget.currentUsername.trim();
@@ -238,101 +146,67 @@ class _FriendsScreenState extends State<FriendsScreen> {
       _showSnack('Kein aktueller Benutzer.', color: _err, icon: Icons.error);
       return;
     }
-
     final target = await _resolveTarget(targetRaw);
-
     if (target == null) {
       _showSnack('User nicht gefunden',
           color: _warn, icon: Icons.warning_amber_rounded);
       return;
     }
-    final toDoc = target.docId;       // "Vorname Nachname"
-    final toUsername = target.username; // echter Username
-
+    final toDoc = target.docId;
+    final toUsername = target.username;
     if (toUsername.toLowerCase() == me.toLowerCase()) {
       _showSnack('Du kannst dich nicht selbst adden.',
           color: _warn, icon: Icons.warning_amber);
       return;
     }
-    if (await _isAlreadyFriends(me, toUsername)) {
+    if (await _model.areFriends(me, toUsername)) {
       _showSnack('Ihr seid bereits Freunde.',
           color: _warn, icon: Icons.check_circle_outline);
       return;
     }
-
-    final ex = await _existingRequestStatus(me, toUsername) ??
-        await _existingRequestStatus(toUsername, me);
-
+    final ex = await _model.requestStatus(me, toUsername) ??
+        await _model.requestStatus(toUsername, me);
     if (ex != null) {
       if (ex == 'pending') {
         _showSnack('Anfrage existiert bereits.',
             color: _warn, icon: Icons.hourglass_top_rounded);
       } else {
-        _showSnack('Anfrage ist $ex.', color: _info, icon: Icons.info_outline);
+        _showSnack('Anfrage ist $ex.',
+            color: _info, icon: Icons.info_outline);
       }
       return;
     }
-
-    final rid = '${me}__${toUsername}';
-    try {
-      await _reqs.doc(rid).set({
-        'from': me,         // Username
-        'fromDocId': _myDocId, // "Vorname Nachname"
-        'to': toUsername,   // Username
-        'toDocId': toDoc,   // "Vorname Nachname"
-        'status': 'pending',
-        'ts': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
+    final err = await _model.sendRequest(
+      me: me,
+      target: toUsername,
+      targetDoc: toDoc,
+    );
+    if (err == null) {
       _showSnack('Anfrage gesendet',
           color: _ok, icon: Icons.check_circle_rounded);
       _searchCtrl.clear();
       if (mounted) setState(() => _query = '');
-    } on FirebaseException catch (e) {
-      _showSnack('Fehler: ${e.message ?? e.code}',
-          color: _err, icon: Icons.error_outline);
-    } catch (e) {
-      _showSnack('Fehler: $e', color: _err, icon: Icons.error_outline);
+    } else {
+      _showSnack('Fehler: $err', color: _err, icon: Icons.error_outline);
     }
   }
 
   Future<void> _accept(String fromUsername, String toUsername) async {
-    final sid = _shipId(fromUsername, toUsername);
-    final rid = '${fromUsername}__${toUsername}';
-    try {
-      await FirebaseFirestore.instance.runTransaction((tx) async {
-        tx.set(_reqs.doc(rid), {
-          'status': 'accepted',
-          'handledAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-        tx.set(_ships.doc(sid), {
-          'members': [fromUsername, toUsername], // beide: USERNAME
-          'since': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      });
+    final err = await _model.accept(fromUsername, toUsername);
+    if (err == null) {
       _showSnack('Anfrage angenommen', color: _ok, icon: Icons.check_circle);
-    } on FirebaseException catch (e) {
-      _showSnack('Fehler: ${e.message ?? e.code}',
-          color: _err, icon: Icons.error_outline);
-    } catch (e) {
-      _showSnack('Fehler: $e', color: _err, icon: Icons.error_outline);
+    } else {
+      _showSnack('Fehler: $err', color: _err, icon: Icons.error_outline);
     }
   }
 
   Future<void> _decline(String fromUsername, String toUsername) async {
-    final rid = '${fromUsername}__${toUsername}';
-    try {
-      await _reqs.doc(rid).set({
-        'status': 'declined',
-        'handledAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+    final err = await _model.decline(fromUsername, toUsername);
+    if (err == null) {
       _showSnack('Anfrage abgelehnt',
           color: _warn, icon: Icons.cancel_outlined);
-    } on FirebaseException catch (e) {
-      _showSnack('Fehler: ${e.message ?? e.code}',
-          color: _err, icon: Icons.error_outline);
-    } catch (e) {
-      _showSnack('Fehler: $e', color: _err, icon: Icons.error_outline);
+    } else {
+      _showSnack('Fehler: $err', color: _err, icon: Icons.error_outline);
     }
   }
 
@@ -363,47 +237,18 @@ class _FriendsScreenState extends State<FriendsScreen> {
       ),
     );
     if (ok != true) return;
-
     final me = widget.currentUsername.trim();
-    final sid = _shipId(me, otherUsername);
-    try {
-      await FirebaseFirestore.instance.runTransaction((tx) async {
-        tx.delete(_ships.doc(sid));
-        tx.delete(_reqs.doc('${me}__${otherUsername}'));
-        tx.delete(_reqs.doc('${otherUsername}__${me}'));
-      });
+    final err = await _model.removeFriend(me, otherUsername);
+    if (err == null) {
       _showSnack('Entfernt', color: _ok, icon: Icons.check_circle_outline);
-    } on FirebaseException catch (e) {
-      _showSnack('Fehler: ${e.message ?? e.code}',
-          color: _err, icon: Icons.error_outline);
-    } catch (e) {
-      _showSnack('Fehler: $e', color: _err, icon: Icons.error_outline);
+    } else {
+      _showSnack('Fehler: $err', color: _err, icon: Icons.error_outline);
     }
   }
-
-  // ---------- Navigation ----------
-
-  void _backToMap() {
-    bool pushed = false;
-    try {
-      Navigator.of(context)
-          .pushNamedAndRemoveUntil(widget.mapRoute, (_) => false);
-      pushed = true;
-    } catch (_) {}
-    if (!pushed) {
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const PartyMapScreen()),
-            (_) => false,
-      );
-    }
-  }
-
-  // ---------- UI ----------
 
   @override
   Widget build(BuildContext context) {
     final me = widget.currentUsername.trim();
-
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -413,15 +258,15 @@ class _FriendsScreenState extends State<FriendsScreen> {
         leading: IconButton(
           tooltip: 'Zurück zur Karte',
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: _backToMap,
+          onPressed: () => Navigator.pop(context), // WICHTIG: zurück zur bestehenden Map
         ),
         title: const Text('Freunde',
             style:
             TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
         actions: [
-          // Badge-Zähler
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: _reqs.where('status', isEqualTo: 'pending').snapshots(),
+            stream:
+            _model.reqs.where('status', isEqualTo: 'pending').snapshots(),
             builder: (ctx, snap) {
               int count = 0;
               if (snap.hasData) {
@@ -431,10 +276,12 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   final toU =
                   (m['to'] ?? m['toUsername'] ?? '').toString().trim();
                   final toD = (m['toDocId'] ?? '').toString().trim();
-                  return toU == me || (_myDocId != null && toD == _myDocId);
+                  return toU == me ||
+                      (_model.myDocId != null && toD == _model.myDocId);
                 }).length;
               }
-              final label = count == 0 ? null : (count > 9 ? '9+' : '$count');
+              final label =
+              count == 0 ? null : (count > 9 ? '9+' : '$count');
               return Stack(
                 alignment: Alignment.center,
                 clipBehavior: Clip.none,
@@ -472,7 +319,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
       ),
       body: Column(
         children: [
-          // Suche + Add
           Container(
             margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             padding:
@@ -490,14 +336,14 @@ class _FriendsScreenState extends State<FriendsScreen> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.search, color: _accent),
+                const Icon(Icons.search_rounded, color: _accent),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
                     controller: _searchCtrl,
                     style: const TextStyle(color: Colors.white),
                     decoration: const InputDecoration(
-                      hintText: 'Username suchen',
+                      hintText: 'Neue Freunde finden🔍',
                       hintStyle: TextStyle(color: Colors.white54),
                       border: InputBorder.none,
                     ),
@@ -513,14 +359,47 @@ class _FriendsScreenState extends State<FriendsScreen> {
               ],
             ),
           ),
-
-          // Entweder Suche oder Freundesliste
+          Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: _panel,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: _border),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.filter_list, color: _accent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _friendsFilterCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      hintText: 'Freunde durchsuchen',
+                      hintStyle: TextStyle(color: Colors.white54),
+                      border: InputBorder.none,
+                    ),
+                  ),
+                ),
+                if (_friendsFilter.isNotEmpty)
+                  IconButton(
+                    tooltip: 'Filter löschen',
+                    onPressed: () {
+                      _friendsFilterCtrl.clear();
+                      setState(() => _friendsFilter = '');
+                    },
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                  ),
+              ],
+            ),
+          ),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
               child: _query.isEmpty
-                  ? _buildFriendsList(me)
-                  : _buildSearchResults(),
+                  ? _buildFriendsList(me, filter: _friendsFilter)
+                  : _buildSearchResults(me),
             ),
           ),
         ],
@@ -528,11 +407,9 @@ class _FriendsScreenState extends State<FriendsScreen> {
     );
   }
 
-  // ---------- UI-Teile ----------
-
-  Widget _buildFriendsList(String me) {
+  Widget _buildFriendsList(String me, {String filter = ''}) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _ships.where('members', arrayContains: me).snapshots(),
+      stream: _model.ships.where('members', arrayContains: me).snapshots(),
       builder: (ctx, snap) {
         if (snap.hasError) {
           return _ErrorHint(err: snap.error.toString());
@@ -541,32 +418,49 @@ class _FriendsScreenState extends State<FriendsScreen> {
         if (docs.isEmpty) {
           return const _EmptyHint(text: 'Noch keine Freunde', emoji: '🫤');
         }
+        final sorted = [...docs]
+          ..sort((a, b) {
+            final at = a.data()['since'];
+            final bt = b.data()['since'];
+            final an = at is Timestamp ? at.toDate() : DateTime(0);
+            final bn = bt is Timestamp ? bt.toDate() : DateTime(0);
+            return bn.compareTo(an);
+          });
 
-        final sorted = [...docs]..sort((a, b) {
-          final at = a.data()['since'];
-          final bt = b.data()['since'];
-          final an = at is Timestamp ? at.toDate() : DateTime(0);
-          final bn = bt is Timestamp ? bt.toDate() : DateTime(0);
-          return bn.compareTo(an);
-        });
+        final f = filter.trim().toLowerCase();
+        final filtered = f.isEmpty
+            ? sorted
+            : sorted.where((doc) {
+          final members =
+          (doc.data()['members'] as List).cast<String>();
+          final other =
+          members.first == me ? members.last : members.first;
+          return other.toLowerCase().contains(f);
+        }).toList();
+
+        if (filtered.isEmpty) {
+          return const _EmptyHint(text: 'Kein Freund gefunden', emoji: '😶');
+        }
 
         return ListView.separated(
-          itemCount: sorted.length,
+          itemCount: filtered.length,
           separatorBuilder: (_, __) => const SizedBox(height: 10),
           itemBuilder: (_, i) {
-            final d = sorted[i].data();
+            final d = filtered[i].data();
             final members = (d['members'] as List).cast<String>();
-            final other = members.first == me ? members.last : members.first;
+            final other =
+            members.first == me ? members.last : members.first;
 
             return FutureBuilder<Map<String, dynamic>?>(
-              future: _getUserData(username: other),
+              future: _model.getUser(username: other),
               builder: (ctx, uSnap) {
                 final user = uSnap.data ?? {};
                 final first =
                 (user['vorname'] ?? '').toString().trim();
                 final last =
                 (user['nachname'] ?? '').toString().trim();
-                final name = (first + ' ' + last).trim().isEmpty
+                final name =
+                (first + ' ' + last).trim().isEmpty
                     ? other
                     : ('$first $last').trim();
                 final photo =
@@ -576,10 +470,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   photoUrl: photo,
                   title: name,
                   subtitle: '@$other',
-                  onChat: () => _showSnack(
-                      'Chat mit „$other“ öffnen',
-                      color: _info,
-                      icon: Icons.chat_bubble_outline),
+                  onChat: () => _showSnack('Chat mit „$other“ öffnen',
+                      color: _info, icon: Icons.chat_bubble_outline),
                   onRemove: () => _confirmAndUnfriend(other),
                 );
               },
@@ -590,7 +482,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
     );
   }
 
-  Widget _buildSearchResults() {
+  Widget _buildSearchResults(String me) {
     final stream = _searchStream();
     if (stream == null) {
       return const _EmptyHint(text: 'Username eingeben', emoji: '🔍');
@@ -615,32 +507,149 @@ class _FriendsScreenState extends State<FriendsScreen> {
           separatorBuilder: (_, __) => const SizedBox(height: 8),
           itemBuilder: (ctx, i) {
             final uname = users[i];
-            return Card(
-              color: _panel,
-              elevation: 4,
-              shadowColor: Colors.black54,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-              child: ListTile(
-                leading: const Icon(Icons.person, color: Colors.white),
-                title: Text(
-                  uname,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15),
-                ),
-                subtitle: Text(
-                  '@$uname',
-                  style: const TextStyle(
-                      color: Colors.white54, fontWeight: FontWeight.w500),
-                ),
-                trailing: FilledButton.tonalIcon(
-                  onPressed: () => _sendFriendRequest(uname),
-                  icon: const Icon(Icons.person_add_alt_1),
-                  label: const Text('Add'),
-                ),
-              ),
+
+            return FutureBuilder<RelStatus>(
+              future: _model.relationWith(me, uname),
+              builder: (ctx2, rSnap) {
+                final rel = rSnap.data;
+
+                if (rel == null) {
+                  return Card(
+                    color: _panel,
+                    elevation: 4,
+                    shadowColor: Colors.black54,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    child: ListTile(
+                      leading:
+                      const Icon(Icons.person, color: Colors.white),
+                      title: Text(uname,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15)),
+                      subtitle: Text('@$uname',
+                          style: const TextStyle(
+                              color: Colors.white54,
+                              fontWeight: FontWeight.w500)),
+                      trailing: const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child:
+                        CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  );
+                }
+
+                if (rel == RelStatus.friends) {
+                  return const SizedBox.shrink();
+                }
+
+                if (rel == RelStatus.incomingPending) {
+                  return Card(
+                    color: _panel,
+                    elevation: 4,
+                    shadowColor: Colors.black54,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    child: ListTile(
+                      leading:
+                      const Icon(Icons.person, color: Colors.white),
+                      title: Text(uname,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15)),
+                      subtitle: Text('@$uname',
+                          style: const TextStyle(
+                              color: Colors.white54,
+                              fontWeight: FontWeight.w500)),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          ElevatedButton(
+                            onPressed: () => _accept(uname, me),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _ok,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: const Text('AKZEPTIEREN',
+                                style:
+                                TextStyle(fontWeight: FontWeight.w800)),
+                          ),
+                          const SizedBox(width: 6),
+                          IconButton(
+                            tooltip: 'Ablehnen',
+                            onPressed: () => _decline(uname, me),
+                            icon: const Icon(Icons.close_rounded,
+                                color: _err, size: 26),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
+                if (rel == RelStatus.outgoingPending) {
+                  return Card(
+                    color: _panel,
+                    elevation: 4,
+                    shadowColor: Colors.black54,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    child: ListTile(
+                      leading:
+                      const Icon(Icons.person, color: Colors.white),
+                      title: Text(uname,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15)),
+                      subtitle: Text('@$uname',
+                          style: const TextStyle(
+                              color: Colors.white54,
+                              fontWeight: FontWeight.w500)),
+                      trailing: const Text(
+                        'pending',
+                        style: TextStyle(
+                            color: Colors.white54,
+                            fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  );
+                }
+
+                return Card(
+                  color: _panel,
+                  elevation: 4,
+                  shadowColor: Colors.black54,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                  child: ListTile(
+                    leading:
+                    const Icon(Icons.person, color: Colors.white),
+                    title: Text(uname,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15)),
+                    subtitle: Text('@$uname',
+                        style: const TextStyle(
+                            color: Colors.white54,
+                            fontWeight: FontWeight.w500)),
+                    trailing: FilledButton.tonalIcon(
+                      onPressed: () => _sendFriendRequest(uname),
+                      icon: const Icon(Icons.person_add_alt_1),
+                      label: const Text('Add'),
+                    ),
+                  ),
+                );
+              },
             );
           },
         );
@@ -648,14 +657,11 @@ class _FriendsScreenState extends State<FriendsScreen> {
     );
   }
 
-  // ---------- Eingehende Anfragen (Sheet) ----------
-
   void _openIncomingSheet() {
     final me = widget.currentUsername.trim();
-    final myDoc = _myDocId;
-
+    final myDoc = _model.myDocId;
     final stream =
-    _reqs.where('status', isEqualTo: 'pending').snapshots();
+    _model.reqs.where('status', isEqualTo: 'pending').snapshots();
 
     showModalBottomSheet(
       context: context,
@@ -674,7 +680,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
             return SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+                padding:
+                const EdgeInsets.fromLTRB(12, 12, 12, 16),
                 child: Column(
                   children: [
                     Container(
@@ -694,25 +701,28 @@ class _FriendsScreenState extends State<FriendsScreen> {
                           fontSize: 18),
                     ),
                     const SizedBox(height: 12),
-
                     Expanded(
-                      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      child: StreamBuilder<
+                          QuerySnapshot<Map<String, dynamic>>>(
                         stream: stream,
                         builder: (ctx2, s2) {
                           if (s2.hasError) {
                             return Padding(
                               padding: const EdgeInsets.all(16),
-                              child: _ErrorHint(err: s2.error.toString()),
+                              child:
+                              _ErrorHint(err: s2.error.toString()),
                             );
                           }
+
                           final all = s2.data?.docs ?? const [];
                           final docs = all.where((d) {
                             final m = d.data();
                             final toU = (m['to'] ?? m['toUsername'] ?? '')
                                 .toString()
                                 .trim();
-                            final toD =
-                            (m['toDocId'] ?? '').toString().trim();
+                            final toD = (m['toDocId'] ?? '')
+                                .toString()
+                                .trim();
                             return toU == me ||
                                 (myDoc != null && toD == myDoc);
                           }).toList();
@@ -729,10 +739,12 @@ class _FriendsScreenState extends State<FriendsScreen> {
                           docs.sort((a, b) {
                             final at = a.data()['ts'];
                             final bt = b.data()['ts'];
-                            final an =
-                            at is Timestamp ? at.toDate() : DateTime(0);
-                            final bn =
-                            bt is Timestamp ? bt.toDate() : DateTime(0);
+                            final an = at is Timestamp
+                                ? at.toDate()
+                                : DateTime(0);
+                            final bn = bt is Timestamp
+                                ? bt.toDate()
+                                : DateTime(0);
                             return bn.compareTo(an);
                           });
 
@@ -746,16 +758,19 @@ class _FriendsScreenState extends State<FriendsScreen> {
                             itemBuilder: (_, i) {
                               final m = docs[i].data();
                               final fromU =
-                              (m['from'] ?? '').toString(); // Username
+                              (m['from'] ?? '').toString();
                               final fromDoc =
-                              (m['fromDocId'] ?? '').toString(); // fullName
-                              final toU = (m['to'] ?? '').toString();
+                              (m['fromDocId'] ?? '').toString();
+                              final toU =
+                              (m['to'] ?? '').toString();
 
-                              return FutureBuilder<Map<String, dynamic>?>(
-                                future: _getUserData(
-                                  docId: fromDoc.isNotEmpty ? fromDoc : null,
-                                  username: fromU,
-                                ),
+                              return FutureBuilder<
+                                  Map<String, dynamic>?>(                                future: _model.getUser(
+                                docId: fromDoc.isNotEmpty
+                                    ? fromDoc
+                                    : null,
+                                username: fromU,
+                              ),
                                 builder: (ctx, uSnap) {
                                   final user = uSnap.data ?? {};
                                   final first = (user['vorname'] ?? '')
@@ -764,9 +779,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                   final last = (user['nachname'] ?? '')
                                       .toString()
                                       .trim();
-                                  final full = (first + ' ' + last)
-                                      .trim()
-                                      .isEmpty
+                                  final full =
+                                  (first + ' ' + last).trim().isEmpty
                                       ? fromU
                                       : ('$first $last').trim();
                                   final photo =
@@ -779,7 +793,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                     title: full,
                                     subtitle: 'möchte dich adden',
                                     onAccept: () => _accept(fromU, toU),
-                                    onDecline: () => _decline(fromU, toU),
+                                    onDecline: () =>
+                                        _decline(fromU, toU),
                                   );
                                 },
                               );
@@ -798,8 +813,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
     );
   }
 }
-
-// ---------- Reusable UI: Clean Cards ----------
 
 class _FriendCard extends StatelessWidget {
   final String photoUrl;
@@ -824,7 +837,8 @@ class _FriendCard extends StatelessWidget {
       shadowColor: Colors.black54,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        padding:
+        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Row(
           children: [
             _Avatar(photoUrl: photoUrl),
@@ -907,7 +921,8 @@ class _RequestCard extends StatelessWidget {
       shadowColor: Colors.black54,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        padding:
+        const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Row(
           children: [
             _Avatar(photoUrl: photoUrl),
@@ -974,8 +989,6 @@ class _Avatar extends StatelessWidget {
     );
   }
 }
-
-// ---------- generische Hints/Errors ----------
 
 class _EmptyHint extends StatelessWidget {
   final String text;
