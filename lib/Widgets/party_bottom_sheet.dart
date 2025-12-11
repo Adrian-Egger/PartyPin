@@ -39,6 +39,7 @@ class PartyBottomSheet extends StatelessWidget {
     required this.recolorOpenMarker,
     required this.setClosedLockIcon,
     required this.onEditedParty,
+    this.isBarAccount = false, // NEU: Bar-Account-Flag
   });
 
   final String partyId;
@@ -68,6 +69,9 @@ class PartyBottomSheet extends StatelessWidget {
   final void Function(String? status) setClosedLockIcon;
 
   final VoidAsync onEditedParty;
+
+  // NEU: ist das ein Bar-Account?
+  final bool isBarAccount;
 
   // -------- User ausladen (alle Typen) --------
   Future<void> _confirmKickUser(BuildContext context, String username) async {
@@ -204,7 +208,7 @@ class PartyBottomSheet extends StatelessWidget {
     final start = _partyStartFromData();
     if (start == null) return const SizedBox.shrink();
 
-    // 24h ab Partybeginn
+    // 24h ab Partybeginn (hier 23h, wie bei dir)
     final cutoff = start.add(const Duration(hours: 23));
 
     // Vor Partybeginn nicht länger als 24h anzeigen:
@@ -333,8 +337,8 @@ class PartyBottomSheet extends StatelessWidget {
             children: [
               infoRow(Icons.event, "🗓️ Datum", formattedDate),
               const SizedBox(height: 8),
-              infoRow(Icons.schedule, "⏰ Uhrzeit",
-                  (data['time'] ?? '—').toString()),
+              infoRow(
+                  Icons.schedule, "⏰ Uhrzeit", (data['time'] ?? '—').toString()),
               const SizedBox(height: 8),
               infoRow(Icons.people, "👥 Gästelimit",
                   (data['guestLimit'] ?? '—').toString()),
@@ -573,6 +577,35 @@ class PartyBottomSheet extends StatelessWidget {
 
   // ---------- Guest Open ----------
   Widget _guestOpenActions(BuildContext context) {
+    // NEU: Bar-Accounts sehen bei fremden Partys keine „Ich komme“-Buttons
+    if (isBarAccount && !isHost) {
+      // Nur Zähler anzeigen
+      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: comingStream(),
+        builder: (context, cs) {
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: maybeStream(),
+            builder: (context, ms) {
+              final cCount = (cs.data?.docs ?? []).length;
+              final mCount = (ms.data?.docs ?? []).length;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    "Bar-Accounts können bei fremden Partys keine Zusage setzen.",
+                    style: TextStyle(color: Colors.white60),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  _counter("🔔 $cCount kommen · $mCount vielleicht"),
+                ],
+              );
+            },
+          );
+        },
+      );
+    }
+
     if (currentUsername == null) {
       return const Text(
         "Bitte in den Einstellungen Vor- & Nachname setzen, um zuzusagen.",

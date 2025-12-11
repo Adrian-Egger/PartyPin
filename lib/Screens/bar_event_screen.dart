@@ -118,11 +118,11 @@ class _BarEventScreenState extends State<BarEventScreen> {
     required bool openEnd,
     required String endTimeStr,
   }) {
-    // dein "Start" im System = eventDate - 1h
+    // "Start" im System = eventDate - 1h (gleiche Logik wie im BottomSheet)
     final start = startDateTime.subtract(const Duration(hours: 1));
 
     if (openEnd) {
-      // Open End → Timer/Cleanup 12h ab Start
+      // Open End → Cleanup 12h ab Start
       return start.add(const Duration(hours: 12));
     }
 
@@ -152,6 +152,41 @@ class _BarEventScreenState extends State<BarEventScreen> {
     return end;
   }
 
+  /// Wirkliches Aufräumen in Firestore + Bilder löschen
+  Future<void> _clearEventOnFirestore(
+      Map<String, dynamic> data,
+      DocumentReference<Map<String, dynamic>> barRef,
+      ) async {
+    // Bilder aus eventSections löschen
+    final sections = _safeSections(data['eventSections']);
+    for (final s in sections) {
+      final url = (s['imageUrl'] ?? '').toString().trim();
+      await _deleteImageFromStorage(url);
+    }
+
+    // Alle Event-Felder killen + Sections auf leeres Array
+    await barRef.update({
+      'eventActive': false,
+      'eventTitle': FieldValue.delete(),
+      'eventTagline': FieldValue.delete(),
+      'eventDescription': FieldValue.delete(),
+      'eventDate': FieldValue.delete(),
+      'eventTime': FieldValue.delete(),
+      'eventEndTime': FieldValue.delete(),
+      'eventOpenEnd': FieldValue.delete(),
+      'eventSections': <Map<String, dynamic>>[],
+      'eventUpdatedAt': FieldValue.delete(),
+      'eventEntry': FieldValue.delete(),
+      'eventEntryEnabled': FieldValue.delete(),
+      'eventAge': FieldValue.delete(),
+      'eventAgeEnabled': FieldValue.delete(),
+      'eventMusic': FieldValue.delete(),
+      'eventMusicEnabled': FieldValue.delete(),
+      'eventDresscode': FieldValue.delete(),
+      'eventDresscodeEnabled': FieldValue.delete(),
+    });
+  }
+
   Future<void> _loadExistingEvent() async {
     final barRef =
     FirebaseFirestore.instance.collection('bars').doc(widget.barId);
@@ -160,7 +195,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
 
     if (!mounted) return;
 
-    // kein Event vorhanden → leeres Formular mit 1 Reihe
+    // kein Bar-Dokument → Formular leer
     if (data == null) {
       setState(() {
         _resetFormState();
@@ -168,7 +203,9 @@ class _BarEventScreenState extends State<BarEventScreen> {
       return;
     }
 
-    // ------------------- AUTO-CLEANUP: Event abgelaufen? -------------------
+    final bool eventActive = data['eventActive'] == true;
+
+    // eventDate lesen
     DateTime? eventDateTime;
     final rawDate = data['eventDate'];
     if (rawDate is Timestamp) {
@@ -181,7 +218,9 @@ class _BarEventScreenState extends State<BarEventScreen> {
     final String storedEndTimeStr =
     (data['eventEndTime'] ?? '').toString().trim();
 
-    if (eventDateTime != null) {
+    // ------------------- AUTO-CLEANUP: Event abgelaufen? -------------------
+    bool shouldCleanup = false;
+    if (eventActive && eventDateTime != null) {
       final endForCleanup = _computeEventEndForCleanup(
         startDateTime: eventDateTime,
         openEnd: storedOpenEnd,
@@ -189,49 +228,34 @@ class _BarEventScreenState extends State<BarEventScreen> {
       );
 
       if (DateTime.now().isAfter(endForCleanup)) {
-        // zuerst Bilder aus eventSections löschen
-        final sections = _safeSections(data['eventSections']);
-        for (final s in sections) {
-          final url = (s['imageUrl'] ?? '').toString().trim();
-          await _deleteImageFromStorage(url);
-        }
-
-        // Event-Daten in Firestore aufräumen (alles leer machen)
-        await barRef.update({
-          'eventActive': false,
-          'eventTitle': FieldValue.delete(),
-          'eventTagline': FieldValue.delete(),
-          'eventDescription': FieldValue.delete(),
-          'eventDate': FieldValue.delete(),
-          'eventTime': FieldValue.delete(),
-          'eventEndTime': FieldValue.delete(),
-          'eventOpenEnd': FieldValue.delete(),
-          'eventSections': FieldValue.delete(),
-          'eventUpdatedAt': FieldValue.delete(),
-          'eventEntry': FieldValue.delete(),
-          'eventEntryEnabled': FieldValue.delete(),
-          'eventAge': FieldValue.delete(),
-          'eventAgeEnabled': FieldValue.delete(),
-          'eventMusic': FieldValue.delete(),
-          'eventMusicEnabled': FieldValue.delete(),
-          'eventDresscode': FieldValue.delete(),
-          'eventDresscodeEnabled': FieldValue.delete(),
-        });
-
-        // Formular lokal leeren
-        setState(() {
-          _resetFormState();
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Das Event ist abgelaufen. Alle Event-Daten und Bilder wurden gelöscht.',
-            ),
-          ),
-        );
-        return;
+        shouldCleanup = true;
       }
+    }
+
+    if (shouldCleanup) {
+      await _clearEventOnFirestore(data, barRef);
+
+      if (!mounted) return;
+      setState(() {
+        _resetFormState();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Das Event ist abgelaufen. Alle Event-Daten (inkl. Bilder) wurden gelöscht.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Wenn kein aktives Event oder kein Datum → Formular wie frisch
+    if (!eventActive || eventDateTime == null) {
+      setState(() {
+        _resetFormState();
+      });
+      return;
     }
 
     // ------------------- Event noch gültig → in Formular laden -------------------
@@ -246,27 +270,30 @@ class _BarEventScreenState extends State<BarEventScreen> {
       _dresscodeCtrl.text = (data['eventDresscode'] ?? '').toString();
       _ageCtrl.text = (data['eventAge'] ?? '').toString();
 
-      _showMusic =
-      data['eventMusicEnabled'] is bool ? data['eventMusicEnabled'] : true;
-      _showEntry =
-      data['eventEntryEnabled'] is bool ? data['eventEntryEnabled'] : true;
+      _showMusic = data['eventMusicEnabled'] is bool
+          ? data['eventMusicEnabled']
+          : true;
+      _showEntry = data['eventEntryEnabled'] is bool
+          ? data['eventEntryEnabled']
+          : true;
       _showDresscode = data['eventDresscodeEnabled'] is bool
           ? data['eventDresscodeEnabled']
           : true;
-      _showAge =
-      data['eventAgeEnabled'] is bool ? data['eventAgeEnabled'] : true;
+      _showAge = data['eventAgeEnabled'] is bool
+          ? data['eventAgeEnabled']
+          : true;
 
       _openEnd = storedOpenEnd;
 
-      if (eventDateTime != null) {
-        _selectedDate = DateTime(
-          eventDateTime.year,
-          eventDateTime.month,
-          eventDateTime.day,
-        );
-        _selectedTime = TimeOfDay.fromDateTime(eventDateTime);
-      }
+      // Startzeit ins Formular holen
+      _selectedDate = DateTime(
+        eventDateTime!.year,
+        eventDateTime.month,
+        eventDateTime.day,
+      );
+      _selectedTime = TimeOfDay.fromDateTime(eventDateTime);
 
+      // Endzeit, falls vorhanden und kein Open End
       if (!_openEnd && storedEndTimeStr.contains(':')) {
         final parts = storedEndTimeStr.split(':');
         final h = int.tryParse(parts[0]) ?? 0;
@@ -276,11 +303,13 @@ class _BarEventScreenState extends State<BarEventScreen> {
         _selectedEndTime = null;
       }
 
+      // Sections laden
       final sections = _safeSections(data['eventSections']);
       _sections.clear();
       for (var i = 0; i < sections.length; i++) {
         final s = sections[i];
-        final ctrl = TextEditingController(text: (s['text'] ?? '').toString());
+        final ctrl =
+        TextEditingController(text: (s['text'] ?? '').toString());
         _sections.add(
           _EventSection(
             textCtrl: ctrl,
@@ -988,8 +1017,9 @@ class _BarEventScreenState extends State<BarEventScreen> {
               ),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children:
-                s.imageLeft ? rowChildren : rowChildren.reversed.toList(),
+                children: s.imageLeft
+                    ? rowChildren
+                    : rowChildren.reversed.toList(),
               ),
             ],
           ),

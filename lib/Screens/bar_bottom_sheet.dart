@@ -1,49 +1,7 @@
 // lib/widgets/bar_bottom_sheet.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-
-/// Gemeinsame Helfer für Start/Ende-Logik (gleich wie im Admin-Screen gedacht)
-DateTime _computeEventStart(DateTime eventDateTime) {
-  // dein "realer" Start = eventDate - 1h
-  return eventDateTime.subtract(const Duration(hours: 1));
-}
-
-DateTime _computeEventEnd(
-    DateTime eventDateTime,
-    bool openEnd,
-    String endTimeStr,
-    ) {
-  final start = _computeEventStart(eventDateTime);
-
-  if (openEnd) {
-    // Open End → 12h ab Start
-    return start.add(const Duration(hours: 12));
-  }
-
-  // Wenn keine valide Endzeit: fallback 12h ab Start
-  if (!endTimeStr.contains(':')) {
-    return start.add(const Duration(hours: 12));
-  }
-
-  final parts = endTimeStr.split(':');
-  final h = int.tryParse(parts[0]) ?? 0;
-  final m = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
-
-  var end = DateTime(
-    eventDateTime.year,
-    eventDateTime.month,
-    eventDateTime.day,
-    h,
-    m,
-  );
-
-  // Falls Endzeit vor Start (z. B. über Mitternacht) → +1 Tag
-  if (end.isBefore(start)) {
-    end = end.add(const Duration(days: 1));
-  }
-
-  return end;
-}
 
 class BarBottomSheet extends StatefulWidget {
   final String barId;
@@ -95,9 +53,8 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     final double? ratingAvg = barData['ratingAvg'] != null
         ? (barData['ratingAvg'] as num).toDouble()
         : null;
-    final int ratingCount = barData['ratingCount'] != null
-        ? (barData['ratingCount'] as num).toInt()
-        : 0;
+    final int ratingCount =
+    barData['ratingCount'] != null ? (barData['ratingCount'] as num).toInt() : 0;
 
     // Öffnungszeiten + Bar-Highlights aus Firestore
     final Map<String, dynamic>? openingHoursRaw =
@@ -118,10 +75,6 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     } else if (rawDate is String) {
       eventDateTime = DateTime.tryParse(rawDate);
     }
-
-    final bool eventOpenEnd = barData['eventOpenEnd'] == true;
-    final String eventEndTimeStr =
-    (barData['eventEndTime'] ?? '').toString().trim();
 
     final String eventTitle =
     (barData['eventTitle'] ?? '').toString().trim();
@@ -164,23 +117,22 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     // ---------- Event-Status-Logik ----------
     final now = DateTime.now();
     bool hasEvent = eventActive && eventDateTime != null;
-    bool showEventCard = false; // 2 Tage davor bis Event-Ende
-    bool eventRunningWindow = false; // Start bis Event-Ende
-
-    DateTime? eventStartUi;
-    DateTime? eventEndUi;
+    bool showEventCard = false; // 2 Tage davor bis 12h nach Start
+    bool eventRunning12hWindow = false; // Start bis +12h
 
     if (hasEvent) {
-      eventStartUi = _computeEventStart(eventDateTime!);
-      eventEndUi = _computeEventEnd(eventDateTime!, eventOpenEnd, eventEndTimeStr);
-      final twoDaysBefore = eventStartUi.subtract(const Duration(days: 2));
+      final startRaw = eventDateTime!;
+      // Korrektur: Event real 1h früher
+      final start = startRaw.subtract(const Duration(hours: 1));
+      final twoDaysBefore = start.subtract(const Duration(days: 2));
+      final twelveAfter = start.add(const Duration(hours: 12));
 
-      if (now.isAfter(twoDaysBefore) && now.isBefore(eventEndUi)) {
+      if (now.isAfter(twoDaysBefore) && now.isBefore(twelveAfter)) {
         showEventCard = true;
       }
 
-      if (now.isAfter(eventStartUi) && now.isBefore(eventEndUi)) {
-        eventRunningWindow = true;
+      if (now.isAfter(start) && now.isBefore(twelveAfter)) {
+        eventRunning12hWindow = true;
       }
     }
 
@@ -205,7 +157,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     }
 
     final bool showAnyEventUi =
-        hasEvent && showEventCard && eventDateTime != null && eventEndUi != null;
+        hasEvent && showEventCard && eventDateTime != null;
 
     return Padding(
       padding: EdgeInsets.only(
@@ -248,8 +200,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.star,
-                      color: Colors.amber, size: 18),
+                  const Icon(Icons.star, color: Colors.amber, size: 18),
                   const SizedBox(width: 4),
                   Text(
                     ratingAvg.toStringAsFixed(1),
@@ -290,19 +241,6 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                     ),
                   ),
                 ],
-              ),
-            const SizedBox(height: 10),
-            if (description.trim().isNotEmpty)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  description,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
-                    height: 1.4,
-                  ),
-                ),
               ),
             const SizedBox(height: 18),
 
@@ -348,8 +286,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
               _buildEventInfoCard(
                 context: context,
                 eventDateTime: eventDateTime!,
-                eventEndDateTime: eventEndUi!,
-                eventRunning: eventRunningWindow,
+                eventRunning: eventRunning12hWindow,
                 eventData: barData,
                 entryText: entryText,
                 ageText: ageText,
@@ -369,7 +306,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
 
             const SizedBox(height: 12),
 
-            // Beispiel: Feedbackstream unterhalb (kannst du einbauen, wo du willst)
+            // Beispiel: Feedbackstream unterhalb (optional)
             // BarFeedbackStream(barId: widget.barId),
           ],
         ),
@@ -436,7 +373,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Beschreibung
+          // Beschreibung (nur hier!)
           Text(
             description.trim().isNotEmpty
                 ? description
@@ -598,7 +535,6 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
   Widget _buildEventInfoCard({
     required BuildContext context,
     required DateTime eventDateTime,
-    required DateTime eventEndDateTime,
     required bool eventRunning,
     required Map<String, dynamic> eventData,
     required String entryText,
@@ -611,15 +547,17 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     required String eventDesc,
   }) {
     final now = DateTime.now();
-    final start = _computeEventStart(eventDateTime);
-    final end = eventEndDateTime;
+    final startRaw = eventDateTime;
+    // Korrektur: -1h
+    final start = startRaw.subtract(const Duration(hours: 1));
+    final twelveAfter = start.add(const Duration(hours: 12));
 
     String label;
     if (now.isBefore(start)) {
       final diff = start.difference(now);
       label = '⏱️ Event startet in ${_formatDuration(diff)}';
-    } else if (now.isAfter(start) && now.isBefore(end)) {
-      final diff = end.difference(now);
+    } else if (now.isAfter(start) && now.isBefore(twelveAfter)) {
+      final diff = twelveAfter.difference(now);
       label = '🔥 Event läuft noch ${_formatDuration(diff)}';
     } else {
       label = 'Event ist bereits vorbei.';
@@ -664,11 +602,13 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
           const SizedBox(height: 8),
           Row(
             children: [
-              const Icon(Icons.calendar_month, color: Colors.white70, size: 18),
+              const Icon(Icons.calendar_month,
+                  color: Colors.white70, size: 18),
               const SizedBox(width: 6),
               Text(
                 '$dateStr · $timeStr',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style:
+                const TextStyle(color: Colors.white70, fontSize: 13),
               ),
             ],
           ),
@@ -676,7 +616,8 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
           const SizedBox(height: 10),
           // Timer/Status-Zeile
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
               color: Colors.black.withOpacity(0.35),
               borderRadius: BorderRadius.circular(999),
@@ -685,7 +626,8 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.timer, color: Colors.redAccent, size: 18),
+                const Icon(Icons.timer,
+                    color: Colors.redAccent, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -701,7 +643,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
           ),
 
           const SizedBox(height: 10),
-          // Info-Chips – OHNE Untertitel/Beschreibung, damit es clean bleibt
+          // Info-Chips
           Wrap(
             spacing: 6,
             runSpacing: 6,
@@ -714,15 +656,15 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
           ),
           const SizedBox(height: 12),
 
-          // Nur der Event-Infos Button rechts
+          // Event-Infos Button
           Align(
             alignment: Alignment.centerRight,
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.redAccent,
                 foregroundColor: Colors.white,
-                padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(999),
                 ),
@@ -740,8 +682,8 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
               },
               child: const Text(
                 'Event-Infos',
-                style:
-                TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600),
               ),
             ),
           ),
@@ -788,10 +730,6 @@ class EventBottomSheet extends StatelessWidget {
       eventDateTime = DateTime.tryParse(rawDate);
     }
 
-    final bool eventOpenEnd = eventData['eventOpenEnd'] == true;
-    final String eventEndTimeStr =
-    (eventData['eventEndTime'] ?? '').toString().trim();
-
     final String eventTitle =
     (eventData['eventTitle'] ?? '').toString().trim();
     final String eventTagline =
@@ -836,24 +774,25 @@ class EventBottomSheet extends StatelessWidget {
     bool ratingAllowed = false; // Bewertung ab Start bis +12h
 
     if (hasEvent) {
-      final start = _computeEventStart(eventDateTime!);
-      final endUi =
-      _computeEventEnd(eventDateTime!, eventOpenEnd, eventEndTimeStr);
+      final startRaw = eventDateTime!;
+      // Korrektur: -1h
+      final start = startRaw.subtract(const Duration(hours: 1));
       final twoDaysBefore = start.subtract(const Duration(days: 2));
-      final ratingEnd = start.add(const Duration(hours: 12));
+      final twelveAfter = start.add(const Duration(hours: 12));
+      final twentyFourAfter = start.add(const Duration(hours: 24));
 
-      // EventBottomSheet sichtbar: 2 Tage vorher bis Event-Ende
-      if (now.isBefore(twoDaysBefore) || now.isAfter(endUi)) {
+      // EventBottomSheet sichtbar: 2 Tage vorher bis 24h nach Start
+      if (now.isBefore(twoDaysBefore) || now.isAfter(twentyFourAfter)) {
         hasEvent = false;
       }
 
-      // "läuft" im Sinne von BottomSheet: ab Start bis Event-Ende
-      if (now.isAfter(start) && now.isBefore(endUi)) {
+      // "läuft" im Sinne von BottomSheet: ab Start bis 24h
+      if (now.isAfter(start) && now.isBefore(twentyFourAfter)) {
         eventRunning = true;
       }
 
-      // Bewertung: ab Start bis +12h
-      if (now.isAfter(start) && now.isBefore(ratingEnd)) {
+      // Bewertung: ab Start bis 12h
+      if (now.isAfter(start) && now.isBefore(twelveAfter)) {
         ratingAllowed = true;
       }
     }
@@ -951,6 +890,9 @@ class EventDetailsCard extends StatelessWidget {
     required this.ratingAllowed,
   });
 
+  String get _eventKey =>
+      eventDateTime.toUtc().millisecondsSinceEpoch.toString();
+
   @override
   Widget build(BuildContext context) {
     final dateStr =
@@ -1023,11 +965,12 @@ class EventDetailsCard extends StatelessWidget {
               const SizedBox(width: 6),
               Text(
                 '$dateStr · $timeStr',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style:
+                const TextStyle(color: Colors.white70, fontSize: 13),
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
 
           // "Voll" ausgeschriebene Infos mit farbigen Emojis
           _infoRow('💸', Colors.greenAccent, 'Eintritt', entryText),
@@ -1036,7 +979,8 @@ class EventDetailsCard extends StatelessWidget {
           const SizedBox(height: 6),
           _infoRow('🎵', Colors.lightBlueAccent, 'Musik', musicText),
           const SizedBox(height: 6),
-          _infoRow('👗', Colors.deepPurpleAccent, 'Dresscode', dresscodeText),
+          _infoRow(
+              '👗', Colors.deepPurpleAccent, 'Dresscode', dresscodeText),
 
           const SizedBox(height: 16),
 
@@ -1056,6 +1000,10 @@ class EventDetailsCard extends StatelessWidget {
                 ),
               ),
             ),
+
+          // Durchschnitt/Anzahl nur für dieses Event
+          const SizedBox(height: 16),
+          _EventRatingSummary(barId: barId, eventKey: _eventKey),
 
           if (sections.isNotEmpty) ...[
             const SizedBox(height: 18),
@@ -1091,8 +1039,8 @@ class EventDetailsCard extends StatelessWidget {
                 icon: const Icon(Icons.star_rate_rounded, size: 18),
                 label: const Text(
                   'Event / Bar bewerten ⭐',
-                  style:
-                  TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600),
                 ),
               ),
             ),
@@ -1175,15 +1123,19 @@ class EventDetailsCard extends StatelessWidget {
                       fillColor: Color(0xFF141A22),
                       border: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white24),
-                        borderRadius: BorderRadius.all(Radius.circular(12)),
+                        borderRadius:
+                        BorderRadius.all(Radius.circular(12)),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white24),
-                        borderRadius: BorderRadius.all(Radius.circular(12)),
+                        borderRadius:
+                        BorderRadius.all(Radius.circular(12)),
                       ),
                       focusedBorder: OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.redAccent),
-                        borderRadius: BorderRadius.all(Radius.circular(12)),
+                        borderSide:
+                        BorderSide(color: Colors.redAccent),
+                        borderRadius:
+                        BorderRadius.all(Radius.circular(12)),
                       ),
                     ),
                   ),
@@ -1238,40 +1190,67 @@ class EventDetailsCard extends StatelessWidget {
       int rating,
       String? comment,
       ) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Bitte logge dich ein, um zu bewerten.'),
+        ),
+      );
+      return;
+    }
+
+    final uid = user.uid;
+    final userName = user.displayName?.trim().isNotEmpty == true
+        ? user.displayName!.trim()
+        : 'Unbekannter Nutzer';
+
+    final firestore = FirebaseFirestore.instance;
+    final barRef = firestore.collection('bars').doc(barId);
+    final feedbackRef = barRef.collection('eventFeedback');
+
+    // Eindeutige Event-ID (Key) + eindeutige Bewertungs-ID (Event + User)
+    final String eventKey =
+    eventDateTime.toUtc().millisecondsSinceEpoch.toString();
+    final String docId = '${eventKey}_$uid';
+
     try {
-      final firestore = FirebaseFirestore.instance;
-      final barRef = firestore.collection('bars').doc(barId);
-      final feedbackRef = barRef.collection('feedback');
+      // 1) Pro User + Event genau EIN Dokument (wird überschrieben)
+      await feedbackRef.doc(docId).set(
+        {
+          'rating': rating,
+          'comment': comment?.trim(),
+          'createdAt': FieldValue.serverTimestamp(),
+          'eventDate': eventDateTime,
+          'eventTitle': title,
+          'userId': uid,
+          'userName': userName,
+          'eventKey': eventKey,
+        },
+        SetOptions(merge: true),
+      );
 
-      // Feedback-Dokument hinzufügen (für Feedbackstream)
-      await feedbackRef.add({
-        'rating': rating,
-        'comment': comment?.trim(),
-        'createdAt': FieldValue.serverTimestamp(),
-        'eventDateTime': eventDateTime,
-      });
+      // 2) Bar-Durchschnitt neu berechnen (über ALLE Feedbacks der Bar)
+      final allSnap = await feedbackRef.get();
+      double sum = 0;
+      int count = 0;
+      for (final doc in allSnap.docs) {
+        final data = doc.data();
+        final r = data['rating'];
+        if (r == null) continue;
+        final int? rr = r is int ? r : int.tryParse(r.toString());
+        if (rr == null || rr < 1 || rr > 5) continue;
+        sum += rr;
+        count++;
+      }
 
-      // Durchschnittsrating + Count auf der Bar updaten
-      await firestore.runTransaction((tx) async {
-        final snap = await tx.get(barRef);
-        final data =
-            snap.data() as Map<String, dynamic>? ?? {};
-        final double oldAvg = data['ratingAvg'] != null
-            ? (data['ratingAvg'] as num).toDouble()
-            : 0.0;
-        final int oldCount = data['ratingCount'] != null
-            ? (data['ratingCount'] as num).toInt()
-            : 0;
-
-        final int newCount = oldCount + 1;
-        final double newAvg =
-            ((oldAvg * oldCount) + rating) / newCount;
-
-        tx.set(barRef, {
-          'ratingAvg': newAvg,
-          'ratingCount': newCount,
-        }, SetOptions(merge: true));
-      });
+      await barRef.set(
+        {
+          'ratingAvg': count > 0 ? sum / count : null,
+          'ratingCount': count,
+        },
+        SetOptions(merge: true),
+      );
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1366,9 +1345,8 @@ class EventDetailsCard extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: 10),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: imageLeft
-                ? rowChildren
-                : rowChildren.reversed.toList(),
+            children:
+            imageLeft ? rowChildren : rowChildren.reversed.toList(),
           ),
         ),
       );
@@ -1428,6 +1406,97 @@ class EventDetailsCard extends StatelessWidget {
   }
 }
 
+class _EventRatingSummary extends StatelessWidget {
+  final String barId;
+  final String eventKey;
+
+  const _EventRatingSummary({
+    super.key,
+    required this.barId,
+    required this.eventKey,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final query = FirebaseFirestore.instance
+        .collection('bars')
+        .doc(barId)
+        .collection('eventFeedback')
+        .where('eventKey', isEqualTo: eventKey);
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: query.snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Row(
+            children: const [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Bewertungen werden geladen ...',
+                style: TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            ],
+          );
+        }
+
+        if (snapshot.hasError) {
+          return const Text(
+            'Fehler beim Laden der Bewertungen.',
+            style: TextStyle(color: Colors.white54, fontSize: 12),
+          );
+        }
+
+        final docs = snapshot.data?.docs ?? [];
+        if (docs.isEmpty) {
+          return const Text(
+            'Noch keine Bewertungen für dieses Event.',
+            style: TextStyle(color: Colors.white54, fontSize: 12),
+          );
+        }
+
+        double sum = 0;
+        for (final d in docs) {
+          final r = d.data()['rating'];
+          if (r == null) continue;
+          final int? rr = r is int ? r : int.tryParse(r.toString());
+          if (rr == null || rr < 1 || rr > 5) continue;
+          sum += rr;
+        }
+        final count = docs.length;
+        final avg = sum / count;
+
+        return Row(
+          children: [
+            const Icon(Icons.star, color: Colors.amber, size: 18),
+            const SizedBox(width: 4),
+            Text(
+              '${avg.toStringAsFixed(1)} / 5',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '($count Bewertungen)',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class NoEventCard extends StatelessWidget {
   const NoEventCard({super.key});
 
@@ -1457,7 +1526,7 @@ class NoEventCard extends StatelessWidget {
   }
 }
 
-/// Feedbackstream für eine Bar
+/// Feedbackstream für eine Bar (optional)
 class BarFeedbackStream extends StatelessWidget {
   final String barId;
 
@@ -1471,7 +1540,7 @@ class BarFeedbackStream extends StatelessWidget {
     final feedbackQuery = FirebaseFirestore.instance
         .collection('bars')
         .doc(barId)
-        .collection('feedback')
+        .collection('eventFeedback')
         .orderBy('createdAt', descending: true);
 
     return StreamBuilder<QuerySnapshot>(
@@ -1515,8 +1584,7 @@ class BarFeedbackStream extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             ...docs.map((d) {
-              final data =
-                  d.data() as Map<String, dynamic>? ?? {};
+              final data = d.data() as Map<String, dynamic>? ?? {};
               final rating = data['rating'] != null
                   ? (data['rating'] as num).toInt()
                   : 0;

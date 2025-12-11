@@ -25,6 +25,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _barNameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _availabilityController = TextEditingController(); // NEU
 
   final _vornameNode = FocusNode();
   final _nachnameNode = FocusNode();
@@ -36,7 +38,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   bool _usernameTaken = false;
   bool _usernameChecked = false;
 
-  // false = normaler User, true = Bar/Lokal
+  // false = Privat, true = Unternehmen/Lokal
   bool _isBar = false;
 
   int _selectedDay = 1;
@@ -54,16 +56,17 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   static const _accent = Color(0xFFFF3B30);
   static const _secondary = Color(0xFF00C2A8);
 
-  // Nur Felder, die aktuell angezeigt werden, müssen ausgefüllt sein
   bool get _isFormFilled {
     if (_isBar) {
-      // Bar / Lokal
+      // Unternehmen / Lokal
       return _barNameController.text.trim().isNotEmpty &&
           _usernameController.text.trim().isNotEmpty &&
           _passwordController.text.trim().isNotEmpty &&
-          _emailController.text.trim().isNotEmpty;
+          _emailController.text.trim().isNotEmpty &&
+          _phoneController.text.trim().isNotEmpty &&
+          _availabilityController.text.trim().isNotEmpty; // Erreichbarkeit Pflicht
     } else {
-      // normaler User
+      // Privat
       return _vornameController.text.trim().isNotEmpty &&
           _nachnameController.text.trim().isNotEmpty &&
           _usernameController.text.trim().isNotEmpty &&
@@ -153,6 +156,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     _nachnameController.addListener(_onFieldChanged);
     _barNameController.addListener(_onFieldChanged);
     _emailController.addListener(_onFieldChanged);
+    _phoneController.addListener(_onFieldChanged);
+    _availabilityController.addListener(_onFieldChanged);
   }
 
   @override
@@ -163,6 +168,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     _passwordController.dispose();
     _barNameController.dispose();
     _emailController.dispose();
+    _phoneController.dispose();
+    _availabilityController.dispose();
     _vornameNode.dispose();
     _nachnameNode.dispose();
     _usernameNode.dispose();
@@ -173,7 +180,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   Future<void> _maybeShowRealNameHint() async {
     final prefs = await SharedPreferences.getInstance();
     final dismissed = prefs.getBool('realNameHintDismissed') ?? false;
-    if (dismissed || !mounted) return;
+    if (dismissed || !mounted || _isBar) return;
 
     bool dontShowAgain = false;
 
@@ -193,8 +200,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
               SizedBox(width: 8),
               Text(
                 "Echten Namen verwenden",
-                style:
-                TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                    color: _textPrimary, fontWeight: FontWeight.w700),
               ),
             ],
           ),
@@ -316,6 +323,24 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     if (_isBar) {
       if (val.isEmpty) return "Pflichtfeld";
       if (!val.contains("@")) return "Ungültige E-Mail";
+    }
+    return null;
+  }
+
+  String? _phoneValidator(String? v) {
+    final val = v?.trim() ?? '';
+    if (_isBar) {
+      if (val.isEmpty) return "Pflichtfeld";
+      if (val.length < 6) return "Zu kurz";
+    }
+    return null;
+  }
+
+  String? _availabilityValidator(String? v) {
+    final val = v?.trim() ?? '';
+    if (_isBar) {
+      if (val.isEmpty) return "Pflichtfeld";
+      if (val.length < 4) return "Zu kurz";
     }
     return null;
   }
@@ -517,7 +542,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
       if (query.docs.isNotEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Dieser Username ist bereits vergeben!")),
+          const SnackBar(content: Text("Dieser Benutzername ist bereits vergeben.")),
         );
         setState(() {
           _isSaving = false;
@@ -527,37 +552,24 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         return;
       }
 
-      final prefs = await SharedPreferences.getInstance();
-
       if (_isBar) {
+        // Unternehmen: kommt in barAnfragen, KEIN direkter Login
         final barName = _barNameController.text.trim();
         final email = _emailController.text.trim();
-        final docId = username;
+        final phone = _phoneController.text.trim();
+        final availability = _availabilityController.text.trim();
 
-        await FirebaseFirestore.instance.collection("bars").doc(docId).set({
+        await FirebaseFirestore.instance.collection("barAnfragen").add({
           "createdAt": FieldValue.serverTimestamp(),
           "barName": barName,
           "username": username,
           "username_lower": username.toLowerCase(),
-          "password": password,
           "email": email,
-
-          // Vorbereitung für späteren Telefonlogin:
-          "phoneNumber": null,
-          "phoneVerified": false,
-          "authVersion": 1, // 1 = Username/Passwort-Login
-
-          "status": "pending",
+          "phoneNumber": phone,
+          "availabilityNote": availability, // NEU: Erreichbarkeit
+          "requestedPassword": password,
+          "status": "open",
         });
-
-        await prefs.setBool("isBar", true);
-        await prefs.setString("barName", barName);
-        await prefs.setString("username", username);
-        await prefs.setBool("isLoggedIn", true);
-        await prefs.setString("currentUsername", username);
-        await prefs.setInt("authVersion", 1);
-        await prefs.setBool("phoneVerified", false);
-        await prefs.remove("phoneNumber");
 
         if (!mounted) return;
 
@@ -565,23 +577,23 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           context: context,
           builder: (_) => AlertDialog(
             backgroundColor: _panel,
-            shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
             title: const Text(
-              "Account wird konfiguriert",
+              "Antrag eingereicht",
               style: TextStyle(color: _textPrimary),
             ),
             content: const Text(
-              "Wir richten deinen Bar-Account ein und prüfen deine Daten.\n"
-                  "Wir melden uns telefonisch oder per E-Mail, sobald dein Account freigeschaltet ist.\n\n"
-                  "Du kannst die Map trotzdem schon nutzen und deine Stadt auswählen.",
+              "Dein Antrag für einen Unternehmens-Account wurde an das PartyPin-Team gesendet.\n\n"
+                  "Wir prüfen deine Angaben und melden uns innerhalb deiner angegebenen Erreichbarkeitszeiten "
+                  "telefonisch oder per E-Mail, sobald dein Account erstellt und freigeschaltet wurde.",
               style: TextStyle(color: _textSecondary),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
                 child: const Text(
-                  "Weiter",
+                  "Okay",
                   style: TextStyle(color: _textPrimary),
                 ),
               )
@@ -590,8 +602,14 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         );
 
         if (!mounted) return;
-        await _checkTermsAndSelection();
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+        );
       } else {
+        // Privatkonto
+        final prefs = await SharedPreferences.getInstance();
+
         final vorname = _vornameController.text.trim();
         final nachname = _nachnameController.text.trim();
         final birthDate =
@@ -602,7 +620,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-                content: Text("Du musst mindestens 12 Jahre alt sein!")),
+                content: Text("Du musst mindestens 12 Jahre alt sein.")),
           );
           setState(() => _isSaving = false);
           return;
@@ -624,11 +642,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
             "monat": _selectedMonth,
             "jahr": _selectedYear,
           },
-
-          // Vorbereitung für späteren Telefonlogin:
           "phoneNumber": null,
           "phoneVerified": false,
-          "authVersion": 1, // 1 = Username/Passwort-Login
+          "authVersion": 1,
         });
 
         await prefs.setString("vorname", vorname);
@@ -653,6 +669,107 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     }
   }
 
+  Widget _buildAccountTypeToggle() {
+    final bool isPrivat = !_isBar;
+    final bool isUnternehmen = _isBar;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Account-Typ",
+          style: TextStyle(
+            color: _textSecondary,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onHorizontalDragEnd: (_) {
+            setState(() {
+              _isBar = !_isBar;
+              _checkUsernameAvailability(_usernameController.text.trim());
+            });
+          },
+          child: Container(
+            decoration: BoxDecoration(
+              color: _card,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: _panelBorder),
+            ),
+            child: Row(
+              children: [
+                _buildToggleSegment(
+                  label: "Privat",
+                  selected: isPrivat,
+                  onTap: () {
+                    setState(() {
+                      _isBar = false;
+                      _checkUsernameAvailability(
+                          _usernameController.text.trim());
+                    });
+                  },
+                ),
+                _buildToggleSegment(
+                  label: "Unternehmen",
+                  selected: isUnternehmen,
+                  onTap: () {
+                    setState(() {
+                      _isBar = true;
+                      _checkUsernameAvailability(
+                          _usernameController.text.trim());
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _isBar
+              ? "Du stellst einen Antrag für einen Unternehmens-Account (z. B. Bar, Lokal, Veranstalter)."
+              : "Du erstellst ein Privatkonto.",
+          style: const TextStyle(
+            color: _textSecondary,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildToggleSegment({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            color: selected ? _accent : Colors.transparent,
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? _textPrimary : _textSecondary,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _cardForm() {
     return Form(
       key: _formKey,
@@ -664,9 +781,10 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           border: Border.all(color: _panelBorder),
           boxShadow: const [
             BoxShadow(
-                color: Color(0x33000000),
-                blurRadius: 14,
-                offset: Offset(0, 10)),
+              color: Color(0x33000000),
+              blurRadius: 14,
+              offset: Offset(0, 10),
+            ),
           ],
         ),
         child: Padding(
@@ -675,36 +793,29 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
             children: [
               const Icon(Icons.person_add, size: 52, color: _accent),
               const SizedBox(height: 8),
-
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  ChoiceChip(
-                    label: const Text('Normaler User'),
-                    selected: !_isBar,
-                    onSelected: (v) {
-                      setState(() {
-                        _isBar = false;
-                        _checkUsernameAvailability(
-                            _usernameController.text.trim());
-                      });
-                    },
-                  ),
-                  const SizedBox(width: 12),
-                  ChoiceChip(
-                    label: const Text('Lokal / Bar'),
-                    selected: _isBar,
-                    onSelected: (v) {
-                      setState(() {
-                        _isBar = true;
-                        _checkUsernameAvailability(
-                            _usernameController.text.trim());
-                      });
-                    },
-                  ),
-                ],
+              Text(
+                _isBar ? "Unternehmens-Antrag" : "Account erstellen",
+                style: const TextStyle(
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 22,
+                ),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 4),
+              Text(
+                _isBar
+                    ? "Stelle hier einen Antrag für einen offiziellen PartyPin-Unternehmens-Account."
+                    : "Wähle, ob du ein Privatkonto oder einen Unternehmens-Account erstellen möchtest.",
+                style: const TextStyle(
+                  color: _textSecondary,
+                  fontSize: 13,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+
+              _buildAccountTypeToggle(),
+              const SizedBox(height: 16),
 
               if (_isBar) ...[
                 TextFormField(
@@ -715,7 +826,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   ],
                   style: const TextStyle(color: _textPrimary),
                   decoration: _dec(
-                    label: "Name des Lokals / der Bar",
+                    label: "Name des Unternehmens / Lokals",
                     icon: Icons.storefront,
                     hint: "z. B. Club XY",
                   ),
@@ -733,13 +844,13 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   ],
                   style: const TextStyle(color: _textPrimary),
                   decoration: _dec(
-                      label: "Vorname",
-                      icon: Icons.person,
-                      hint: "z. B. Adrian"),
+                    label: "Vorname",
+                    icon: Icons.person,
+                    hint: "z. B. Adrian",
+                  ),
                   validator: _nameValidator,
                 ),
                 const SizedBox(height: 12),
-
                 TextFormField(
                   controller: _nachnameController,
                   focusNode: _nachnameNode,
@@ -750,9 +861,10 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   ],
                   style: const TextStyle(color: _textPrimary),
                   decoration: _dec(
-                      label: "Nachname",
-                      icon: Icons.person_outline,
-                      hint: "z. B. Egger"),
+                    label: "Nachname",
+                    icon: Icons.person_outline,
+                    hint: "z. B. Egger",
+                  ),
                   validator: _nameValidator,
                 ),
                 const SizedBox(height: 12),
@@ -765,7 +877,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                 onFieldSubmitted: (_) => _passwordNode.requestFocus(),
                 style: const TextStyle(color: _textPrimary),
                 decoration: _dec(
-                  label: "Username",
+                  label: "Benutzername",
                   icon: Icons.alternate_email,
                   hint: "3–20 Zeichen, a–z, 0–9, _.-",
                   suffix: _usernameController.text.isEmpty
@@ -782,7 +894,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                     child: Padding(
                       padding: EdgeInsets.all(2.0),
                       child: CircularProgressIndicator(
-                          strokeWidth: 2),
+                        strokeWidth: 2,
+                      ),
                     ),
                   )),
                 ),
@@ -805,10 +918,11 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                     onPressed: () =>
                         setState(() => _pwVisible = !_pwVisible),
                     icon: Icon(
-                        _pwVisible
-                            ? Icons.visibility_off
-                            : Icons.visibility,
-                        color: Colors.white70),
+                      _pwVisible
+                          ? Icons.visibility_off
+                          : Icons.visibility,
+                      color: Colors.white70,
+                    ),
                   ),
                 ),
                 validator: _passwordValidator,
@@ -822,11 +936,36 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   keyboardType: TextInputType.emailAddress,
                   style: const TextStyle(color: _textPrimary),
                   decoration: _dec(
-                    label: "E-Mail",
+                    label: "Geschäfts-E-Mail",
                     icon: Icons.email,
                     hint: "mail@club.at",
                   ),
                   validator: _emailValidator,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _phoneController,
+                  keyboardType: TextInputType.phone,
+                  style: const TextStyle(color: _textPrimary),
+                  decoration: _dec(
+                    label: "Telefonnummer",
+                    icon: Icons.phone,
+                    hint: "+43 ...",
+                  ),
+                  validator: _phoneValidator,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _availabilityController,
+                  keyboardType: TextInputType.text,
+                  maxLines: 2,
+                  style: const TextStyle(color: _textPrimary),
+                  decoration: _dec(
+                    label: "Erreichbar (Telefon / E-Mail)",
+                    icon: Icons.access_time,
+                    hint: "z. B. Mo–Fr 14–18 Uhr oder „Bitte nur per Mail“",
+                  ),
+                  validator: _availabilityValidator,
                 ),
                 const SizedBox(height: 16),
               ] else ...[
@@ -842,7 +981,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _accent,
                     disabledBackgroundColor:
-                    Colors.redAccent.withOpacity(0.4),
+                    _accent.withOpacity(0.4),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
@@ -855,13 +994,25 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                     child: CircularProgressIndicator(
                         color: Colors.white, strokeWidth: 2),
                   )
-                      : const Text("Account erstellen",
-                      style: TextStyle(
-                          fontSize: 17, fontWeight: FontWeight.bold)),
+                      : Text(
+                    _isBar ? "Antrag erstellen" : "Account erstellen",
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.bold),
+                  ),
                 ),
               ),
+              const SizedBox(height: 4),
+              if (_isBar)
+                const Text(
+                  "Mit Ihrem Antrag wird ein Unternehmens-Account beantragt. "
+                      "Das PartyPin-Team prüft Ihre Angaben und meldet sich innerhalb Ihrer angegebenen Erreichbarkeitszeiten🕜.",
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontSize: 11,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
               const SizedBox(height: 8),
-
               TextButton(
                 onPressed: _isSaving
                     ? null
@@ -873,7 +1024,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   );
                 },
                 child: const Text(
-                  "Ich habe schon einen Account",
+                  "Ich habe bereits einen Account",
                   style: TextStyle(
                       color: _textSecondary, fontWeight: FontWeight.w600),
                 ),

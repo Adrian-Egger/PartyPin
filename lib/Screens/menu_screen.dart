@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+
 import '../Services/language_services.dart';
 import '../Screens/party_map_screen.dart';
 import '../Screens/selection_screen.dart';
@@ -113,10 +115,10 @@ class MenuScreen extends StatelessWidget {
               icon: Icons.map,
               title: LanguageService.getText('party_map', lang),
               onTap: () async {
-                // Kosteneffizient: wenn unter dem Menü bereits die Map im Stack liegt,
+                // Wenn unter dem Menü bereits die Map im Stack liegt,
                 // einfach zurückpoppen statt eine neue PartyMapScreen zu erstellen.
                 if (Navigator.of(context).canPop()) {
-                  Navigator.of(context).pop(); // zurück zur bestehenden Map (oder Screen darunter)
+                  Navigator.of(context).pop();
                   return;
                 }
 
@@ -139,6 +141,21 @@ class MenuScreen extends StatelessWidget {
                 }
               },
             ),
+
+            // ---------- Premium-Eintrag ----------
+            _menuTile(
+              icon: Icons.workspace_premium,
+              title: "Premium ⭐",
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const PremiumScreen(),
+                  ),
+                );
+              },
+            ),
+
             _menuTile(
               icon: Icons.language,
               title: LanguageService.getText('change_language', lang),
@@ -174,7 +191,7 @@ class MenuScreen extends StatelessWidget {
                       "Bald verfügbar:\n\n"
                           "- Freunde-Feature ✔\n"
                           "- Benachrichtigungen\n"
-                          "- Premium-Accounts\n"
+                          "- Weitere Premium-Vorteile\n"
                           "- Chatting\n"
                           "- Eure Wünsche\n\n"
                           "Wir bitten um dein Feedback und deine Ideen, um unsere App nach deinen Wünschen zu gestalten!",
@@ -546,6 +563,347 @@ class SupportScreen extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ------------------- Premium Screen -------------------
+class PremiumScreen extends StatefulWidget {
+  const PremiumScreen({super.key});
+
+  @override
+  State<PremiumScreen> createState() => _PremiumScreenState();
+}
+
+class _PremiumScreenState extends State<PremiumScreen> {
+  String _selectedPlan = 'monthly'; // 'monthly' oder 'yearly'
+  bool _isLoading = false;
+  String? _lastOrderId;
+  String? _currentUsername;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUsername();
+  }
+
+  Future<void> _loadUsername() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _currentUsername = prefs.getString('currentUsername');
+    });
+  }
+
+  Future<void> _startPaypalCheckout() async {
+    if (_currentUsername == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Kein Username gefunden. Bitte neu einloggen.')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable('createPaypalOrder');
+      final result = await callable.call(<String, dynamic>{
+        'plan': _selectedPlan,
+        'username': _currentUsername,
+      });
+
+      final data = Map<String, dynamic>.from(result.data as Map);
+      final approvalUrl = data['approvalUrl']?.toString();
+      final orderId = data['orderId']?.toString();
+
+      if (approvalUrl == null || orderId == null) {
+        throw Exception('Ungültige Antwort von createPaypalOrder');
+      }
+
+      _lastOrderId = orderId;
+
+      final uri = Uri.parse(approvalUrl);
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw Exception('Konnte PayPal nicht öffnen.');
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'PayPal im Browser geöffnet. Bitte dort bezahlen und danach auf "Zahlung prüfen" tippen.',
+          ),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Fehler beim Starten der Zahlung: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _verifyPayment() async {
+    if (_lastOrderId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Keine Bestellung vorhanden. Bitte zuerst bezahlen.')),
+      );
+      return;
+    }
+    if (_currentUsername == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Kein Username gefunden.')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable('verifyPaypalOrder');
+      final result = await callable.call(<String, dynamic>{
+        'orderId': _lastOrderId,
+        'username': _currentUsername,
+        'plan': _selectedPlan,
+      });
+
+      final data = Map<String, dynamic>.from(result.data as Map);
+      final status = data['status']?.toString();
+
+      if (status == 'ok') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Premium aktiviert – viel Spaß! 🎉')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Zahlung noch nicht abgeschlossen: $status')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Fehler bei der Zahlungsprüfung: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const bg = Color(0xFF090B10);
+    const panel = Color(0xFF141A22);
+    const accentRed = Color(0xFFFF3B30);
+
+    return Scaffold(
+      backgroundColor: bg,
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF141A22),
+        title: const Text(
+          'Premium ⭐',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+        ),
+        centerTitle: true,
+      ),
+      body: _currentUsername == null
+          ? const Center(
+        child: Text(
+          'Kein Benutzer gefunden. Bitte neu einloggen.',
+          style: TextStyle(color: Colors.white70),
+        ),
+      )
+          : SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: panel,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: const Text(
+                'Mit PartyPin Premium siehst du, auf welche Partys deine Freunde gehen – '
+                    'inklusive „Ich komme / Vielleicht“ in Echtzeit.\n\n'
+                    'Außerdem bekommst du früher Zugriff auf neue Features.',
+                style: TextStyle(color: Colors.white70, height: 1.4),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Wähle dein Abo',
+              style: TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w700,
+                fontSize: 15,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _planTile(
+              title: 'Monatlich',
+              description: 'Flexibel kündbar – ideal zum Testen.',
+              price: '4,99 € / Monat',
+              selected: _selectedPlan == 'monthly',
+              onTap: () {
+                setState(() => _selectedPlan = 'monthly');
+              },
+            ),
+            const SizedBox(height: 10),
+            _planTile(
+              title: 'Jährlich',
+              description: 'Sparpreis – ca. 2 Monate geschenkt.',
+              price: '49,99 € / Jahr',
+              badge: 'Beliebt',
+              selected: _selectedPlan == 'yearly',
+              onTap: () {
+                setState(() => _selectedPlan = 'yearly');
+              },
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _isLoading ? null : _startPaypalCheckout,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: accentRed,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              icon: const Icon(Icons.payment),
+              label: Text(
+                _selectedPlan == 'monthly'
+                    ? 'Mit PayPal zahlen – 4,99 € / Monat'
+                    : 'Mit PayPal zahlen – 49,99 € / Jahr',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed: _isLoading ? null : _verifyPayment,
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Colors.white38),
+                foregroundColor: Colors.white70,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: _isLoading
+                  ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+                  : const Text('Zahlung prüfen'),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Hinweis: Zahlungen werden von PayPal abgewickelt. '
+                  'PartyPin speichert keine Kreditkarten- oder Kontodaten.',
+              style: TextStyle(color: Colors.white38, fontSize: 11),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _planTile({
+    required String title,
+    required String description,
+    required String price,
+    required bool selected,
+    required VoidCallback onTap,
+    String? badge,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF1E2230) : const Color(0xFF141824),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: selected ? Colors.amber : Colors.white12,
+            width: selected ? 1.4 : 1.0,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              Icons.workspace_premium,
+              color: selected ? Colors.amber : Colors.white54,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                        ),
+                      ),
+                      if (badge != null) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: Colors.amber),
+                          ),
+                          child: Text(
+                            badge,
+                            style: const TextStyle(
+                              color: Colors.amber,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    description,
+                    style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              price,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+              textAlign: TextAlign.right,
+            ),
+          ],
         ),
       ),
     );

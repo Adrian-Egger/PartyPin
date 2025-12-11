@@ -21,11 +21,31 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
 
   bool _isLoading = false;
-  bool _loginAsBar = false; // NEU: Auswahl, ob als Bar-Account eingeloggt werden soll
+
+  // false = Privat, true = Unternehmen
+  bool _loginAsCompany = false;
+
+  // Farben wie im CreateAccountScreen
+  static const _bg = Color(0xFF0E0F12);
+  static const _gradTop = Color(0xFF0E0F12);
+  static const _gradBottom = Color(0xFF141A22);
+  static const _panel = Color(0xFF15171C);
+  static const _panelBorder = Color(0xFF2A2F38);
+  static const _card = Color(0xFF1C1F26);
+  static const _textPrimary = Colors.white;
+  static const _textSecondary = Color(0xFFB6BDC8);
+  static const _accent = Color(0xFFFF3B30);
 
   bool get _isFormValid {
     return _usernameController.text.trim().isNotEmpty &&
         _passwordController.text.trim().isNotEmpty;
+  }
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
   }
 
   Future<void> _checkNavigation() async {
@@ -45,7 +65,7 @@ class _LoginScreenState extends State<LoginScreen> {
             savedLng != null &&
             savedLanguage != null;
 
-    // 1) Terms / AGB
+    // 1) AGB / Nutzungsbedingungen
     if (!termsAccepted) {
       if (!mounted) return;
       Navigator.pushReplacement(
@@ -55,7 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    // 2) Location-Auswahl
+    // 2) Standort-Auswahl
     if (!hasLocationData) {
       if (!mounted) return;
       Navigator.pushReplacement(
@@ -65,7 +85,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    // 3) Alles gesetzt → Map
+    // 3) Alles vorhanden → Map
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
@@ -79,7 +99,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (!_isFormValid) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Bitte Username und Passwort eingeben!")),
+        const SnackBar(content: Text("Bitte Benutzername und Passwort eingeben.")),
       );
       return;
     }
@@ -88,10 +108,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       Map<String, dynamic>? userData;
-      String? userType;   // "user" oder "bar"
-      String? barDocId;   // tatsächliche Bar-Doc-ID in Firestore
+      String? userType;   // "user" (Privat) oder "bar" (Unternehmen)
+      String? barDocId;   // tatsächliche Bar/Unternehmen-Dokument-ID
 
-      // 1) In users suchen (über Feld "username")
+      // 1) Privatkonten in "users" suchen (Feld username)
       final userQuery = await FirebaseFirestore.instance
           .collection("users")
           .where("username", isEqualTo: usernameInput)
@@ -102,15 +122,17 @@ class _LoginScreenState extends State<LoginScreen> {
         userData = userQuery.docs.first.data();
         userType = "user";
       } else {
-        // 2) In bars suchen (zuerst docId = username, dann Feld "username")
+        // 2) Unternehmens-Accounts in "bars" suchen
         final barsCol = FirebaseFirestore.instance.collection("bars");
 
+        // Variante 1: DocID == username
         final barDocById = await barsCol.doc(usernameInput).get();
         if (barDocById.data() != null) {
           userData = barDocById.data();
           userType = "bar";
           barDocId = barDocById.id;
         } else {
+          // Variante 2: Feld username
           final barQuery = await barsCol
               .where("username", isEqualTo: usernameInput)
               .limit(1)
@@ -126,48 +148,50 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (userData == null || userType == null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Username nicht gefunden!")),
+          const SnackBar(content: Text("Benutzername nicht gefunden.")),
         );
         return;
       }
 
-      // Passwort prüfen
+      // Passwort checken
       final storedPw = (userData["password"] ?? "").toString();
       if (storedPw != passwordInput) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Falsches Passwort!")),
+          const SnackBar(content: Text("Falsches Passwort.")),
         );
         return;
       }
 
-      // Harter Check: Auswahl (User/Bar) muss zum Account-Typ passen
-      if (_loginAsBar && userType != "bar") {
+      // Typ-Kontrolle: Auswahl muss zum Account-Typ passen
+      if (_loginAsCompany && userType != "bar") {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text("Dieser Account ist kein Bar-Account.")),
+            content: Text("Dieser Account ist kein Unternehmens-Account."),
+          ),
         );
         return;
       }
-      if (!_loginAsBar && userType != "user") {
+      if (!_loginAsCompany && userType != "user") {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content:
-              Text("Dieser Account ist ein Bar-Account. Bitte als Bar einloggen.")),
+            content: Text(
+              "Dieser Account ist ein Unternehmens-Account. Bitte als Unternehmen einloggen.",
+            ),
+          ),
         );
         return;
       }
 
-      // auth / phone
+      // Auth / Phone
       final authVersion = (userData["authVersion"] ?? 1) as int;
       final phoneNumber = userData["phoneNumber"] as String?;
       final phoneVerified = userData["phoneVerified"] == true;
 
-      // Terms / Location aus Firestore lesen
+      // Terms / Location aus Firestore
       final firestoreTermsAccepted = userData["termsAccepted"] == true;
       final firestoreLanguage = (userData["language"] ?? "") as String;
       final firestoreCountry = (userData["country"] ?? "") as String;
       final firestoreCity = (userData["city"] ?? "") as String;
-
       final latRaw = userData["selectedLat"];
       final lngRaw = userData["selectedLng"];
       final double? firestoreLat =
@@ -191,10 +215,10 @@ class _LoginScreenState extends State<LoginScreen> {
         await prefs.remove("phoneNumber");
       }
 
-      // Terms aus Firestore in Local spiegeln
+      // Terms spiegeln
       await prefs.setBool("termsAccepted", firestoreTermsAccepted);
 
-      // Location aus Firestore in Local spiegeln (falls vorhanden)
+      // Location spiegeln (falls vorhanden)
       final hasFirestoreLocation =
           firestoreCity.isNotEmpty &&
               firestoreCountry.isNotEmpty &&
@@ -216,26 +240,25 @@ class _LoginScreenState extends State<LoginScreen> {
         await prefs.remove("selectedLng");
       }
 
-      // User vs Bar-spezifische Infos + Flags für PartyMapScreen
+      // Privat vs Unternehmen
       if (userType == "user") {
-        // normaler User
-        await prefs.setBool("isBar", false);         // dein altes Flag
-        await prefs.setBool("isBarAccount", false);  // NEU: von PartyMapScreen verwendet
-        await prefs.remove("barId");                 // keine Bar verknüpft
+        // Privatkonto
+        await prefs.setBool("isBar", false);         // altes Flag
+        await prefs.setBool("isBarAccount", false);  // von PartyMapScreen genutzt
+        await prefs.remove("barId");
 
         await prefs.setString(
             "vorname", (userData["vorname"] ?? "").toString());
         await prefs.setString(
             "nachname", (userData["nachname"] ?? "").toString());
       } else {
-        // Bar-Account
-        await prefs.setBool("isBar", true);          // dein altes Flag
-        await prefs.setBool("isBarAccount", true);   // NEU: von PartyMapScreen verwendet
+        // Unternehmens-Account
+        await prefs.setBool("isBar", true);          // altes Flag
+        await prefs.setBool("isBarAccount", true);
 
         if (barDocId != null) {
           await prefs.setString("barId", barDocId);
         } else {
-          // sollte eigentlich nicht passieren, zur Sicherheit:
           await prefs.remove("barId");
         }
 
@@ -243,7 +266,7 @@ class _LoginScreenState extends State<LoginScreen> {
             "barName", (userData["barName"] ?? "").toString());
       }
 
-      // Phone-Upgrade (wenn du es wieder aktivieren willst, hier sauber einbauen) !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      // Phone-Upgrade ggf. wieder aktivierbar
       // final mustUpgradePhone =
       //     phoneNumber == null || phoneNumber.trim().isEmpty;
       // if (mustUpgradePhone) {
@@ -257,7 +280,6 @@ class _LoginScreenState extends State<LoginScreen> {
       //   return;
       // }
 
-      // Wenn Telefonnummer vorhanden bzw. Phone-Upgrade deaktiviert -> normale Navigation
       await _checkNavigation();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -270,72 +292,198 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  InputDecoration _dec({
+    required String label,
+    String? hint,
+    IconData? icon,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: _textSecondary),
+      hintText: hint,
+      hintStyle: const TextStyle(color: _textSecondary),
+      prefixIcon: icon != null ? Icon(icon, color: _accent) : null,
+      filled: true,
+      fillColor: _card,
+      contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Colors.transparent),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: _accent, width: 1.2),
+      ),
+      errorStyle: const TextStyle(color: _accent),
+    );
+  }
+
+  Widget _buildAccountTypeToggle() {
+    final bool isPrivat = !_loginAsCompany;
+    final bool isUnternehmen = _loginAsCompany;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          "Account-Typ",
+          style: TextStyle(
+            color: _textSecondary,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onHorizontalDragEnd: (_) {
+            setState(() {
+              _loginAsCompany = !_loginAsCompany;
+            });
+          },
+          child: Container(
+            decoration: BoxDecoration(
+              color: _card,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: _panelBorder),
+            ),
+            child: Row(
+              children: [
+                _buildToggleSegment(
+                  label: "Privat",
+                  selected: isPrivat,
+                  onTap: () {
+                    setState(() {
+                      _loginAsCompany = false;
+                    });
+                  },
+                ),
+                _buildToggleSegment(
+                  label: "Unternehmen",
+                  selected: isUnternehmen,
+                  onTap: () {
+                    setState(() {
+                      _loginAsCompany = true;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _loginAsCompany
+              ? "Du meldest dich als Unternehmen an."
+              : "Du meldest dich als Privatperson an.",
+          style: const TextStyle(
+            color: _textSecondary,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildToggleSegment({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            color: selected ? _accent : Colors.transparent,
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? _textPrimary : _textSecondary,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _bg,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: Colors.black.withOpacity(0.4),
         elevation: 0,
-        title: const Text('Login'),
+        title: const Text(
+          'Login',
+          style: TextStyle(color: _textPrimary),
+        ),
         centerTitle: true,
       ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF0f0f0f), Color(0xFF1f1f1f)],
+            colors: [_gradTop, _gradBottom],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
         ),
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 40),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Card(
-                color: Colors.grey[900]!.withOpacity(0.9),
-                shape: RoundedRectangleBorder(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _panel,
                   borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: _panelBorder),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x33000000),
+                      blurRadius: 14,
+                      offset: Offset(0, 10),
+                    ),
+                  ],
                 ),
-                elevation: 12,
                 child: Padding(
                   padding: const EdgeInsets.all(20),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.nightlife,
-                          size: 64, color: Colors.redAccent),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'Login',
-                        style: TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
+                      const Icon(Icons.nightlife, size: 52, color: _accent),
                       const SizedBox(height: 8),
                       const Text(
-                        'Bitte melde dich mit deinem Account an',
+                        'Anmeldung',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                          color: _textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Melde dich mit deinem Privat- oder Unternehmensaccount an.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white70),
+                        style: TextStyle(color: _textSecondary, fontSize: 13),
                       ),
                       const SizedBox(height: 20),
                       TextField(
                         controller: _usernameController,
                         onChanged: (_) => setState(() {}),
-                        style: const TextStyle(color: Colors.white),
-                        decoration: InputDecoration(
-                          labelText: "Username",
-                          labelStyle: const TextStyle(color: Colors.white70),
-                          prefixIcon: const Icon(Icons.person,
-                              color: Colors.redAccent),
-                          filled: true,
-                          fillColor: Colors.grey[850],
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                        style: const TextStyle(color: _textPrimary),
+                        decoration: _dec(
+                          label: "Benutzername",
+                          hint: "Dein Login-Name",
+                          icon: Icons.person,
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -343,38 +491,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         controller: _passwordController,
                         onChanged: (_) => setState(() {}),
                         obscureText: true,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: InputDecoration(
-                          labelText: "Passwort",
-                          labelStyle: const TextStyle(color: Colors.white70),
-                          prefixIcon: const Icon(Icons.lock,
-                              color: Colors.redAccent),
-                          filled: true,
-                          fillColor: Colors.grey[850],
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                        style: const TextStyle(color: _textPrimary),
+                        decoration: _dec(
+                          label: "Passwort",
+                          hint: "•••••••",
+                          icon: Icons.lock,
                         ),
                       ),
-                      const SizedBox(height: 12),
-
-                      // NEU: Auswahl, ob als Bar einloggen
-                      CheckboxListTile(
-                        value: _loginAsBar,
-                        onChanged: (v) {
-                          setState(() {
-                            _loginAsBar = v ?? false;
-                          });
-                        },
-                        controlAffinity: ListTileControlAffinity.leading,
-                        contentPadding: EdgeInsets.zero,
-                        activeColor: Colors.redAccent,
-                        title: const Text(
-                          "Als Bar-Account einloggen",
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      ),
-
+                      const SizedBox(height: 16),
+                      _buildAccountTypeToggle(),
                       const SizedBox(height: 20),
                       SizedBox(
                         width: double.infinity,
@@ -382,28 +507,28 @@ class _LoginScreenState extends State<LoginScreen> {
                           onPressed:
                           (_isFormValid && !_isLoading) ? _login : null,
                           style: ElevatedButton.styleFrom(
+                            backgroundColor: _accent,
+                            disabledBackgroundColor:
+                            _accent.withOpacity(0.4),
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
-                          ).copyWith(
-                            backgroundColor:
-                            MaterialStateProperty.resolveWith<Color>(
-                                    (states) {
-                                  if (states.contains(MaterialState.disabled)) {
-                                    return Colors.redAccent.withOpacity(0.4);
-                                  }
-                                  return Colors.redAccent;
-                                }),
                           ),
                           child: _isLoading
-                              ? const CircularProgressIndicator(
-                              color: Colors.white)
+                              ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
                               : const Text(
                             'Login',
                             style: TextStyle(
-                              fontSize: 18,
+                              fontSize: 17,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -411,17 +536,23 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       const SizedBox(height: 8),
                       TextButton(
-                        onPressed: () {
+                        onPressed: _isLoading
+                            ? null
+                            : () {
                           Navigator.pushReplacement(
                             context,
                             MaterialPageRoute(
-                                builder: (_) =>
-                                const CreateAccountScreen()),
+                              builder: (_) =>
+                              const CreateAccountScreen(),
+                            ),
                           );
                         },
                         child: const Text(
                           "Noch keinen Account? Jetzt registrieren",
-                          style: TextStyle(color: Colors.white54),
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ],

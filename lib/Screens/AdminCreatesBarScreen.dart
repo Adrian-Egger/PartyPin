@@ -1,4 +1,6 @@
+// lib/Screens/admin_create_bar_screen.dart
 import 'dart:io' show File, Platform;
+import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -8,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:geocoding/geocoding.dart' as geocoding;
 
 class AdminCreateBarScreen extends StatefulWidget {
   const AdminCreateBarScreen({Key? key}) : super(key: key);
@@ -147,7 +150,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     );
   }
 
-  // ---------------- Bild auswählen & hochladen ----------------
+  // ---------------------------------------------------------------------------
+  // Bild auswählen & hochladen
+  // ---------------------------------------------------------------------------
 
   Future<void> _pickAndUploadImage() async {
     if (_uploadingImage) return;
@@ -180,7 +185,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           bytes = file.bytes!;
         }
 
-        // alles unter barInfos
         fileName =
         'barInfos/profile_${DateTime.now().millisecondsSinceEpoch}_${file.name}';
       } else {
@@ -231,7 +235,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     }
   }
 
-  // ---------------- Bar-Highlights (Bild + Text) ----------------
+  // ---------------------------------------------------------------------------
+  // Bar-Highlights (Bild + Text)
+  // ---------------------------------------------------------------------------
 
   void _addHighlightRow() {
     _barHighlights.add(
@@ -480,7 +486,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     );
   }
 
-  // ---------------- Öffnungszeiten ----------------
+  // ---------------------------------------------------------------------------
+  // Öffnungszeiten
+  // ---------------------------------------------------------------------------
 
   String _formatTimeOfDay(TimeOfDay? t) {
     if (t == null) return '--:--';
@@ -689,8 +697,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
               padding:
               const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color:
-                closed ? Colors.redAccent.withOpacity(0.14) : Colors.transparent,
+                color: closed
+                    ? Colors.redAccent.withOpacity(0.14)
+                    : Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(
                   color: closed ? Colors.redAccent : Colors.white24,
@@ -721,7 +730,47 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     );
   }
 
-  // ---------------- Formular / Daten-Logik (Bars) ----------------
+  // ---------------------------------------------------------------------------
+  // Geocoding: Adresse -> Koordinaten
+  // ---------------------------------------------------------------------------
+
+  Future<GeoPoint?> _geocodeAddress({
+    required String address,
+    required String city,
+    required String country,
+  }) async {
+    final full = '$address, $city, $country';
+    try {
+      final locations = await geocoding.locationFromAddress(full);
+
+      if (locations.isEmpty) {
+        if (!mounted) return null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Adresse konnte nicht gefunden werden. Bitte prüfen.',
+            ),
+          ),
+        );
+        return null;
+      }
+
+      final loc = locations.first;
+      return GeoPoint(loc.latitude, loc.longitude);
+    } catch (e) {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Adresse konnte nicht geocodiert werden: $e'),
+        ),
+      );
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Formular / Daten-Logik (Bars)
+  // ---------------------------------------------------------------------------
 
   void _clearForm() {
     setState(() {
@@ -809,6 +858,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     });
   }
 
+  /// Speichert Bar inkl. Geocoding (location/lat/lng) für die Map
   Future<void> _saveBar() async {
     if (_isSaving) return;
 
@@ -816,7 +866,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     if (!valid) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Bitte alle Pflichtfelder korrekt ausfüllen.")),
+        const SnackBar(
+          content: Text("Bitte alle Pflichtfelder korrekt ausfüllen."),
+        ),
       );
       return;
     }
@@ -831,16 +883,38 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     setState(() => _isSaving = true);
 
     try {
+      // 1) Adresse -> Koordinaten
+      final geo = await _geocodeAddress(
+        address: address,
+        city: city,
+        country: country,
+      );
+
+      if (geo == null) {
+        // Abbruch wenn Geocoding fehlschlägt
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Adresse konnte nicht geocodiert werden. Bitte prüfen und erneut versuchen.',
+            ),
+          ),
+        );
+        setState(() => _isSaving = false);
+        return;
+      }
+
       final docId = barId; // barId als Doc-ID
       final docRef = FirebaseFirestore.instance.collection("bars").doc(docId);
       final existing = await docRef.get();
 
-      // Highlights-Payload
+      // 2) Highlights-Payload
       final highlightsPayload = await _uploadHighlightsAndBuildPayload();
 
-      // Öffnungszeiten-Payload
+      // 3) Öffnungszeiten-Payload
       final openingHoursPayload = _buildOpeningHoursPayload();
 
+      // 4) Daten für Firestore
       final data = <String, dynamic>{
         "barName": barName,
         "barId": barId,
@@ -853,6 +927,14 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         "updatedAt": FieldValue.serverTimestamp(),
         "barHighlights": highlightsPayload,
         "openingHours": openingHoursPayload,
+
+        // NEU: Felder für Map
+        "location": geo, // GeoPoint
+        "lat": geo.latitude,
+        "lng": geo.longitude,
+        "city_lower": city.toLowerCase(),
+        "barName_lower": barName.toLowerCase(),
+
         if (_profileImageUrl != null && _profileImageUrl!.isNotEmpty)
           "profileImageUrl": _profileImageUrl,
         if (!existing.exists) "createdAt": FieldValue.serverTimestamp(),
@@ -860,11 +942,13 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
 
       if (existing.exists) {
         await docRef.update(data);
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Bar aktualisiert.")),
         );
       } else {
         await docRef.set(data);
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Bar angelegt.")),
         );
@@ -883,7 +967,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     }
   }
 
-  // ---------------- Stats-Logik ----------------
+  // ---------------------------------------------------------------------------
+  // Stats-Logik
+  // ---------------------------------------------------------------------------
 
   Future<Map<String, dynamic>> _fetchStats() async {
     final fs = FirebaseFirestore.instance;
@@ -945,7 +1031,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     });
   }
 
-  // ---------------- Helper: Status ----------------
+  // ---------------------------------------------------------------------------
+  // Helper: Status
+  // ---------------------------------------------------------------------------
 
   Color _statusColor(String status) {
     switch (status) {
@@ -973,7 +1061,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     }
   }
 
-  // ---------------- UI-Bausteine ----------------
+  // ---------------------------------------------------------------------------
+  // UI-Bausteine
+  // ---------------------------------------------------------------------------
 
   Widget _buildSectionSelector() {
     return Container(
@@ -1739,7 +1829,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     );
   }
 
-  // ---------------- UI ----------------
+  // ---------------------------------------------------------------------------
+  // UI
+  // ---------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
