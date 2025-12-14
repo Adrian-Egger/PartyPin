@@ -81,7 +81,10 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   static const _textPrimary = Colors.white;
   static const _textSecondary = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30);
-  static const _secondary = Color(0xFF00C2A8);
+  static const _secondary = _accent; // alles rot
+
+
+  void _unfocus() => FocusManager.instance.primaryFocus?.unfocus();
 
   @override
   void initState() {
@@ -155,8 +158,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     }
 
     _partyType = data['type'] ?? 'Open';
-    _minAgeController.text =
-    (data['minAge'] != null) ? data['minAge'].toString() : '';
+    _minAgeController.text = (data['minAge'] != null) ? data['minAge'].toString() : '';
     _pickedLat = (data['lat'] as num?)?.toDouble();
     _pickedLng = (data['lng'] as num?)?.toDouble();
 
@@ -164,8 +166,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     final vis = data['visibility'];
     _friendsOnly = (vis == 'friends');
 
-    // falls alte Daten visibility=friends haben, aber type != Only4Friends,
-    // beim Edit das UI korrekt auf Only4Friends setzen
     if (_friendsOnly && _partyType != 'Only4Friends') {
       _partyType = 'Only4Friends';
     }
@@ -298,7 +298,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       labelStyle: const TextStyle(color: _textSecondary),
       hintText: hint,
       hintStyle: const TextStyle(color: _textSecondary),
-      prefixIcon: icon != null ? Icon(icon, color: _textSecondary) : null,
+      // Icons farblich: Inputs in _secondary
+      prefixIcon: icon != null ? Icon(icon, color: _secondary) : null,
       suffixIcon: suffix,
       filled: true,
       fillColor: _card,
@@ -341,7 +342,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: _panelBorder),
                 ),
-                child: Icon(icon, color: _textSecondary, size: 16),
+                // Section-Icons farblich: _accent
+                child: Icon(icon, color: _accent, size: 16),
               ),
               const SizedBox(width: 8),
             ],
@@ -349,7 +351,10 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
             Text(
               title,
               style: const TextStyle(
-                  color: _textPrimary, fontSize: 16, fontWeight: FontWeight.w700),
+                color: _textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ]),
           const SizedBox(height: 12),
@@ -375,13 +380,14 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       child: Row(
         children: [
           if (icon != null) ...[
-            Icon(icon, color: _textSecondary),
+            Icon(icon, color: _secondary),
             const SizedBox(width: 10),
           ],
           Expanded(
-            child: Text(label,
-                style:
-                const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600)),
+            child: Text(
+              label,
+              style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
+            ),
           ),
           Switch(
             value: value,
@@ -407,11 +413,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     final isSelected = _partyType == value;
     final border = isSelected ? _accent : _panelBorder;
     final textColor = isSelected ? Colors.white : _textPrimary;
-    final iconColor = isSelected ? Colors.white : Colors.white70;
+    final iconColor = isSelected ? Colors.white : _secondary;
 
     return ChoiceChip(
       selected: isSelected,
       onSelected: (_) {
+        _unfocus();
         HapticFeedback.selectionClick();
         setState(() {
           _partyType = value;
@@ -429,8 +436,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
         children: [
           Icon(icon, size: 18, color: iconColor),
           const SizedBox(width: 6),
-          Text(label,
-              style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
+          Text(label, style: TextStyle(color: textColor, fontWeight: FontWeight.w700)),
         ],
       ),
       showCheckmark: false,
@@ -443,6 +449,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   }
 
   Future<void> _pickDate() async {
+    _unfocus();
     final date = await showDatePicker(
       context: context,
       initialDate: _selectedDate ?? DateTime.now(),
@@ -465,13 +472,13 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   }
 
   Future<void> _pickTime() async {
+    _unfocus();
     final time = await showTimePicker(
       context: context,
       initialTime: _selectedTime ?? TimeOfDay.now(),
       builder: (context, child) => Theme(
         data: ThemeData.dark().copyWith(
-          colorScheme:
-          const ColorScheme.dark(primary: _accent, onPrimary: Colors.white),
+          colorScheme: const ColorScheme.dark(primary: _accent, onPrimary: Colors.white),
         ),
         child: child!,
       ),
@@ -486,6 +493,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   }
 
   Future<void> _openMapPicker() async {
+    _unfocus();
     LatLng initial = LatLng(_pickedLat ?? 48.2082, _pickedLng ?? 16.3738);
 
     if (_pickedLat == null || _pickedLng == null) {
@@ -570,14 +578,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     final lower = name.toLowerCase().trim();
     final spaceToUnderscore = lower.replaceAll(RegExp(r'\s+'), '_');
     final cleaned = spaceToUnderscore.replaceAll(RegExp(r'[^a-z0-9_\-]'), '_');
-    final trimmed =
-    cleaned.replaceAll(RegExp(r'^_+'), '').replaceAll(RegExp(r'_+$'), '');
+    final trimmed = cleaned.replaceAll(RegExp(r'^_+'), '').replaceAll(RegExp(r'_+$'), '');
     return trimmed.isEmpty ? 'party' : trimmed;
   }
 
   Future<bool> _docExists(String id) async {
-    final doc =
-    await FirebaseFirestore.instance.collection('Party').doc(id).get();
+    final doc = await FirebaseFirestore.instance.collection('Party').doc(id).get();
     return doc.exists;
   }
 
@@ -593,24 +599,20 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   }
 
   void _goToMapAndPop({required bool updated, Map<String, dynamic>? payload}) {
+    _unfocus();
     HapticFeedback.lightImpact();
     widget.onGoToMapAndRefresh?.call(updated: updated, payload: payload);
-    final result = {
-      'targetTab': 'map',
-      'updated': updated,
-      if (payload != null) ...payload
-    };
+    final result = {'targetTab': 'map', 'updated': updated, if (payload != null) ...payload};
     if (mounted) Navigator.of(context).pop(result);
   }
 
   Future<void> _openExcludeFriendsDialog() async {
+    _unfocus();
     final prefs = await SharedPreferences.getInstance();
     final me = prefs.getString('username') ?? 'unknown_user';
 
-    // Freunde laden
     final friends = await _friendsModel.myFriends(me);
 
-    // Vollbild-Screen öffnen
     final selected = await Navigator.push<List<String>>(
       context,
       MaterialPageRoute(
@@ -627,13 +629,13 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       ),
     );
 
-    // Auswahl übernehmen
     if (selected != null && mounted) {
       setState(() => _excludedFriends = selected);
     }
   }
 
   Future<void> _saveParty() async {
+    _unfocus();
     setState(() => _triedSubmit = true);
     _addressCountryError = null;
 
@@ -650,33 +652,22 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
 
     final name = _nameController.text.trim();
     final description = _descriptionController.text.trim();
-    final guestLimit = _isUnlimitedGuests
-        ? 'Unbegrenzt'
-        : int.tryParse(_guestLimitController.text.trim());
+    final guestLimit =
+    _isUnlimitedGuests ? 'Unbegrenzt' : int.tryParse(_guestLimitController.text.trim());
     final price = _isFreeEntry
         ? 0.0
-        : double.tryParse(
-        _priceController.text.replaceAll(',', '.').trim()) ??
-        0.0;
+        : double.tryParse(_priceController.text.replaceAll(',', '.').trim()) ?? 0.0;
     final address = _addressController.text.trim();
     final date = _selectedDate!;
     final timeOfDay = _selectedTime!;
     String time = _timeController.text.trim();
     if (time.isEmpty) {
-      time =
-      "${timeOfDay.hour.toString().padLeft(2, '0')}:${timeOfDay.minute.toString().padLeft(2, '0')}";
+      time = "${timeOfDay.hour.toString().padLeft(2, '0')}:${timeOfDay.minute.toString().padLeft(2, '0')}";
     }
     final minAge = int.tryParse(_minAgeController.text.trim());
     final type = _partyType;
 
-    // Voller Startzeitpunkt (lokal)
-    final startDateTime = DateTime(
-      date.year,
-      date.month,
-      date.day,
-      timeOfDay.hour,
-      timeOfDay.minute,
-    );
+    final startDateTime = DateTime(date.year, date.month, date.day, timeOfDay.hour, timeOfDay.minute);
 
     double? lat = _pickedLat;
     double? lng = _pickedLng;
@@ -720,9 +711,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       "Adresse nicht gefunden. Bitte genauer angeben, Stadt ergänzen oder Standort auf der Karte wählen.";
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text(
-          "Adresse nicht gefunden. Bitte genauer angeben oder Standort auf der Karte wählen.",
-        ),
+        content: Text("Adresse nicht gefunden. Bitte genauer angeben oder Standort auf der Karte wählen."),
       ));
       return;
     }
@@ -731,14 +720,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       'name': name,
       'description': description,
       'guestLimit': guestLimit,
-
-      // NEU: voller Startzeitpunkt
       'startTime': Timestamp.fromDate(startDateTime),
-
-      // weiterhin getrennt für bestehenden Code
       'date': Timestamp.fromDate(DateTime(date.year, date.month, date.day)),
       'time': time,
-
       'lat': lat,
       'lng': lng,
       'type': type,
@@ -751,8 +735,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       'requests': widget.existingData?['requests'] ?? [],
       'approved': widget.existingData?['approved'] ?? [],
       'updatedAt': FieldValue.serverTimestamp(),
-
-      // Sichtbarkeit
       'visibility': _friendsOnly ? 'friends' : 'public',
       'excludedFriends': _friendsOnly ? _excludedFriends : [],
     };
@@ -761,14 +743,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       String savedDocId;
       if (widget.docId == null) {
         final uniqueId = await _generateUniqueDocId(name);
-        final ref =
-        FirebaseFirestore.instance.collection('Party').doc(uniqueId);
+        final ref = FirebaseFirestore.instance.collection('Party').doc(uniqueId);
         await ref.set(baseData, SetOptions(merge: true));
         savedDocId = uniqueId;
         await ref.set({'docId': savedDocId}, SetOptions(merge: true));
       } else {
-        final ref =
-        FirebaseFirestore.instance.collection('Party').doc(widget.docId);
+        final ref = FirebaseFirestore.instance.collection('Party').doc(widget.docId);
         await ref.set(baseData, SetOptions(merge: true));
         savedDocId = widget.docId!;
         await ref.set({'docId': savedDocId}, SetOptions(merge: true));
@@ -782,23 +762,19 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
         'docId': savedDocId,
       });
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Fehler beim Speichern: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Fehler beim Speichern: $e")));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
   Future<void> _deleteParty() async {
+    _unfocus();
     if (widget.docId == null || _isLoading) return;
     setState(() => _isLoading = true);
     try {
-      await FirebaseFirestore.instance
-          .collection('Party')
-          .doc(widget.docId)
-          .delete();
-      _goToMapAndPop(
-          updated: true, payload: {'deleted': true, 'docId': widget.docId});
+      await FirebaseFirestore.instance.collection('Party').doc(widget.docId).delete();
+      _goToMapAndPop(updated: true, payload: {'deleted': true, 'docId': widget.docId});
     } catch (_) {
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -822,14 +798,16 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: _isLoading ? null : () => _goToMapAndPop(updated: false),
-                icon: const Icon(Icons.map_outlined, color: Colors.white70),
-                label: const Text("Zur Karte"),
+                icon: const Icon(Icons.map_outlined, color: _secondary),
+                label: const Text(
+                  "Zur Karte",
+                  style: TextStyle(color: Colors.white),
+                ),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: _panelBorder),
-                  foregroundColor: Colors.white70,
+                  foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
               ),
             ),
@@ -839,13 +817,11 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                 child: OutlinedButton.icon(
                   onPressed: _isLoading ? null : _deleteParty,
                   icon: const Icon(Icons.delete_outline, color: _accent),
-                  label:
-                  const Text("Löschen", style: TextStyle(color: _accent)),
+                  label: const Text("Löschen", style: TextStyle(color: _accent)),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: _accent),
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
                 ),
               ),
@@ -854,15 +830,19 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: _isLoading ? null : _saveParty,
-                icon: const Icon(Icons.add_location_alt_outlined),
-                label: Text(isEditing ? "Aktualisieren" : "Speichern"),
+                // Icon farblich + Text unten NICHT blau, sondern weiß
+                icon: const Icon(Icons.add_location_alt_outlined, color: Colors.white),
+                label: Text(
+                  isEditing ? "Aktualisieren" : "Speichern",
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _accent,
+                  foregroundColor: Colors.white,
                   disabledBackgroundColor: Colors.grey[700],
-                  padding: const EdgeInsets.symmetric(
-                      vertical: 16, horizontal: 24),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
+                  disabledForegroundColor: Colors.white70,
+                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   elevation: 2,
                 ),
               ),
@@ -885,11 +865,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
               backgroundColor: _panel,
               elevation: 0.5,
               title: Text(
-                isEditing ? "Party bearbeiten" : "Neue Party",
+                isEditing ? "✏️ Party bearbeiten" : "🎉 Neue Party",
                 style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold),
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               leading: IconButton(
                 icon: const Icon(Icons.map_outlined, color: _accent),
@@ -897,10 +878,14 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                 tooltip: "Zur Karte",
               ),
               actions: [
+                IconButton(
+                  tooltip: "Tastatur schließen",
+                  icon: const Icon(Icons.keyboard_hide, color: _secondary),
+                  onPressed: _unfocus,
+                ),
                 if (_hostName != null)
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     margin: const EdgeInsets.only(right: 8),
                     decoration: BoxDecoration(
                       color: _card,
@@ -909,8 +894,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.person,
-                            size: 16, color: Colors.white70),
+                        const Icon(Icons.person, size: 16, color: _secondary),
                         const SizedBox(width: 6),
                         Text(
                           _hostName!,
@@ -924,430 +908,356 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                   ),
               ],
             ),
-            body: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [_gradTop, _gradBottom],
+            // ====== Tastatur: überall wegklickbar + beim Scrollen weg ======
+            body: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _unfocus,
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [_gradTop, _gradBottom],
+                  ),
                 ),
-              ),
-              child: SingleChildScrollView(
-                controller: _scrollCtrl,
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
-                child: Form(
-                  key: _formKey,
-                  autovalidateMode: AutovalidateMode.onUserInteraction,
-                  child: Column(
-                    children: [
-                      _section(
-                        title: "Basis",
-                        icon: Icons.celebration_outlined,
-                        child: Column(
-                          children: [
-                            TextFormField(
-                              controller: _nameController,
-                              focusNode: _nameNode,
-                              textInputAction: TextInputAction.next,
-                              onFieldSubmitted: (_) =>
-                                  _descNode.requestFocus(),
-                              maxLength: 40,
-                              style: const TextStyle(color: _textPrimary),
-                              decoration: _dec("Party Name",
-                                  icon: Icons.title, maxLength: 40),
-                              validator: (v) =>
-                                  _validateRequired(v, label: "Party Name"),
-                            ),
-                            const SizedBox(height: 12),
-                            TextFormField(
-                              controller: _descriptionController,
-                              focusNode: _descNode,
-                              textInputAction: TextInputAction.next,
-                              onFieldSubmitted: (_) =>
-                                  _guestNode.requestFocus(),
-                              minLines: 3,
-                              maxLines: null,
-                              maxLength: 500,
-                              style: const TextStyle(color: _textPrimary),
-                              decoration: _dec("Beschreibung",
-                                  icon: Icons.notes, maxLength: 500),
-                              validator: (v) =>
-                                  _validateRequired(v, label: "Beschreibung"),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _section(
-                        title: "Gäste & Preis",
-                        icon: Icons.group_outlined,
-                        child: Column(
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: _guestLimitController,
-                                    focusNode: _guestNode,
-                                    textInputAction: TextInputAction.next,
-                                    onFieldSubmitted: (_) =>
-                                        _priceNode.requestFocus(),
-                                    keyboardType: TextInputType.number,
-                                    inputFormatters: [
-                                      FilteringTextInputFormatter.digitsOnly
-                                    ],
-                                    enabled: !_isUnlimitedGuests,
-                                    style:
-                                    const TextStyle(color: _textPrimary),
-                                    decoration: _dec(
-                                      "Gästelimit",
-                                      hint: "Zahl",
-                                      icon: Icons.groups,
-                                      errorText: (!_isUnlimitedGuests &&
-                                          _triedSubmit &&
-                                          (int.tryParse(
-                                              _guestLimitController.text
-                                                  .trim()) ==
-                                              null))
-                                          ? "Gästelimit muss eine Zahl sein."
-                                          : null,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: _switchTile(
-                                    label: "Unbegrenzt",
-                                    value: _isUnlimitedGuests,
-                                    icon: Icons.all_inclusive,
-                                    onChanged: (v) {
-                                      setState(() {
-                                        _isUnlimitedGuests = v;
-                                        if (v) _guestLimitController.clear();
-                                      });
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextFormField(
-                                    controller: _priceController,
-                                    focusNode: _priceNode,
-                                    textInputAction: TextInputAction.next,
-                                    onFieldSubmitted: (_) =>
-                                        _ageNode.requestFocus(),
-                                    keyboardType:
-                                    const TextInputType.numberWithOptions(
-                                        decimal: true),
-                                    inputFormatters: [
-                                      FilteringTextInputFormatter.allow(
-                                        RegExp(
-                                            r'^\d*[,]?\d{0,2}$|^\d*[.]?\d{0,2}$'),
-                                      ),
-                                    ],
-                                    enabled: !_isFreeEntry,
-                                    style:
-                                    const TextStyle(color: _textPrimary),
-                                    decoration: _dec(
-                                      "Eintrittspreis",
-                                      hint: "€",
-                                      icon: Icons.euro,
-                                      errorText: (!_isFreeEntry &&
-                                          _triedSubmit &&
-                                          (double.tryParse(
-                                              _priceController.text
-                                                  .replaceAll(',', '.')
-                                                  .trim()) ==
-                                              null))
-                                          ? "Preis muss eine Zahl sein."
-                                          : null,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: _switchTile(
-                                    label: "Gratis Eintritt",
-                                    value: _isFreeEntry,
-                                    icon: Icons.card_giftcard,
-                                    onChanged: (v) {
-                                      setState(() {
-                                        _isFreeEntry = v;
-                                        if (v) _priceController.clear();
-                                      });
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            TextFormField(
-                              controller: _minAgeController,
-                              focusNode: _ageNode,
-                              textInputAction: TextInputAction.next,
-                              onFieldSubmitted: (_) =>
-                                  _addrNode.requestFocus(),
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly
-                              ],
-                              style: const TextStyle(color: _textPrimary),
-                              decoration: _dec("Mindestalter",
-                                  hint: "z. B. 16",
-                                  icon: Icons.cake_outlined),
-                              validator: (v) {
-                                if (v == null || v.trim().isEmpty) {
-                                  return "Mindestalter darf nicht leer sein.";
-                                }
-                                final n = int.tryParse(v.trim());
-                                if (n == null) {
-                                  return "Mindestalter muss eine Zahl sein.";
-                                }
-                                if (n < 0) {
-                                  return "Mindestalter darf nicht negativ sein.";
-                                }
-                                if (n > 99) {
-                                  return "Bitte 0–99 eingeben.";
-                                }
-                                return null;
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _section(
-                        title: "Ort",
-                        icon: Icons.location_on_outlined,
-                        child: TextFormField(
-                          controller: _addressController,
-                          focusNode: _addrNode,
-                          textInputAction: TextInputAction.done,
-                          enableSuggestions: true,
-                          textCapitalization: TextCapitalization.words,
-                          autofillHints: const [
-                            AutofillHints.fullStreetAddress
-                          ],
-                          style: const TextStyle(color: _textPrimary),
-                          decoration: _dec(
-                            "Adresse",
-                            hint: "z. B. Münzgasse 4, 1030 Wien",
-                            icon: Icons.place,
-                            errorText: _addressCountryError,
-                            suffix: IconButton(
-                              tooltip: 'Standort auf Karte wählen',
-                              onPressed: _openMapPicker,
-                              icon: const Icon(Icons.map_rounded,
-                                  color: Colors.white70),
-                            ),
+                child: SingleChildScrollView(
+                  controller: _scrollCtrl,
+                  keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+                  child: Form(
+                    key: _formKey,
+                    autovalidateMode: AutovalidateMode.onUserInteraction,
+                    child: Column(
+                      children: [
+                        _section(
+                          title: "Basis",
+                          icon: Icons.celebration_outlined,
+                          child: Column(
+                            children: [
+                              TextFormField(
+                                controller: _nameController,
+                                focusNode: _nameNode,
+                                textInputAction: TextInputAction.next,
+                                onFieldSubmitted: (_) => _descNode.requestFocus(),
+                                maxLength: 40,
+                                style: const TextStyle(color: _textPrimary),
+                                decoration: _dec("Party Name", icon: Icons.title, maxLength: 40),
+                                validator: (v) => _validateRequired(v, label: "Party Name"),
+                              ),
+                              const SizedBox(height: 12),
+                              TextFormField(
+                                controller: _descriptionController,
+                                focusNode: _descNode,
+                                textInputAction: TextInputAction.next,
+                                onFieldSubmitted: (_) => _guestNode.requestFocus(),
+                                minLines: 3,
+                                maxLines: null,
+                                maxLength: 500,
+                                style: const TextStyle(color: _textPrimary),
+                                decoration: _dec("Beschreibung", icon: Icons.notes, maxLength: 500),
+                                validator: (v) => _validateRequired(v, label: "Beschreibung"),
+                              ),
+                            ],
                           ),
-                          validator: (v) =>
-                              _validateRequired(v, label: "Adresse"),
                         ),
-                      ),
-                      const SizedBox(height: 14),
-                      _section(
-                        title: "Datum & Zeit",
-                        icon: Icons.schedule_outlined,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: _card,
-                                      foregroundColor: _textPrimary,
-                                      elevation: 0,
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 14, horizontal: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius:
-                                        BorderRadius.circular(14),
-                                      ),
-                                    ),
-                                    onPressed: _pickDate,
-                                    icon: const Icon(Icons.calendar_today,
-                                        color: _accent),
-                                    label: AnimatedSwitcher(
-                                      duration:
-                                      const Duration(milliseconds: 150),
-                                      child: Text(
-                                        _selectedDate == null
-                                            ? "Datum wählen"
-                                            : "${_selectedDate!.day.toString().padLeft(2, '0')}.${_selectedDate!.month.toString().padLeft(2, '0')}.${_selectedDate!.year}",
-                                        key: ValueKey(_selectedDate
-                                            ?.toIso8601String() ??
-                                            'none'),
+                        const SizedBox(height: 14),
+                        _section(
+                          title: "Gäste & Preis",
+                          icon: Icons.group_outlined,
+                          child: Column(
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextFormField(
+                                      controller: _guestLimitController,
+                                      focusNode: _guestNode,
+                                      textInputAction: TextInputAction.next,
+                                      onFieldSubmitted: (_) => _priceNode.requestFocus(),
+                                      keyboardType: TextInputType.number,
+                                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                      enabled: !_isUnlimitedGuests,
+                                      style: const TextStyle(color: _textPrimary),
+                                      decoration: _dec(
+                                        "Gästelimit",
+                                        hint: "Zahl",
+                                        icon: Icons.groups,
+                                        errorText: (!_isUnlimitedGuests &&
+                                            _triedSubmit &&
+                                            (int.tryParse(_guestLimitController.text.trim()) ==
+                                                null))
+                                            ? "Gästelimit muss eine Zahl sein."
+                                            : null,
                                       ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton.icon(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: _card,
-                                      foregroundColor: _textPrimary,
-                                      elevation: 0,
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 14, horizontal: 14),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius:
-                                        BorderRadius.circular(14),
-                                      ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: _switchTile(
+                                      label: "Unbegrenzt",
+                                      value: _isUnlimitedGuests,
+                                      icon: Icons.all_inclusive,
+                                      onChanged: (v) {
+                                        _unfocus();
+                                        setState(() {
+                                          _isUnlimitedGuests = v;
+                                          if (v) _guestLimitController.clear();
+                                        });
+                                      },
                                     ),
-                                    onPressed: _pickTime,
-                                    icon: const Icon(Icons.access_time,
-                                        color: _accent),
-                                    label: AnimatedSwitcher(
-                                      duration:
-                                      const Duration(milliseconds: 150),
-                                      child: Text(
-                                        (_selectedTime == null)
-                                            ? "Uhrzeit wählen"
-                                            : _timeController.text,
-                                        key: ValueKey(_timeController
-                                            .text.isEmpty
-                                            ? 'none'
-                                            : _timeController.text),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextFormField(
+                                      controller: _priceController,
+                                      focusNode: _priceNode,
+                                      textInputAction: TextInputAction.next,
+                                      onFieldSubmitted: (_) => _ageNode.requestFocus(),
+                                      keyboardType:
+                                      const TextInputType.numberWithOptions(decimal: true),
+                                      inputFormatters: [
+                                        FilteringTextInputFormatter.allow(
+                                          RegExp(r'^\d*[,]?\d{0,2}$|^\d*[.]?\d{0,2}$'),
+                                        ),
+                                      ],
+                                      enabled: !_isFreeEntry,
+                                      style: const TextStyle(color: _textPrimary),
+                                      decoration: _dec(
+                                        "Eintrittspreis",
+                                        hint: "€",
+                                        icon: Icons.euro,
+                                        errorText: (!_isFreeEntry &&
+                                            _triedSubmit &&
+                                            (double.tryParse(_priceController.text
+                                                .replaceAll(',', '.')
+                                                .trim()) ==
+                                                null))
+                                            ? "Preis muss eine Zahl sein."
+                                            : null,
                                       ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 8,
-                              children: [
-                                _quickTimeChip("Heute 22:00", () {
-                                  final now = DateTime.now();
-                                  _selectedDate =
-                                      DateTime(now.year, now.month, now.day);
-                                  _selectedTime =
-                                  const TimeOfDay(hour: 22, minute: 0);
-                                  _timeController.text = "22:00";
-                                  setState(() {});
-                                }),
-                                _quickTimeChip("Morgen 21:00", () {
-                                  final now = DateTime.now()
-                                      .add(const Duration(days: 1));
-                                  _selectedDate =
-                                      DateTime(now.year, now.month, now.day);
-                                  _selectedTime =
-                                  const TimeOfDay(hour: 21, minute: 0);
-                                  _timeController.text = "21:00";
-                                  setState(() {});
-                                }),
-                                _quickTimeChip("Fr 22:00", () {
-                                  final now = DateTime.now();
-                                  final diff =
-                                      (5 - now.weekday + 7) % 7;
-                                  final d = now.add(
-                                      Duration(days: diff == 0 ? 7 : diff));
-                                  _selectedDate =
-                                      DateTime(d.year, d.month, d.day);
-                                  _selectedTime =
-                                  const TimeOfDay(hour: 22, minute: 0);
-                                  _timeController.text = "22:00";
-                                  setState(() {});
-                                }),
-                              ],
-                            ),
-                            if (_triedSubmit && _selectedDate == null)
-                              const Padding(
-                                padding: EdgeInsets.only(top: 8),
-                                child: Text(
-                                  "Bitte ein Datum wählen.",
-                                  style:
-                                  TextStyle(color: Colors.orangeAccent),
-                                ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: _switchTile(
+                                      label: "Gratis Eintritt",
+                                      value: _isFreeEntry,
+                                      icon: Icons.card_giftcard,
+                                      onChanged: (v) {
+                                        _unfocus();
+                                        setState(() {
+                                          _isFreeEntry = v;
+                                          if (v) _priceController.clear();
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                ],
                               ),
-                            if (_triedSubmit && _selectedTime == null)
-                              const Padding(
-                                padding: EdgeInsets.only(top: 4),
-                                child: Text(
-                                  "Bitte eine Uhrzeit wählen.",
-                                  style:
-                                  TextStyle(color: Colors.orangeAccent),
+                              const SizedBox(height: 12),
+                              TextFormField(
+                                controller: _minAgeController,
+                                focusNode: _ageNode,
+                                textInputAction: TextInputAction.next,
+                                onFieldSubmitted: (_) => _addrNode.requestFocus(),
+                                keyboardType: TextInputType.number,
+                                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                style: const TextStyle(color: _textPrimary),
+                                decoration: _dec(
+                                  "Mindestalter",
+                                  hint: "z. B. 16",
+                                  icon: Icons.cake_outlined,
                                 ),
+                                validator: (v) {
+                                  if (v == null || v.trim().isEmpty) {
+                                    return "Mindestalter darf nicht leer sein.";
+                                  }
+                                  final n = int.tryParse(v.trim());
+                                  if (n == null) return "Mindestalter muss eine Zahl sein.";
+                                  if (n < 0) return "Mindestalter darf nicht negativ sein.";
+                                  if (n > 99) return "Bitte 0–99 eingeben.";
+                                  return null;
+                                },
                               ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 14),
-                      // ======================
-                      // Party-Typ + Only4Friends + Ausschließen
-                      // ======================
-                      _section(
-                        title: "Party-Typ",
-                        icon: Icons.lock_open_outlined,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 8,
-                              children: [
-                                _typeChip(
-                                  value: "Open",
-                                  label: "Open",
-                                  icon: Icons.lock_open_rounded,
-                                ),
-                                _typeChip(
-                                  value: "Closed",
-                                  label: "Closed",
-                                  icon: Icons.lock_rounded,
-                                ),
-                                _typeChip(
-                                  value: "Only4Friends",
-                                  label: "Only4Friends",
-                                  icon: Icons.people_alt,
-                                ),
-                              ],
+                        const SizedBox(height: 14),
+                        _section(
+                          title: "Ort",
+                          icon: Icons.location_on_outlined,
+                          child: TextFormField(
+                            controller: _addressController,
+                            focusNode: _addrNode,
+                            textInputAction: TextInputAction.done,
+                            onFieldSubmitted: (_) => _unfocus(),
+                            enableSuggestions: true,
+                            textCapitalization: TextCapitalization.words,
+                            autofillHints: const [AutofillHints.fullStreetAddress],
+                            style: const TextStyle(color: _textPrimary),
+                            decoration: _dec(
+                              "Adresse",
+                              hint: "z. B. Münzgasse 4, 1030 Wien",
+                              icon: Icons.place,
+                              errorText: _addressCountryError,
+                              suffix: IconButton(
+                                tooltip: 'Standort auf Karte wählen',
+                                onPressed: _openMapPicker,
+                                icon: const Icon(Icons.map_rounded, color: _secondary),
+                              ),
                             ),
-                            if (_partyType == "Only4Friends") ...[
+                            validator: (v) => _validateRequired(v, label: "Adresse"),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        _section(
+                          title: "Datum & Zeit",
+                          icon: Icons.schedule_outlined,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: _card,
+                                        foregroundColor: _textPrimary,
+                                        elevation: 0,
+                                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                      ),
+                                      onPressed: _pickDate,
+                                      icon: const Icon(Icons.calendar_today, color: _secondary),
+                                      label: AnimatedSwitcher(
+                                        duration: const Duration(milliseconds: 150),
+                                        child: Text(
+                                          _selectedDate == null
+                                              ? "Datum wählen"
+                                              : "${_selectedDate!.day.toString().padLeft(2, '0')}.${_selectedDate!.month.toString().padLeft(2, '0')}.${_selectedDate!.year}",
+                                          key: ValueKey(_selectedDate?.toIso8601String() ?? 'none'),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: _card,
+                                        foregroundColor: _textPrimary,
+                                        elevation: 0,
+                                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                      ),
+                                      onPressed: _pickTime,
+                                      icon: const Icon(Icons.access_time, color: _secondary),
+                                      label: AnimatedSwitcher(
+                                        duration: const Duration(milliseconds: 150),
+                                        child: Text(
+                                          (_selectedTime == null) ? "Uhrzeit wählen" : _timeController.text,
+                                          key: ValueKey(_timeController.text.isEmpty ? 'none' : _timeController.text),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                               const SizedBox(height: 10),
-                              OutlinedButton.icon(
-                                onPressed: _openExcludeFriendsDialog,
-                                icon: const Icon(Icons.person_off,
-                                    size: 18, color: Colors.white70),
-                                label: Text(
-                                  _excludedFriends.isEmpty
-                                      ? "Freunde ausschließen"
-                                      : "Ausgeschlossen (${_excludedFriends.length})",
-                                  style:
-                                  const TextStyle(color: Colors.white70),
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  side:
-                                  const BorderSide(color: _panelBorder),
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 14),
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius:
-                                      BorderRadius.circular(14)),
-                                ),
+                              Wrap(
+                                spacing: 8,
+                                children: [
+                                  _quickTimeChip("Heute 22:00", () {
+                                    _unfocus();
+                                    final now = DateTime.now();
+                                    _selectedDate = DateTime(now.year, now.month, now.day);
+                                    _selectedTime = const TimeOfDay(hour: 22, minute: 0);
+                                    _timeController.text = "22:00";
+                                    setState(() {});
+                                  }),
+                                  _quickTimeChip("Morgen 21:00", () {
+                                    _unfocus();
+                                    final now = DateTime.now().add(const Duration(days: 1));
+                                    _selectedDate = DateTime(now.year, now.month, now.day);
+                                    _selectedTime = const TimeOfDay(hour: 21, minute: 0);
+                                    _timeController.text = "21:00";
+                                    setState(() {});
+                                  }),
+                                  _quickTimeChip("Fr 22:00", () {
+                                    _unfocus();
+                                    final now = DateTime.now();
+                                    final diff = (5 - now.weekday + 7) % 7;
+                                    final d = now.add(Duration(days: diff == 0 ? 7 : diff));
+                                    _selectedDate = DateTime(d.year, d.month, d.day);
+                                    _selectedTime = const TimeOfDay(hour: 22, minute: 0);
+                                    _timeController.text = "22:00";
+                                    setState(() {});
+                                  }),
+                                ],
                               ),
-                              if (_excludedFriends.isNotEmpty) ...[
-                                const SizedBox(height: 6),
-                                Text(
-                                  "Ausgeschlossen: ${_excludedFriends.join(', ')}",
-                                  style: const TextStyle(
-                                      color: _textSecondary, fontSize: 12),
+                              if (_triedSubmit && _selectedDate == null)
+                                const Padding(
+                                  padding: EdgeInsets.only(top: 8),
+                                  child: Text("Bitte ein Datum wählen.", style: TextStyle(color: Colors.orangeAccent)),
                                 ),
+                              if (_triedSubmit && _selectedTime == null)
+                                const Padding(
+                                  padding: EdgeInsets.only(top: 4),
+                                  child: Text("Bitte eine Uhrzeit wählen.", style: TextStyle(color: Colors.orangeAccent)),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        _section(
+                          title: "Party-Typ",
+                          icon: Icons.lock_open_outlined,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 8,
+                                children: [
+                                  _typeChip(value: "Open", label: "Open", icon: Icons.lock_open_rounded),
+                                  _typeChip(value: "Closed", label: "Closed", icon: Icons.lock_rounded),
+                                  _typeChip(value: "Only4Friends", label: "Only4Friends", icon: Icons.people_alt),
+                                ],
+                              ),
+                              if (_partyType == "Only4Friends") ...[
+                                const SizedBox(height: 10),
+                                OutlinedButton.icon(
+                                  onPressed: _openExcludeFriendsDialog,
+                                  icon: const Icon(Icons.person_off, size: 18, color: _secondary),
+                                  label: Text(
+                                    _excludedFriends.isEmpty
+                                        ? "Freunde ausschließen"
+                                        : "Ausgeschlossen (${_excludedFriends.length})",
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(color: _panelBorder),
+                                    padding: const EdgeInsets.symmetric(vertical: 14),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                  ),
+                                ),
+                                if (_excludedFriends.isNotEmpty) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    "Ausgeschlossen: ${_excludedFriends.join(', ')}",
+                                    style: const TextStyle(color: _textSecondary, fontSize: 12),
+                                  ),
+                                ],
                               ],
                             ],
-                          ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -1361,8 +1271,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   color: Colors.black.withOpacity(0.35),
-                  child: const Center(
-                      child: CircularProgressIndicator(strokeWidth: 3)),
+                  child: const Center(child: CircularProgressIndicator(strokeWidth: 3)),
                 ),
               ),
             ),
@@ -1376,10 +1285,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       label: Text(label),
       onPressed: onPressed,
       backgroundColor: _card,
-      shape:
-      StadiumBorder(side: BorderSide(color: _panelBorder)),
-      labelStyle: const TextStyle(
-          color: _textPrimary, fontWeight: FontWeight.w600),
+      shape: StadiumBorder(side: BorderSide(color: _panelBorder)),
+      labelStyle: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
     );
   }

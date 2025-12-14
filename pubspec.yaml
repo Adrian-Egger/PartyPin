@@ -36,12 +36,12 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - lib/Pics/logo2.png
+    - lib/Pics/PartyPinLogo.png
 
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "lib/Pics/logo2.png"
+  image_path: "lib/Pics/PartyPinLogo.png"
   adaptive_icon_background: "#000000"
-  adaptive_icon_foreground: "lib/Pics/logo2.png"
+  adaptive_icon_foreground: "lib/Pics/PartyPinLogo.png"
   remove_alpha_ios: true

@@ -78,14 +78,14 @@ class _BarFeedbackScreenState extends State<BarFeedbackScreen> {
         leading: IconButton(
           icon: const Icon(
             Icons.arrow_back_ios_new_rounded,
-            color: Colors.white,
+            color: accent, // ✅ Pfeil rot
           ),
           onPressed: () {
             Navigator.pop(context); // Karte bleibt offen
           },
         ),
         title: const Text(
-          'Bar-Feedback',
+          'Bar-Feedback 🍹⭐📝', // ✅ Emojis in Überschrift
           style: TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.w800,
@@ -118,20 +118,19 @@ class _FeedbackContent extends StatelessWidget {
         .snapshots();
 
     // Optional: Bar-Daten (Name + globaler Rating-Durchschnitt aus dem Bar-Dokument)
-    final barDocStream =
-    FirebaseFirestore.instance.collection('bars').doc(barId).snapshots();
+    final barDocStream = FirebaseFirestore.instance.collection('bars').doc(barId).snapshots();
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: barDocStream,
       builder: (context, barSnap) {
         final barData = barSnap.data?.data();
         final barName = (barData?['barName'] ?? 'Deine Bar').toString().trim();
-        final double? barRatingAvg = barData?['ratingAvg'] != null
-            ? (barData!['ratingAvg'] as num).toDouble()
-            : null;
-        final int barRatingCount = barData?['ratingCount'] != null
-            ? (barData!['ratingCount'] as num).toInt()
-            : 0;
+
+        final double? barRatingAvg =
+        barData?['ratingAvg'] != null ? (barData!['ratingAvg'] as num).toDouble() : null;
+
+        final int barRatingCount =
+        barData?['ratingCount'] != null ? (barData!['ratingCount'] as num).toInt() : 0;
 
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: feedbackStream,
@@ -179,9 +178,9 @@ class _FeedbackContent extends StatelessWidget {
                       border: Border.all(color: Colors.white12),
                     ),
                     child: const Text(
-                      'Noch keine Feedbacks zu Ihren Events vorhanden.\n'
-                          'Motivieren Sie Ihre Gäste, nach dem Event kurz zu bewerten – '
-                          'damit sie Ihnen zeigen können, wie ihnen Ihre Bar gefällt.',
+                      'Noch keine Feedbacks zu deinen Events vorhanden.\n'
+                          'Motiviere deine Gäste, nach dem Event kurz zu bewerten – '
+                          'damit sie dir zeigen können, wie ihnen deine Bar gefällt.',
                       style: TextStyle(
                         color: Colors.white70,
                         fontSize: 13,
@@ -196,13 +195,7 @@ class _FeedbackContent extends StatelessWidget {
             // Durchschnitt + Verteilung aus allen Feedbacks berechnen
             double sum = 0;
             int count = 0;
-            final Map<int, int> distribution = {
-              5: 0,
-              4: 0,
-              3: 0,
-              2: 0,
-              1: 0,
-            };
+            final Map<int, int> distribution = {5: 0, 4: 0, 3: 0, 2: 0, 1: 0};
 
             for (final d in docs) {
               final data = d.data();
@@ -210,9 +203,7 @@ class _FeedbackContent extends StatelessWidget {
               if (r != null && r > 0) {
                 sum += r;
                 count++;
-                if (distribution.containsKey(r)) {
-                  distribution[r] = distribution[r]! + 1;
-                }
+                distribution[r] = (distribution[r] ?? 0) + 1;
               }
             }
 
@@ -221,24 +212,15 @@ class _FeedbackContent extends StatelessWidget {
             return ListView.separated(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
               itemBuilder: (context, index) {
-                // Ganz oben: Zusammenfassungskarte
                 if (index == 0) {
-                  return Column(
-                    children: [
-                      _buildSummaryCard(
-                        barName: barName,
-                        barRatingAvg: barRatingAvg,
-                        barRatingCount: barRatingCount,
-                        hasAnyFeedback: count > 0,
-                        overallAvg: overallAvg,
-                        overallCount: count,
-                        distribution: distribution,
-                      ),
-                      const SizedBox(height: 14),
-                      _buildFeedbackCard(
-                        docs[0].data(),
-                      ),
-                    ],
+                  return _buildSummaryCard(
+                    barName: barName,
+                    barRatingAvg: barRatingAvg,
+                    barRatingCount: barRatingCount,
+                    hasAnyFeedback: count > 0,
+                    overallAvg: overallAvg,
+                    overallCount: count,
+                    distribution: distribution,
                   );
                 }
 
@@ -265,8 +247,7 @@ class _FeedbackContent extends StatelessWidget {
     required Map<int, int> distribution,
   }) {
     final double? effectiveAvg = overallAvg ?? barRatingAvg;
-    final int effectiveCount =
-    overallCount > 0 ? overallCount : barRatingCount;
+    final int effectiveCount = overallCount > 0 ? overallCount : barRatingCount;
 
     return Container(
       width: double.infinity,
@@ -296,7 +277,7 @@ class _FeedbackContent extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           const Text(
-            'Dein Bar- & Event-Rating',
+            'Dein Bar- & Event-Rating 🍹⭐',
             style: TextStyle(
               color: Colors.white70,
               fontSize: 13,
@@ -348,7 +329,7 @@ class _FeedbackContent extends StatelessWidget {
             const Divider(color: Colors.white12, height: 1),
             const SizedBox(height: 8),
             Text(
-              'Verteilung deiner Sterne',
+              'Verteilung deiner Sterne ✨',
               style: TextStyle(
                 color: Colors.white.withOpacity(0.9),
                 fontWeight: FontWeight.w600,
@@ -362,8 +343,7 @@ class _FeedbackContent extends StatelessWidget {
               children: [5, 4, 3, 2, 1].map((star) {
                 final cnt = distribution[star] ?? 0;
                 return Container(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: Colors.black.withOpacity(0.25),
                     borderRadius: BorderRadius.circular(999),
@@ -396,7 +376,7 @@ class _FeedbackContent extends StatelessWidget {
           ],
           const SizedBox(height: 10),
           const Text(
-            'Hinweis: Diese Werte sind nur für Sie sichtbar und basieren auf allen Event-Bewertungen Ihrer Bar.',
+            'Hinweis: Diese Werte sind nur für dich sichtbar und basieren auf allen Event-Bewertungen deiner Bar.',
             style: TextStyle(
               color: Colors.white38,
               fontSize: 11,
@@ -409,10 +389,18 @@ class _FeedbackContent extends StatelessWidget {
   }
 
   static Widget _buildFeedbackCard(Map<String, dynamic> data) {
-    final eventTitle =
-    (data['eventTitle'] ?? 'Unbekanntes Event').toString().trim();
-    final userName =
-    (data['userName'] ?? 'Unbekannter Nutzer').toString().trim();
+    final eventTitle = (data['eventTitle'] ?? 'Unbekanntes Event').toString().trim();
+
+    // ✅ anonym richtig auslesen
+    final bool anonymous = data['anonymous'] == true;
+
+    // ✅ Username korrekt: wenn anonym -> "Anonym", sonst userName (Fallback)
+    final String userName = anonymous
+        ? 'Anonym'
+        : ((data['userName'] ?? '').toString().trim().isNotEmpty
+        ? (data['userName'] ?? '').toString().trim()
+        : 'Unbekannter Nutzer');
+
     final comment = (data['comment'] ?? '').toString().trim();
     final rating = _parseRating(data['rating']) ?? 0;
 
@@ -420,17 +408,19 @@ class _FeedbackContent extends StatelessWidget {
     final rawEventDate = data['eventDate'];
     if (rawEventDate is Timestamp) {
       eventDate = rawEventDate.toDate();
+    } else if (rawEventDate is String) {
+      eventDate = DateTime.tryParse(rawEventDate);
     }
 
     DateTime? createdAt;
     final rawCreated = data['createdAt'];
     if (rawCreated is Timestamp) {
       createdAt = rawCreated.toDate();
+    } else if (rawCreated is String) {
+      createdAt = DateTime.tryParse(rawCreated);
     }
 
-    final eventLine =
-    eventDate != null ? '$eventTitle · ${_formatDate(eventDate)}' : eventTitle;
-
+    final eventLine = eventDate != null ? '$eventTitle · ${_formatDate(eventDate)}' : eventTitle;
     final createdLine = createdAt != null ? _formatDateTime(createdAt) : null;
 
     return Container(
@@ -444,7 +434,6 @@ class _FeedbackContent extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Eventname + Datum
           Text(
             eventLine,
             style: const TextStyle(
@@ -454,7 +443,6 @@ class _FeedbackContent extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          // Wer es geschrieben hat
           Text(
             'von $userName',
             style: const TextStyle(
@@ -463,7 +451,6 @@ class _FeedbackContent extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
-          // Sterne + Zeitstempel
           Row(
             children: [
               _buildStars(rating),
@@ -480,7 +467,6 @@ class _FeedbackContent extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          // Kommentar
           if (comment.isNotEmpty)
             Text(
               comment,
@@ -523,11 +509,9 @@ class _FeedbackContent extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: List.generate(5, (i) {
         if (i < rating) {
-          return const Icon(Icons.star_rounded,
-              color: Colors.amber, size: 18);
+          return const Icon(Icons.star_rounded, color: Colors.amber, size: 18);
         } else {
-          return const Icon(Icons.star_border_rounded,
-              color: Colors.white38, size: 18);
+          return const Icon(Icons.star_border_rounded, color: Colors.white38, size: 18);
         }
       }),
     );

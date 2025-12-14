@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import '../Screens/new_party.dart';
 
+// ✅ AppDraggableSheet liegt bei dir in Services:
+import '../Services/app_draggable_sheet.dart';
+
 typedef VoidAsync = Future<void> Function();
 typedef StringAsync = Future<void> Function(String value);
 typedef UserStatusAsync = Future<void> Function(String user, String status);
@@ -39,7 +42,7 @@ class PartyBottomSheet extends StatelessWidget {
     required this.recolorOpenMarker,
     required this.setClosedLockIcon,
     required this.onEditedParty,
-    this.isBarAccount = false, // NEU: Bar-Account-Flag
+    this.isBarAccount = false,
   });
 
   final String partyId;
@@ -70,7 +73,6 @@ class PartyBottomSheet extends StatelessWidget {
 
   final VoidAsync onEditedParty;
 
-  // NEU: ist das ein Bar-Account?
   final bool isBarAccount;
 
   // -------- User ausladen (alle Typen) --------
@@ -171,7 +173,6 @@ class PartyBottomSheet extends StatelessWidget {
 
   // -------- Party-Start + Ablauf-Timer (24h ab Start) --------
   DateTime? _partyStartFromData() {
-    // NEU: bevorzugt startTime verwenden
     final startRaw = data['startTime'];
 
     if (startRaw is Timestamp) {
@@ -181,7 +182,6 @@ class PartyBottomSheet extends StatelessWidget {
       if (parsed != null) return parsed.toLocal();
     }
 
-    // Fallback: alte Speicherung mit date + time
     final v = data['date'];
     DateTime? base;
     if (v is Timestamp) {
@@ -208,10 +208,8 @@ class PartyBottomSheet extends StatelessWidget {
     final start = _partyStartFromData();
     if (start == null) return const SizedBox.shrink();
 
-    // 24h ab Partybeginn (hier 23h, wie bei dir)
     final cutoff = start.add(const Duration(hours: 23));
 
-    // Vor Partybeginn nicht länger als 24h anzeigen:
     final now = DateTime.now();
     final effectiveNow = now.isBefore(start) ? start : now;
 
@@ -241,8 +239,18 @@ class PartyBottomSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final typeStr = (data['type'] ?? (isClosed ? 'Closed' : 'Open')).toString();
     final isFriendsOnly = typeStr == 'Only4Friends';
-
     final canSeeFull = isFriendsOnly ? true : (!isClosed || baseCanSeeFull);
+
+    final hostNameStr = (data['hostName'] ?? '').toString();
+    final hostLabel = isHost ? "$hostNameStr (du)" : hostNameStr;
+
+    final Color badgeColor = isFriendsOnly
+        ? Colors.deepPurple[700]!
+        : (isClosed ? Colors.blueGrey[800]! : Colors.green[800]!);
+    final IconData badgeIcon =
+    isFriendsOnly ? Icons.group_rounded : (isClosed ? Icons.lock : Icons.public);
+    final String badgeLabel =
+    isFriendsOnly ? "Only4Friends" : (isClosed ? "Closed" : "Open");
 
     Future<void> _confirmAndDeleteParty() async {
       final confirm = await showDialog<bool>(
@@ -323,8 +331,8 @@ class PartyBottomSheet extends StatelessWidget {
             style: const TextStyle(
                 color: Colors.white, fontWeight: FontWeight.w600)),
         Expanded(
-            child: Text(value,
-                style: const TextStyle(color: Colors.white70))),
+          child: Text(value, style: const TextStyle(color: Colors.white70)),
+        ),
       ],
     );
 
@@ -337,8 +345,8 @@ class PartyBottomSheet extends StatelessWidget {
             children: [
               infoRow(Icons.event, "🗓️ Datum", formattedDate),
               const SizedBox(height: 8),
-              infoRow(
-                  Icons.schedule, "⏰ Uhrzeit", (data['time'] ?? '—').toString()),
+              infoRow(Icons.schedule, "⏰ Uhrzeit",
+                  (data['time'] ?? '—').toString()),
               const SizedBox(height: 8),
               infoRow(Icons.people, "👥 Gästelimit",
                   (data['guestLimit'] ?? '—').toString()),
@@ -346,11 +354,12 @@ class PartyBottomSheet extends StatelessWidget {
               infoRow(Icons.euro, "💶 Preis", "${(data['price'] ?? '—')}€"),
               const SizedBox(height: 8),
               infoRow(
-                  Icons.cake_outlined,
-                  "🔞 Mindestalter",
-                  ((data['minAge']?.toString() ?? '').isEmpty
-                      ? '—'
-                      : data['minAge'].toString())),
+                Icons.cake_outlined,
+                "🔞 Mindestalter",
+                ((data['minAge']?.toString() ?? '').isEmpty
+                    ? '—'
+                    : data['minAge'].toString()),
+              ),
               const SizedBox(height: 8),
               infoRow(Icons.place, "📍 Adresse",
                   (data['address'] ?? '—').toString()),
@@ -375,48 +384,36 @@ class PartyBottomSheet extends StatelessWidget {
           infoRow(Icons.event, "🗓️ Datum", formattedDate),
           const SizedBox(height: 8),
           infoRow(
-              Icons.cake_outlined,
-              "🔞 Mindestalter",
-              ((data['minAge']?.toString() ?? '').isEmpty
-                  ? '—'
-                  : data['minAge'].toString())),
+            Icons.cake_outlined,
+            "🔞 Mindestalter",
+            ((data['minAge']?.toString() ?? '').isEmpty
+                ? '—'
+                : data['minAge'].toString()),
+          ),
           const SizedBox(height: 12),
           const Text(
             "Weitere Details sind verborgen, bis der Host dich zulässt.",
-            style:
-            TextStyle(color: Colors.white54, fontStyle: FontStyle.italic),
+            style: TextStyle(color: Colors.white54, fontStyle: FontStyle.italic),
           ),
         ],
       ),
     );
 
-    final hostNameStr = (data['hostName'] ?? '').toString();
-    final hostLabel = isHost ? "$hostNameStr (du)" : hostNameStr;
+    // ✅ HIER ist die Einbindung: AppDraggableSheet übernimmt das „oben -> runterwischen -> schließen“ Verhalten.
+    return AppDraggableSheet(
+      panelColor: Colors.grey[900]!,
+      borderColor: Colors.grey[800]!,
+      // optional feinjustieren:
+      // initialChildSize: 0.80,
+      // minChildSize: 0.25,
+      // maxChildSize: 0.95,
+      // dismissPullPx: 120,
 
-    final Color badgeColor = isFriendsOnly
-        ? Colors.deepPurple[700]!
-        : (isClosed ? Colors.blueGrey[800]! : Colors.green[800]!);
-    final IconData badgeIcon =
-    isFriendsOnly ? Icons.group_rounded : (isClosed ? Icons.lock : Icons.public);
-    final String badgeLabel =
-    isFriendsOnly ? "Only4Friends" : (isClosed ? "Closed" : "Open");
-
-    return Container(
-      width: MediaQuery.of(context).size.width,
-      height: MediaQuery.of(context).size.height * 0.80,
-      padding: const EdgeInsets.all(22),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      childBuilder: (context, scrollController) {
+        return ListView(
+          controller: scrollController,
+          padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
           children: [
-            Center(
-                child: Container(
-                    width: 46,
-                    height: 5,
-                    decoration: BoxDecoration(
-                        color: Colors.grey[700],
-                        borderRadius: BorderRadius.circular(10)))),
-            const SizedBox(height: 16),
             Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
@@ -425,9 +422,10 @@ class PartyBottomSheet extends StatelessWidget {
                     data['name'] ??
                         (isClosed ? "Geschlossene Party" : "Party"),
                     style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white),
+                      fontSize: 26,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -444,16 +442,21 @@ class PartyBottomSheet extends StatelessWidget {
                     children: [
                       Icon(badgeIcon, color: Colors.white, size: 16),
                       const SizedBox(width: 6),
-                      Text(badgeLabel,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600)),
+                      Text(
+                        badgeLabel,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ],
             ),
+
             const SizedBox(height: 12),
+
             FutureBuilder<bool>(
               future: isUserVerified(hostNameStr),
               builder: (context, snap) {
@@ -462,26 +465,31 @@ class PartyBottomSheet extends StatelessWidget {
                   padding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
-                      color: Colors.indigo[700],
-                      borderRadius: BorderRadius.circular(12)),
+                    color: Colors.indigo[700],
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       if (isVerified) ...[
-                        const Icon(Icons.verified,
-                            color: Colors.white, size: 18),
+                        const Icon(Icons.verified, color: Colors.white, size: 18),
                         const SizedBox(width: 8),
                       ],
-                      Text("Host: $hostLabel",
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600)),
+                      Text(
+                        "Host: $hostLabel",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ],
                   ),
                 );
               },
             ),
+
             const SizedBox(height: 16),
+
             if (isFriendsOnly)
               _pill("👥 Nur für Freunde sichtbar.", Colors.deepPurpleAccent)
             else if (isClosed && !canSeeFull)
@@ -491,17 +499,22 @@ class PartyBottomSheet extends StatelessWidget {
             else if (isClosed && canSeeFull)
                 _pill("✅ Zugriff freigegeben – alle Details sichtbar.",
                     Colors.lightGreenAccent),
+
             const SizedBox(height: 16),
             if (canSeeFull) fullDetails else closedPartial,
+
             const SizedBox(height: 20),
             const Divider(color: Color(0x33FFFFFF)),
             const SizedBox(height: 12),
+
             if (isHost) ...[
               if (isClosed && !isFriendsOnly)
                 _hostClosedLists(context)
               else
                 _hostOpenLists(context),
+
               const SizedBox(height: 16),
+
               Center(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -550,10 +563,12 @@ class PartyBottomSheet extends StatelessWidget {
                 _guestOpenActions(context)
               else
                 _guestClosedActions(context),
+
               if (inRatingWindow && !isFriendsOnly) ...[
                 const SizedBox(height: 12),
                 _ratingButtons(context),
               ],
+
               if (isActive) ...[
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
@@ -567,19 +582,18 @@ class PartyBottomSheet extends StatelessWidget {
                 ),
               ],
             ],
+
             const SizedBox(height: 12),
             _buildExpiryInfo(),
           ],
-        ),
-      ),
+        );
+      },
     );
   }
 
   // ---------- Guest Open ----------
   Widget _guestOpenActions(BuildContext context) {
-    // NEU: Bar-Accounts sehen bei fremden Partys keine „Ich komme“-Buttons
     if (isBarAccount && !isHost) {
-      // Nur Zähler anzeigen
       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: comingStream(),
         builder: (context, cs) {
@@ -612,6 +626,7 @@ class PartyBottomSheet extends StatelessWidget {
         style: TextStyle(color: Colors.redAccent),
       );
     }
+
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: rsvpStream(),
       builder: (context, snap) {
@@ -626,8 +641,7 @@ class PartyBottomSheet extends StatelessWidget {
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                   minimumSize: const Size.fromHeight(48),
-                  backgroundColor:
-                  isGoing ? Colors.green : Colors.redAccent,
+                  backgroundColor: isGoing ? Colors.green : Colors.redAccent,
                   foregroundColor: Colors.white),
               onPressed: () async {
                 if (currentUsername == null) return;
@@ -655,8 +669,7 @@ class PartyBottomSheet extends StatelessWidget {
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                   minimumSize: const Size.fromHeight(48),
-                  backgroundColor:
-                  isMaybe ? Colors.green : Colors.redAccent,
+                  backgroundColor: isMaybe ? Colors.green : Colors.redAccent,
                   foregroundColor: Colors.white),
               onPressed: () async {
                 if (currentUsername == null) return;
@@ -754,8 +767,7 @@ class PartyBottomSheet extends StatelessWidget {
               }
             },
             icon: const Icon(Icons.lock_open_rounded),
-            label:
-            const Text("Anfrage senden", style: TextStyle(fontSize: 18)),
+            label: const Text("Anfrage senden", style: TextStyle(fontSize: 18)),
           );
         } else if (status == 'pending') {
           return _pill("Anfrage gesendet – warte auf Antwort", Colors.green);
@@ -1009,8 +1021,7 @@ class PartyBottomSheet extends StatelessWidget {
                     backgroundColor: Colors.green,
                     foregroundColor: Colors.white,
                     minimumSize: const Size.fromHeight(44)),
-                onPressed:
-                canRate ? () async => await onSetRating('good') : null,
+                onPressed: canRate ? () async => await onSetRating('good') : null,
                 icon: const Icon(Icons.thumb_up),
                 label: const Text("Gut"),
               ),
@@ -1022,8 +1033,7 @@ class PartyBottomSheet extends StatelessWidget {
                     backgroundColor: Colors.redAccent,
                     foregroundColor: Colors.white,
                     minimumSize: const Size.fromHeight(44)),
-                onPressed:
-                canRate ? () async => await onSetRating('bad') : null,
+                onPressed: canRate ? () async => await onSetRating('bad') : null,
                 icon: const Icon(Icons.thumb_down),
                 label: const Text("Schlecht"),
               ),
@@ -1083,8 +1093,7 @@ class PartyBottomSheet extends StatelessWidget {
   static Widget _counter(String text) => Container(
     width: double.infinity,
     margin: const EdgeInsets.only(top: 12),
-    padding:
-    const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
     decoration: BoxDecoration(
       color: Colors.grey[850],
       borderRadius: BorderRadius.circular(12),

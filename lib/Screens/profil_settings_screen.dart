@@ -1,10 +1,11 @@
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../Screens/login_screen.dart';
 
@@ -17,7 +18,6 @@ const _card = Color(0xFF1C1F26);
 const _textPrimary = Colors.white;
 const _textSecondary = Color(0xFFB6BDC8);
 const _accent = Color(0xFFFF3B30); // Rot
-const _secondary = Color(0xFF00C2A8); // Türkis, falls du es wo brauchst
 
 class ProfileSettingsScreen extends StatefulWidget {
   const ProfileSettingsScreen({super.key});
@@ -29,7 +29,7 @@ class ProfileSettingsScreen extends StatefulWidget {
 class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   String _docId = "";
   String _username = "";
-  String? _avatar; // kann URL oder lokaler Pfad sein
+  String? _avatar; // URL (avatarUrl)
   String _passwordFromDb = "";
 
   final TextEditingController _usernameController = TextEditingController();
@@ -39,6 +39,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
   bool _editingUsername = false;
   bool _editingPassword = false;
+
+  bool _busyAvatar = false;
 
   final ImagePicker _picker = ImagePicker();
 
@@ -61,9 +63,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   Future<void> _loadUserData() async {
     final prefs = await SharedPreferences.getInstance();
     final username = prefs.getString('username') ?? "";
-    final localAvatar = prefs.getString('avatar'); // optional localer Pfad
+    final cachedAvatar = prefs.getString('avatar'); // URL gecached
 
-    String? avatar;
+    String? avatarUrl;
     String password = "";
 
     if (username.isNotEmpty) {
@@ -77,14 +79,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         final doc = query.docs.first;
         final data = doc.data();
 
-        avatar = (data['avatarUrl'] ?? data['avatar'])?.toString();
+        avatarUrl = (data['avatarUrl'] ?? '').toString().trim();
         password = (data['password'] ?? '').toString();
 
         setState(() {
           _docId = doc.id;
           _username = (data['username'] ?? username).toString();
           _usernameController.text = _username;
-          _avatar = avatar ?? localAvatar;
+          _avatar = avatarUrl!.isNotEmpty ? avatarUrl : cachedAvatar;
           _passwordFromDb = password;
         });
         return;
@@ -95,7 +97,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     setState(() {
       _username = username;
       _usernameController.text = username;
-      _avatar = localAvatar;
+      _avatar = cachedAvatar;
       _passwordFromDb = password;
     });
   }
@@ -108,7 +110,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         .update({field: value});
   }
 
-  // ---------- Avatar / Foto ----------
+  // ---------- Avatar / Foto (funktioniert für alle, weil Storage URL) ----------
 
   Future<bool> _ensurePermissionForSource(ImageSource source) async {
     if (source == ImageSource.camera) {
@@ -118,23 +120,31 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         return false;
       }
       return true;
-    } else {
-      PermissionStatus status;
-      if (Platform.isIOS) {
-        status = await Permission.photos.request();
-      } else {
+    }
+
+    // Galerie
+    PermissionStatus status;
+    if (Platform.isAndroid) {
+      // Android 13+ -> photos, ältere -> storage
+      status = await Permission.photos.request();
+      if (!status.isGranted) {
         status = await Permission.storage.request();
       }
-
-      if (!status.isGranted) {
-        _showSnack("Zugriff auf Fotos wurde verweigert.");
-        return false;
-      }
-      return true;
+    } else {
+      // iOS
+      status = await Permission.photos.request();
     }
+
+    if (!status.isGranted) {
+      _showSnack("Zugriff auf Fotos wurde verweigert.");
+      return false;
+    }
+    return true;
   }
 
   Future<void> _pickFromSource(ImageSource source) async {
+    if (_busyAvatar) return;
+
     final ok = await _ensurePermissionForSource(source);
     if (!ok) return;
 
@@ -144,21 +154,42 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       maxWidth: 900,
     );
 
-    if (image != null) {
-      // Aktuell: lokaler Pfad → in Prefs speichern, in Firestore nur als "avatar" merken.
-      // Sauber wäre: hier in Firebase Storage hochladen und downloadUrl als avatarUrl speichern.
-      final path = image.path;
+    if (image == null) return;
 
-      setState(() {
-        _avatar = path;
-      });
+    if (_docId.isEmpty) {
+      _showSnack("User-Dokument nicht gefunden. Bitte neu einloggen.");
+      return;
+    }
+
+    setState(() => _busyAvatar = true);
+
+    final file = File(image.path);
+
+    try {
+      // Upload nach Firebase Storage
+      final ref =
+      FirebaseStorage.instance.ref().child('avatars/$_docId.jpg');
+
+      await ref.putFile(
+        file,
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
+
+      final url = await ref.getDownloadURL();
+
+      setState(() => _avatar = url);
+
+      // Firestore + Prefs speichern (URL)
+      await _updateFirestoreField("avatarUrl", url);
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('avatar', path);
-
-      await _updateFirestoreField("avatar", path);
+      await prefs.setString('avatar', url);
 
       _showSnack("Profilbild aktualisiert.");
+    } catch (e) {
+      _showSnack("Upload fehlgeschlagen: $e");
+    } finally {
+      if (mounted) setState(() => _busyAvatar = false);
     }
   }
 
@@ -244,7 +275,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
     final lower = newUsername.toLowerCase();
 
-    // Unique-Check über username_lower
     final dup = await FirebaseFirestore.instance
         .collection("users")
         .where("username_lower", isEqualTo: lower)
@@ -256,13 +286,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       return;
     }
 
-    // Firestore updaten
     await FirebaseFirestore.instance.collection("users").doc(_docId).update({
       "username": newUsername,
       "username_lower": lower,
     });
 
-    // SharedPreferences updaten (username + currentUsername)
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('username', newUsername);
     await prefs.setString('currentUsername', newUsername);
@@ -273,9 +301,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     });
 
     _showSnack("Username erfolgreich geändert.");
-
-    // Hinweis: Alle Referenzen in anderen Collections (friendRequests, friendships, Party.hostId etc.)
-    // hängen aktuell vermutlich am Username. Für ein sauberes System solltest du langfristig auf stabile IDs (uid) umstellen.
   }
 
   Future<void> _savePassword() async {
@@ -292,7 +317,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       return;
     }
 
-    // Passwort NICHT mehr aus SharedPreferences, sondern immer frisch aus Firestore holen
     final snap = await FirebaseFirestore.instance
         .collection("users")
         .doc(_docId)
@@ -316,10 +340,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     });
 
     _showSnack("Passwort erfolgreich geändert.");
-
-    // Richtig wäre: Passwort überhaupt nicht in Firestore speichern,
-    // sondern FirebaseAuth verwenden. Dein aktuelles Login-System
-    // hängt aber offensichtlich an diesem Feld.
   }
 
   // ---------- Logout / Account löschen ----------
@@ -379,8 +399,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child:
-            const Text("Nein", style: TextStyle(color: _textSecondary)),
+            child: const Text("Nein", style: TextStyle(color: _textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
@@ -401,8 +420,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
           style: TextStyle(color: _accent),
         ),
         content: const Text(
-          "Dieser Vorgang ist endgültig und alle Daten werden gelöscht. "
-              "Willst du wirklich fortfahren?",
+          "Dieser Vorgang ist endgültig und alle Daten werden gelöscht. Willst du wirklich fortfahren?",
           style: TextStyle(color: _textSecondary),
         ),
         actions: [
@@ -423,6 +441,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     );
 
     if (confirm2 == true && _docId.isNotEmpty) {
+      // Optional: Avatar in Storage löschen (kein Muss)
+      try {
+        await FirebaseStorage.instance.ref().child('avatars/$_docId.jpg').delete();
+      } catch (_) {}
+
       await FirebaseFirestore.instance.collection("users").doc(_docId).delete();
 
       final prefs = await SharedPreferences.getInstance();
@@ -483,7 +506,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
             child: Column(
               children: [
                 GestureDetector(
-                  onTap: _pickAvatar,
+                  onTap: _busyAvatar ? null : _pickAvatar,
                   child: Stack(
                     alignment: Alignment.bottomRight,
                     children: [
@@ -505,8 +528,18 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                           color: _accent,
                           border: Border.all(color: _panel, width: 2),
                         ),
-                        padding: const EdgeInsets.all(4),
-                        child: const Icon(
+                        padding: const EdgeInsets.all(6),
+                        child: _busyAvatar
+                            ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor:
+                            AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        )
+                            : const Icon(
                           Icons.edit,
                           color: Colors.white,
                           size: 18,
@@ -546,9 +579,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                       if (_editingUsername) {
                         _saveUsername();
                       } else {
-                        setState(() {
-                          _editingUsername = true;
-                        });
+                        setState(() => _editingUsername = true);
                       }
                     },
                   ),
@@ -573,8 +604,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         decoration: const InputDecoration(
                           border: UnderlineInputBorder(),
                           hintText: "Aktuelles Passwort",
-                          hintStyle:
-                          TextStyle(color: _textSecondary),
+                          hintStyle: TextStyle(color: _textSecondary),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -585,8 +615,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         decoration: const InputDecoration(
                           border: UnderlineInputBorder(),
                           hintText: "Neues Passwort",
-                          hintStyle:
-                          TextStyle(color: _textSecondary),
+                          hintStyle: TextStyle(color: _textSecondary),
                         ),
                       ),
                     ],
@@ -600,9 +629,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                       if (_editingPassword) {
                         _savePassword();
                       } else {
-                        setState(() {
-                          _editingPassword = true;
-                        });
+                        setState(() => _editingPassword = true);
                       }
                     },
                   ),
@@ -664,10 +691,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       return const AssetImage('lib/Pics/profile_pic.png');
     }
 
+    // URL -> alle Geräte sehen es
     if (avatar.startsWith('http://') || avatar.startsWith('https://')) {
       return NetworkImage(avatar);
     }
 
+    // Fallback (sollte kaum noch passieren)
     if (File(avatar).existsSync()) {
       return FileImage(File(avatar));
     }

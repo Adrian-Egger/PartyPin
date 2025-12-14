@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PartyPin Premium – PayPal Abo</title>
+  <meta name="robots" content="noindex,nofollow" />
+  <style>
+    :root{
+      --bgTop:#0E0F12;
+      --bgBottom:#141A22;
+      --panel:#15171C;
+      --border:#2A2F38;
+      --text:#ffffff;
+      --muted:#B6BDC8;
+      --accent:#FF3B30;
+      --secondary:#00C2A8;
+      --ok:#00C2A8;
+      --err:#FF6B6B;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      color:var(--text);
+      background:linear-gradient(180deg,var(--bgTop),var(--bgBottom));
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:18px;
+    }
+    .wrap{width:100%;max-width:520px;}
+    .brand{display:flex;align-items:center;gap:10px;margin:0 0 14px;}
+    .logoDot{
+      width:14px;height:14px;border-radius:50%;
+      background:var(--accent);
+      box-shadow:0 0 0 6px rgba(255,59,48,.12);
+    }
+    .brand h1{margin:0;font-size:20px;font-weight:900}
+    .brand .tag{
+      margin-left:auto;font-size:12px;color:var(--muted);
+      border:1px solid var(--border);
+      background:rgba(255,255,255,.03);
+      padding:6px 10px;border-radius:999px;
+      display:flex;align-items:center;gap:6px;
+    }
+    .card{
+      background:rgba(21,23,28,.92);
+      border:1px solid var(--border);
+      border-radius:18px;
+      padding:16px;
+      box-shadow:0 12px 34px rgba(0,0,0,.45);
+    }
+    .headline{margin:2px 0 6px;font-size:18px;font-weight:900}
+    .sub{margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.45}
+    .pillRow{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 12px}
+    .pill{
+      display:inline-flex;align-items:center;gap:8px;
+      padding:7px 10px;border:1px solid var(--border);
+      border-radius:999px;background:rgba(255,255,255,.04);
+      font-size:12px;
+    }
+    .dot{width:8px;height:8px;border-radius:50%;background:var(--secondary)}
+    .price{
+      display:flex;align-items:baseline;gap:8px;
+      margin:2px 0 12px;padding:12px;
+      border-radius:14px;
+      border:1px solid rgba(0,194,168,.35);
+      background:rgba(0,194,168,.08);
+    }
+    .price .big{font-size:22px;font-weight:900}
+    .price .small{color:var(--muted);font-size:13px}
+    .divider{height:1px;background:rgba(255,255,255,.06);margin:12px 0}
+    .msg{
+      margin-top:12px;font-size:13px;color:var(--muted);
+      padding:10px 12px;border-radius:14px;
+      border:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.03);
+      word-break: break-word;
+    }
+    .msg.ok{border-color:rgba(0,194,168,.35);background:rgba(0,194,168,.08);color:#dffef7}
+    .msg.err{border-color:rgba(255,107,107,.35);background:rgba(255,107,107,.1);color:#ffe3e3}
+    .hide{display:none}
+    .foot{margin-top:12px;color:rgba(182,189,200,.75);font-size:11px;text-align:center}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">
+      <div class="logoDot"></div>
+      <h1>PartyPin</h1>
+      <div class="tag">🔒 Sicher mit PayPal</div>
+    </div>
+
+    <div class="card">
+      <div class="headline">PartyPin Premium</div>
+      <p class="sub">
+        Du bestätigst dein Abo direkt bei PayPal. PartyPin speichert keine Zahlungsdaten.
+        Premium wird danach automatisch aktiviert.
+      </p>
+
+      <div class="pillRow">
+        <span class="pill"><span class="dot"></span><span id="pillUser">User: -</span></span>
+        <span class="pill"><span class="dot"></span><span id="pillPlan">Plan: -</span></span>
+      </div>
+
+      <div class="price">
+        <div class="big" id="priceBig">—</div>
+        <div class="small" id="priceSmall">—</div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div id="paypal-button-container"></div>
+      <div id="msg" class="msg hide"></div>
+
+      <div class="foot">Support: mypartypin@gmail.com</div>
+    </div>
+  </div>
+
+  <script>
+    // ✅ Plan IDs
+    const PLAN_MONTHLY = "P-55588718AV729883XNE6MJ5Y";
+    const PLAN_YEARLY  = "P-0WL99384633096336NE6WUSA";
+
+    // ✅ Cloud Function (bei dir bereits deployt)
+    const ACTIVATE_URL =
+      "https://us-central1-partypin-5dc3f.cloudfunctions.net/activatePayPalSubscription";
+
+    const params = new URLSearchParams(window.location.search);
+    const plan = (params.get("plan") || "monthly").toLowerCase();
+    const username = (params.get("u") || "").trim();
+
+    const selectedPlanId = plan === "yearly" ? PLAN_YEARLY : PLAN_MONTHLY;
+
+    document.getElementById("pillUser").textContent = "User: " + (username || "-");
+    document.getElementById("pillPlan").textContent =
+      "Plan: " + (plan === "yearly" ? "Jährlich" : "Monatlich");
+
+    // ✅ Preise (nur Anzeige in deiner Seite)
+    if (plan === "yearly") {
+      document.getElementById("priceBig").textContent = "14,99 €";
+      document.getElementById("priceSmall").textContent = "pro Jahr";
+    } else {
+      document.getElementById("priceBig").textContent = "1,49 €";
+      document.getElementById("priceSmall").textContent = "pro Monat";
+    }
+
+    const msg = document.getElementById("msg");
+    function showMsg(text, type){
+      msg.classList.remove("hide","ok","err");
+      msg.textContent = text;
+      if(type==="ok") msg.classList.add("ok");
+      if(type==="err") msg.classList.add("err");
+    }
+
+    if(!username){
+      showMsg("Kein Username übergeben.", "err");
+    }
+  </script>
+
+  <script
+    src="https://www.paypal.com/sdk/js?client-id=AZwQ6gZy7BOQbnQXFGj1V60PheyCA8n6VTvS-aqKbB0Ka-qxnK8kVDLwhTd2NBIarywNH68Tn2A5a1XQ&vault=true&intent=subscription">
+  </script>
+
+  <script>
+    function renderButtons(){
+      if(!username) return;
+
+      paypal.Buttons({
+        style:{shape:"pill",color:"blue",layout:"vertical",label:"paypal"},
+        createSubscription:(data,actions)=>{
+          msg.classList.add("hide");
+          return actions.subscription.create({plan_id:selectedPlanId});
+        },
+        onApprove:async(data)=>{
+          showMsg("Premium wird aktiviert …","");
+          try{
+            const res = await fetch(ACTIVATE_URL,{
+              method:"POST",
+              headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({
+                subscriptionId:data.subscriptionID,
+                planId:selectedPlanId,
+                username:username
+              })
+            });
+            const json = await res.json().catch(()=>({}));
+            if(res.ok && json.status==="ok"){
+              showMsg("Premium aktiviert. Fenster kann geschlossen werden.","ok");
+            }else{
+              showMsg("Aktivierung fehlgeschlagen.","err");
+            }
+          }catch(e){
+            showMsg("Netzwerkfehler.","err");
+          }
+        },
+        onError:()=>showMsg("PayPal Fehler.","err")
+      }).render("#paypal-button-container");
+    }
+    renderButtons();
+  </script>
+</body>
+</html>

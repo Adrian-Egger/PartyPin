@@ -38,11 +38,26 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   static const _muted = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30);
 
-  // Basis-Durchmesser für eigene Icons
-  static const int _lockBaseDiameter = 80;
-  static const int _friendsBaseDiameter = 80;
-  static const int _hitBaseDiameter = 160;
-  static const int _barBaseDiameter = 80;
+  // ✅ NEU: öffentliche POIs (Zoo, Botanischer Garten, usw.) ausblenden
+  // (Das sind Google-POIs, die kann man nicht "löschen", nur via Map-Style verstecken.)
+  static const String _mapStyleHidePublicPois = r'''
+  [
+    { "featureType": "poi", "stylers": [ { "visibility": "off" } ] },
+    { "featureType": "poi.park", "stylers": [ { "visibility": "off" } ] },
+    { "featureType": "transit", "stylers": [ { "visibility": "off" } ] },
+    { "featureType": "road", "elementType": "labels.icon", "stylers": [ { "visibility": "off" } ] }
+  ]
+  ''';
+
+  // ✅ NEU: unsere Pins (alle) ein Stück größer
+  static const int _lockBaseDiameter = 92; // vorher 80
+  static const int _friendsBaseDiameter = 92; // vorher 80
+  static const int _hitBaseDiameter = 180; // vorher 160
+  static const int _barBaseDiameter = 92; // vorher 80
+
+  // ✅ Event-Zeitraum (Bars)
+  static const int _barEventDaysBefore = 7; // 7 Tage vorher sichtbar
+  static const int _barEventHoursAfter = 24; // 24h nach Start sichtbar
 
   GoogleMapController? mapController;
   CameraPosition? _startPos;
@@ -51,8 +66,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   final Set<Circle> _circles = {};
   final Map<String, Map<String, dynamic>> _partyCache = {};
 
-  // Bar-Marker-Icons (Profilbild im Kreis) cachen
+  // Bar-Marker-Icons cachen
   final Map<String, BitmapDescriptor> _barIconCache = {};
+  final Map<String, BitmapDescriptor> _barIconEventRingCache = {}; // ✅ neu: Icon mit grünem Ring
 
   // Normale User: 0=Feedback, 1=Map, 2=Freunde, 3=Neue Party
   // Bar-Account: 0=Map, 1=Event hosten, 2=Feedback
@@ -76,6 +92,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   // Friends-only Icon (eigener Marker)
   BitmapDescriptor? _friendsOnlyIcon;
 
+  // 🎉 Party-Icons (statt Standard-Pin)
+  BitmapDescriptor? _partyIconBlue;
+  BitmapDescriptor? _partyIconGreen;
+  BitmapDescriptor? _partyIconOrange;
+  BitmapDescriptor? _partyIconRed;
+
   final Map<String, bool> _verifiedCache = {};
   bool _ratingPromptShown = false;
   bool _legalWarnDismissed = false;
@@ -84,9 +106,13 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   // ----- Filter-State -----
   bool _showParties = true;
   bool _showBars = true;
-  int? _minAgeFilter; // Interpretation: dein Alter → Party-Mindestalter darf NICHT höher sein
+  int? _minAgeFilter; // dein Alter → Party-Mindestalter darf NICHT höher sein
   double? _maxEntryFilter; // maximaler Eintritt in €
   bool _onlyFree = false; // nur Partys mit Eintritt 0 €
+
+  // ✅ NEU: Party-Typ Filter
+  bool _onlyClosedParties = false; // nur geschlossene Partys
+  bool _onlyOpenParties = false;   // nur offene Partys
 
   // Suche
   final TextEditingController _searchCtrl = TextEditingController();
@@ -102,6 +128,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   // Status-Cache für geschlossene Partys (für Lock-Farbe)
   final Map<String, String?> _closedPartyStatus = {}; // partyId -> 'approved'/'declined'/null
+
+  // Status-Cache für offene Partys (für 🎉-Farbe + Zoom-Rebuild)
+  final Map<String, String?> _openPartyStatus = {}; // partyId -> 'going'/'maybe'/null (für mich)
+  final Map<String, bool> _openPartyIsHost = {}; // partyId -> isHost (für mich)
 
   @override
   void initState() {
@@ -121,17 +151,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     super.dispose();
   }
 
-  // Position der Suche
   double _searchTop(BuildContext ctx) => 8;
 
-  // ---------- kleine Helfer ----------
   String _safeDocId(String input) => input
       .trim()
       .replaceAll('/', '_')
       .replaceAll('#', '_')
       .replaceAll('?', '_');
 
-  // ---------- Setup ----------
   Future<void> _loadSavedLocation() async {
     final prefs = await SharedPreferences.getInstance();
     _currentCity = prefs.getString('city') ?? "Wien";
@@ -146,7 +173,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     });
   }
 
-  // Username + voller Name + Bar-Info laden
   Future<void> _loadCurrentUser() async {
     final prefs = await SharedPreferences.getInstance();
     final uname =
@@ -156,7 +182,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     final nachname = (prefs.getString('nachname') ?? '').trim();
     final fullName = ('$vorname $nachname').trim();
 
-    // dieselben Keys wie im Login
     final isBar = prefs.getBool('isBarAccount') ?? false;
     final barId = prefs.getString('barId');
 
@@ -165,14 +190,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       _currentFullName = fullName.isEmpty ? null : fullName;
       _isBarAccount = isBar;
       _barId = barId;
-      if (_isBarAccount) {
-        _currentIndex = 0; // Bar: Map auf Index 0
-      } else {
-        _currentIndex = 1; // Normal: Map auf Index 1
-      }
+      _currentIndex = _isBarAccount ? 0 : 1;
     });
 
-    // Freunde laden
     if (_currentUsername != null && _currentUsername!.isNotEmpty) {
       try {
         final list = await _friendsModel.myFriends(_currentUsername!);
@@ -185,7 +205,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   Future<void> _loadLegalWarnState() async {
     final prefs = await SharedPreferences.getInstance();
-    // Für Bar-Accounts sofort unterdrücken
     if (_isBarAccount) {
       setState(() {
         _legalWarnDismissed = true;
@@ -243,6 +262,36 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       iconScale: .60,
     ));
 
+    // 🎉 Party-Icons (statt Standard-Pin)
+    _partyIconBlue = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+      diameter: _lockBaseDiameter,
+      circleColor: const Color(0xFF1976D2),
+      emoji: "🎉",
+      emojiColor: Colors.white,
+      emojiScale: .62,
+    ));
+    _partyIconGreen = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+      diameter: _lockBaseDiameter,
+      circleColor: const Color(0xFF2E7D32),
+      emoji: "🎉",
+      emojiColor: Colors.white,
+      emojiScale: .62,
+    ));
+    _partyIconOrange = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+      diameter: _lockBaseDiameter,
+      circleColor: const Color(0xFFF57C00),
+      emoji: "🎉",
+      emojiColor: Colors.white,
+      emojiScale: .62,
+    ));
+    _partyIconRed = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+      diameter: _lockBaseDiameter,
+      circleColor: const Color(0xFFD32F2F),
+      emoji: "🎉",
+      emojiColor: Colors.white,
+      emojiScale: .62,
+    ));
+
     if (mounted) setState(() {});
   }
 
@@ -281,6 +330,41 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     return bytes!.buffer.asUint8List();
   }
 
+  // ✅ Kreis + Emoji (🎉)
+  Future<Uint8List> _drawCircleWithEmoji({
+    required int diameter,
+    required Color circleColor,
+    required String emoji,
+    required Color emojiColor,
+    required double emojiScale,
+  }) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final size = ui.Size(diameter.toDouble(), diameter.toDouble());
+    final center = Offset(size.width / 2, size.height / 2);
+
+    canvas.drawCircle(center, diameter / 2, Paint()..color = circleColor);
+
+    // Emoji als Text – keine fontFamily setzen, sonst geht Emoji-Font oft verloren
+    final tp = TextPainter(
+      text: TextSpan(
+        text: emoji,
+        style: TextStyle(
+          fontSize: diameter * emojiScale,
+          color: emojiColor,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(diameter, diameter);
+    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+    return bytes!.buffer.asUint8List();
+  }
+
   Future<Uint8List> _drawTransparentCircle({required int diameter}) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
@@ -294,23 +378,52 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     return bytes!.buffer.asUint8List();
   }
 
-  // NEU: Kreis-Marker mit Profilbild für Bars
+  // ✅ Bar Icon: normales Profilbild
   Future<BitmapDescriptor> _createBarMarkerIcon(String? imageUrl) async {
-    const int diameter = _barBaseDiameter;
+    return _createBarMarkerIconWithRing(
+      imageUrl: imageUrl,
+      ringColor: Colors.white, // normal: weißer Rand
+      ringWidth: 4,
+      outerPadding: 0,
+    );
+  }
+
+  // ✅ Bar Icon: Profilbild mit GRÜNEM Ring (Event)
+  Future<BitmapDescriptor> _createBarMarkerIconWithGreenRing(String? imageUrl) async {
+    return _createBarMarkerIconWithRing(
+      imageUrl: imageUrl,
+      ringColor: Colors.greenAccent, // Event: grüner Ring
+      ringWidth: 6, // etwas dicker
+      outerPadding: 0,
+    );
+  }
+
+  // ✅ Gemeinsamer Renderer (Ring sitzt DIREKT am Profilbild)
+  Future<BitmapDescriptor> _createBarMarkerIconWithRing({
+    required String? imageUrl,
+    required Color ringColor,
+    required double ringWidth,
+    required double outerPadding,
+  }) async {
+    final int diameter = _barBaseDiameter; // ✅ nutzt jetzt die größere Größe
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final size = ui.Size(diameter.toDouble(), diameter.toDouble());
     final center = Offset(size.width / 2, size.height / 2);
 
-    // Rand
-    final borderPaint = Paint()..color = Colors.white;
-    canvas.drawCircle(center, diameter / 2, borderPaint);
+    final outerRadius = (diameter / 2).toDouble() - outerPadding;
 
-    // Hintergrund
-    final innerPaint = Paint()..color = const Color(0xFF1C1F26);
-    final innerRadius = diameter / 2 - 4;
-    canvas.drawCircle(center, innerRadius, innerPaint);
+    // Hintergrund (damit transparent nicht „komisch“ aussieht)
+    canvas.drawCircle(
+      center,
+      outerRadius,
+      Paint()..color = const Color(0xFF1C1F26),
+    );
 
+    // Bild-Clipping Radius: wir lassen Platz für Ring
+    final imageRadius = outerRadius - ringWidth;
+
+    // Bild zeichnen
     if (imageUrl != null && imageUrl.trim().isNotEmpty) {
       try {
         final uri = Uri.parse(imageUrl);
@@ -325,26 +438,63 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           final ui.FrameInfo frameInfo = await codec.getNextFrame();
           final ui.Image image = frameInfo.image;
 
-          final srcRect =
-          Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
-          final dstRect =
-          Rect.fromCircle(center: center, radius: innerRadius - 4);
+          final srcRect = Rect.fromLTWH(
+            0,
+            0,
+            image.width.toDouble(),
+            image.height.toDouble(),
+          );
+          final dstRect = Rect.fromCircle(center: center, radius: imageRadius);
 
           canvas.save();
-          final clipPath = Path()..addOval(dstRect);
-          canvas.clipPath(clipPath);
+          canvas.clipPath(Path()..addOval(dstRect));
           canvas.drawImageRect(image, srcRect, dstRect, Paint());
           canvas.restore();
         }
       } catch (_) {
-        // Bild-Fehler ignorieren -> leerer Kreis
+        // ignorieren
       }
+    } else {
+      // fallback: dunkler Kreis als "kein Bild"
+      canvas.drawCircle(
+        center,
+        imageRadius,
+        Paint()..color = const Color(0xFF2A2F3A),
+      );
     }
+
+    // ✅ Ring DIREKT um das Profilbild
+    final ringPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = ringWidth
+      ..color = ringColor
+      ..isAntiAlias = true;
+
+    canvas.drawCircle(center, imageRadius, ringPaint);
 
     final picture = recorder.endRecording();
     final img = await picture.toImage(diameter, diameter);
     final pngBytes = await img.toByteData(format: ui.ImageByteFormat.png);
     return BitmapDescriptor.fromBytes(pngBytes!.buffer.asUint8List());
+  }
+
+  bool _barHasVisibleEvent(Map<String, dynamic> bar, DateTime now) {
+    if (bar['eventActive'] != true) return false;
+
+    DateTime? dt;
+    final raw = bar['eventDate'];
+    if (raw is Timestamp) {
+      dt = raw.toDate();
+    } else if (raw is String) {
+      dt = DateTime.tryParse(raw);
+    }
+    if (dt == null) return false;
+
+    final start = dt.subtract(const Duration(hours: 1));
+    final visibleFrom = start.subtract(const Duration(days: _barEventDaysBefore));
+    final visibleUntil = start.add(const Duration(hours: _barEventHoursAfter));
+
+    return now.isAfter(visibleFrom) && now.isBefore(visibleUntil);
   }
 
   String _monthName(int month) {
@@ -366,7 +516,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     return months[month];
   }
 
-  // ---------- Parser / Flags ----------
   bool _isClosedDoc(Map<String, dynamic> d) {
     final t = (d['type'] ?? '').toString().trim().toLowerCase();
     final b = d['isClosed'] == true;
@@ -431,24 +580,18 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     return DateTime.now().isAfter(nextDayMidnight);
   }
 
-  // ---------- Host-Erkennung ----------
   bool _isHostForPartyData(Map<String, dynamic> data) {
     final hostName = (data['hostName'] ?? '').toString().trim();
-    final hostUid =
-    ((data['hostUid'] ?? data['hostId']) ?? '').toString().trim();
+    final hostUid = ((data['hostUid'] ?? data['hostId']) ?? '').toString().trim();
     final cu = _currentUsername?.trim();
     final cf = _currentFullName?.trim();
 
-    final byUid =
-        cu != null && cu.isNotEmpty && hostUid.isNotEmpty && hostUid == cu;
-
-    final byName =
-        cf != null && cf.isNotEmpty && hostName.isNotEmpty && hostName == cf;
+    final byUid = cu != null && cu.isNotEmpty && hostUid.isNotEmpty && hostUid == cu;
+    final byName = cf != null && cf.isNotEmpty && hostName.isNotEmpty && hostName == cf;
 
     return byUid || byName;
   }
 
-  // ---------- Verified ----------
   Future<bool> _isUserVerified(String usernameDocId) async {
     if (_verifiedCache.containsKey(usernameDocId)) {
       return _verifiedCache[usernameDocId]!;
@@ -467,7 +610,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
   }
 
-  // ---------- RSVP ----------
   Future<String?> _myOpenRsvpStatus(String partyId) async {
     if (_currentUsername == null) return null;
     try {
@@ -483,22 +625,35 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
   }
 
-  void _setOpenMarkerColor(String partyId,
-      {required String? status, required bool isHost}) {
+  BitmapDescriptor _iconForOpenPartyMarker(String partyId) {
+    final isHost = _openPartyIsHost[partyId] == true;
+    final status = _openPartyStatus[partyId];
+
+    if (isHost) return _partyIconBlue ?? BitmapDescriptor.defaultMarker;
+    if (status == 'going') return _partyIconGreen ?? BitmapDescriptor.defaultMarker;
+    if (status == 'maybe') return _partyIconOrange ?? BitmapDescriptor.defaultMarker;
+    return _partyIconRed ?? BitmapDescriptor.defaultMarker;
+  }
+
+  void _setOpenMarkerColor(String partyId, {required String? status, required bool isHost}) {
     final mid = partyId;
     final existing = _markers.where((m) => m.markerId.value == mid).toList();
     if (existing.isEmpty) return;
     final old = existing.first;
 
-    double hue;
+    // Cache updaten (damit Zoom-Rebuild korrekt bleibt)
+    _openPartyStatus[partyId] = status;
+    _openPartyIsHost[partyId] = isHost;
+
+    BitmapDescriptor icon;
     if (isHost) {
-      hue = BitmapDescriptor.hueBlue;
+      icon = _partyIconBlue ?? BitmapDescriptor.defaultMarker;
     } else if (status == 'going') {
-      hue = BitmapDescriptor.hueGreen;
+      icon = _partyIconGreen ?? BitmapDescriptor.defaultMarker;
     } else if (status == 'maybe') {
-      hue = BitmapDescriptor.hueOrange;
+      icon = _partyIconOrange ?? BitmapDescriptor.defaultMarker;
     } else {
-      hue = BitmapDescriptor.hueRed;
+      icon = _partyIconRed ?? BitmapDescriptor.defaultMarker;
     }
 
     setState(() {
@@ -506,22 +661,22 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       _markers.add(Marker(
         markerId: MarkerId(mid),
         position: old.position,
-        icon: BitmapDescriptor.defaultMarkerWithHue(hue),
+        icon: icon,
         onTap: () => _openPartySheet(_partyCache[partyId]!, partyId),
       ));
     });
   }
 
-  // ---------- Daten ----------
   Future<void> _refreshMap() async {
     _partyCache.clear();
     _markers.clear();
     _circles.clear();
     _closedPartyStatus.clear();
-    // _barIconCache NICHT leeren -> Bar-Icons bleiben im Speicher
+    _openPartyStatus.clear();
+    _openPartyIsHost.clear();
 
     await _loadPartiesFromFirebase();
-    await _loadBarsFromFirebase(); // Bars nach den Partys laden
+    await _loadBarsFromFirebase();
 
     if (mounted) setState(() {});
   }
@@ -534,23 +689,15 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         final data = doc.data();
         _partyCache[doc.id] = data;
 
-        // --- FILTER: nur anwenden, wenn Partys überhaupt angezeigt werden sollen ---
-        if (!_showParties) {
-          continue; // alles skippen, wenn Partys ausgeblendet sind
-        }
+        if (!_showParties) continue;
 
-        // ALTER-FILTER:
-        // Du gibst z. B. 16 ein → es dürfen nur Partys mit Mindestalter <= 16 angezeigt werden.
         if (_minAgeFilter != null) {
           int partyAge = 0;
 
           if (data['minAge'] is int) {
             partyAge = data['minAge'] as int;
           } else {
-            final ageStr = (data['minAge'] ??
-                data['age'] ??
-                data['eventAge'] ??
-                '')
+            final ageStr = (data['minAge'] ?? data['age'] ?? data['eventAge'] ?? '')
                 .toString()
                 .toLowerCase()
                 .trim();
@@ -560,41 +707,31 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             }
           }
 
-          // Party ohne Altersangabe (0) → wird immer angezeigt.
-          // Wenn Party-Mindestalter größer ist als dein Filter → raus.
           if (partyAge > _minAgeFilter! && partyAge > 0) {
             continue;
           }
         }
 
-        // Eintritt (z. B. Feld "entryFee" oder "price")
         final dynamic rawEntry = data['entryFee'] ?? data['price'];
         double? entryFee;
 
         if (rawEntry is num) {
           entryFee = rawEntry.toDouble();
         } else {
-          final String? entryStr =
-          rawEntry == null ? null : rawEntry.toString();
+          final String? entryStr = rawEntry == null ? null : rawEntry.toString();
           if (entryStr != null && entryStr.isNotEmpty) {
             final cleaned = entryStr.replaceAll(',', '.');
             entryFee = double.tryParse(cleaned);
           }
         }
 
-        // Nur gratis (Eintritt 0 oder null)
         if (_onlyFree) {
           final fee = entryFee ?? 0.0;
-          if (fee > 0.0) {
-            continue;
-          }
+          if (fee > 0.0) continue;
         }
 
-        // Maximaler Eintritt gesetzt?
         if (_maxEntryFilter != null && entryFee != null) {
-          if (entryFee > _maxEntryFilter!) {
-            continue;
-          }
+          if (entryFee > _maxEntryFilter!) continue;
         }
 
         if (_isExpiredWithGrace(data)) continue;
@@ -602,29 +739,47 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         final pos = _parseLatLng(data);
         if (pos == null) continue;
 
-        // ONLY4FRIENDS
-        final visibility = (data['visibility'] ?? 'public').toString();
-        final excluded =
-            (data['excludedFriends'] as List?)?.cast<String>() ??
-                const <String>[];
-        final isFriendOnly = visibility == 'friends';
+        // Party-Event-Kreis bleibt wie bei dir
+        if (data['eventActive'] == true && data['eventDate'] is Timestamp) {
+          final eventStart = (data['eventDate'] as Timestamp).toDate();
+          final eventEnd = eventStart.add(const Duration(days: 7));
 
-        final isHostForThisParty = _isHostForPartyData(data);
-        final hostUsername =
-        ((data['hostId'] ?? data['hostUid']) ?? '').toString().trim();
-
-        if (isFriendOnly && !isHostForThisParty) {
-          final me = _currentUsername?.trim();
-          final isFriend =
-              me != null && me.isNotEmpty && _myFriendsSet.contains(hostUsername);
-          final isExcluded = me != null && excluded.contains(me);
-
-          if (!isFriend || isExcluded) {
-            continue;
+          if (DateTime.now().isBefore(eventEnd)) {
+            _circles.add(
+              Circle(
+                circleId: CircleId('event_circle_${doc.id}'),
+                center: pos,
+                radius: 180,
+                fillColor: Colors.greenAccent.withOpacity(0.20),
+                strokeColor: Colors.greenAccent,
+                strokeWidth: 2,
+                zIndex: 0,
+              ),
+            );
           }
         }
 
+        final visibility = (data['visibility'] ?? 'public').toString();
+        final excluded =
+            (data['excludedFriends'] as List?)?.cast<String>() ?? const <String>[];
+        final isFriendOnly = visibility == 'friends';
+
+        final isHostForThisParty = _isHostForPartyData(data);
+        final hostUsername = ((data['hostId'] ?? data['hostUid']) ?? '').toString().trim();
+
+        if (isFriendOnly && !isHostForThisParty) {
+          final me = _currentUsername?.trim();
+          final isFriend = me != null && me.isNotEmpty && _myFriendsSet.contains(hostUsername);
+          final isExcluded = me != null && excluded.contains(me);
+
+          if (!isFriend || isExcluded) continue;
+        }
+
         final isClosed = _isClosedDoc(data);
+
+        // ✅ NEU: Nur geschlossene / nur offene Partys filtern
+        if (_onlyClosedParties && !isClosed) continue;
+        if (_onlyOpenParties && isClosed) continue;
 
         if (isClosed) {
           final r = Random();
@@ -654,8 +809,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             markerId: MarkerId('hit_${doc.id}'),
             position: shift,
             icon: _hitboxIcon ??
-                BitmapDescriptor.defaultMarkerWithHue(
-                    BitmapDescriptor.hueAzure),
+                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
             anchor: const Offset(0.5, 0.5),
             zIndex: 9,
             consumeTapEvents: true,
@@ -683,14 +837,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
           ));
         } else {
-          // OPEN
           if (isFriendOnly) {
             _markers.add(Marker(
               markerId: MarkerId(doc.id),
               position: pos,
               icon: _friendsOnlyIcon ??
-                  BitmapDescriptor.defaultMarkerWithHue(
-                      BitmapDescriptor.hueAzure),
+                  BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
               onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
             ));
             continue;
@@ -701,21 +853,17 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             myOpenStatus = await _myOpenRsvpStatus(doc.id);
           }
 
-          double hue;
-          if (isHostForThisParty) {
-            hue = BitmapDescriptor.hueBlue;
-          } else if (myOpenStatus == 'going') {
-            hue = BitmapDescriptor.hueGreen;
-          } else if (myOpenStatus == 'maybe') {
-            hue = BitmapDescriptor.hueOrange;
-          } else {
-            hue = BitmapDescriptor.hueRed;
-          }
+          // Cache für Zoom-Rebuild
+          _openPartyStatus[doc.id] = myOpenStatus;
+          _openPartyIsHost[doc.id] = isHostForThisParty;
+
+          // 🎉 Icon statt Standard-Pin
+          final icon = _iconForOpenPartyMarker(doc.id);
 
           _markers.add(Marker(
             markerId: MarkerId(doc.id),
             position: pos,
-            icon: BitmapDescriptor.defaultMarkerWithHue(hue),
+            icon: icon,
             onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
           ));
         }
@@ -725,7 +873,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
   }
 
-  // ---------- Bars laden & Marker setzen ----------
+  // ✅ Bars: Event = grüner Ring direkt am Profilbild
   Future<void> _loadBarsFromFirebase() async {
     try {
       final snapshot = await FirebaseFirestore.instance
@@ -737,16 +885,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
       for (final doc in snapshot.docs) {
         final data = doc.data();
+        if (!_showBars) continue;
 
-        // --- FILTER: Bars ein-/ausblenden ---
-        if (!_showBars) {
-          continue; // Bars komplett ausblenden
-        }
-
-        // optional: altes Event auto-cleanen (z.B. 6h nach Start)
         if (data['eventActive'] == true && data['eventDate'] is Timestamp) {
           final dt = (data['eventDate'] as Timestamp).toDate();
-          if (now.isAfter(dt.add(const Duration(hours: 6)))) {
+          final start = dt.subtract(const Duration(hours: 1));
+          if (now.isAfter(start.add(const Duration(hours: _barEventHoursAfter)))) {
             FirebaseFirestore.instance.collection('bars').doc(doc.id).set(
               {
                 'eventActive': false,
@@ -766,14 +910,30 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
         final barName = (data['barName'] ?? 'Bar').toString();
         final imageUrl = (data['profileImageUrl'] ?? '').toString().trim();
-        final cacheKey = imageUrl.isEmpty ? '__default' : imageUrl;
+        final baseKey = imageUrl.isEmpty ? '__default' : imageUrl;
+
+        final hasEvent = _barHasVisibleEvent(data, now);
 
         BitmapDescriptor icon;
-        if (_barIconCache.containsKey(cacheKey)) {
-          icon = _barIconCache[cacheKey]!;
+
+        if (hasEvent) {
+          final key = 'event|$baseKey';
+          if (_barIconEventRingCache.containsKey(key)) {
+            icon = _barIconEventRingCache[key]!;
+          } else {
+            icon = await _createBarMarkerIconWithGreenRing(
+              imageUrl.isEmpty ? null : imageUrl,
+            );
+            _barIconEventRingCache[key] = icon;
+          }
         } else {
-          icon = await _createBarMarkerIcon(imageUrl.isEmpty ? null : imageUrl);
-          _barIconCache[cacheKey] = icon;
+          final key = 'normal|$baseKey';
+          if (_barIconCache.containsKey(key)) {
+            icon = _barIconCache[key]!;
+          } else {
+            icon = await _createBarMarkerIcon(imageUrl.isEmpty ? null : imageUrl);
+            _barIconCache[key] = icon;
+          }
         }
 
         _markers.add(
@@ -786,15 +946,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           ),
         );
       }
-    } catch (_) {
-      // optional logging
-    }
+    } catch (_) {}
   }
 
   Future<String?> _myRequestStatus(String partyId, String username) async {
     try {
-      final partyRef =
-      FirebaseFirestore.instance.collection('Party').doc(partyId);
+      final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
       try {
         final partyDoc = await partyRef.get();
         final arr =
@@ -803,8 +960,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         if (arr.contains(username)) return 'approved';
       } catch (_) {}
       try {
-        final reqSnap =
-        await partyRef.collection('requests').doc(username).get();
+        final reqSnap = await partyRef.collection('requests').doc(username).get();
         final m = reqSnap.data();
         if (m == null) return null;
         final s = m['status'] as String?;
@@ -816,11 +972,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
   }
 
-  // ---------- Ratings ----------
-  Future<void> _setRating(
-      String partyId, String username, String value) async {
-    final partyRef =
-    FirebaseFirestore.instance.collection('Party').doc(partyId);
+  // ---------- Ratings / Report / BottomSheet / Navigation / Reload ----------
+  // Alles darunter ist UNVERÄNDERT zu deinem Stand.
+
+  Future<void> _setRating(String partyId, String username, String value) async {
+    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
     final ratingRef = partyRef.collection('ratings').doc(username);
 
     try {
@@ -830,9 +986,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         final ratingSnap = await tx.get(ratingRef);
 
         final hostUid =
-        ((partyData['hostUid'] ?? partyData['hostId']) ?? '')
-            .toString()
-            .trim();
+        ((partyData['hostUid'] ?? partyData['hostId']) ?? '').toString().trim();
         final hostName = (partyData['hostName'] ?? '').toString().trim();
         final hostDocId = hostUid.isNotEmpty ? hostUid : _safeDocId(hostName);
         if (hostDocId.isEmpty) {
@@ -854,8 +1008,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           throw StateError("Bewertung erst ab dem nächsten Tag möglich.");
         }
 
-        final userRef =
-        FirebaseFirestore.instance.collection('users').doc(hostDocId);
+        final userRef = FirebaseFirestore.instance.collection('users').doc(hostDocId);
         final userSnap = await tx.get(userRef);
 
         final prevVal = (ratingSnap.data()?['value'] as String?);
@@ -868,11 +1021,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
         tx.set(
           ratingRef,
-          {
-            'username': username,
-            'value': value,
-            'ts': FieldValue.serverTimestamp(),
-          },
+          {'username': username, 'value': value, 'ts': FieldValue.serverTimestamp()},
           SetOptions(merge: true),
         );
 
@@ -887,7 +1036,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             'partyId': partyId,
             'fromUser': username,
             'value': value,
-            'ts': FieldValue.serverTimestamp(),
+            'ts': FieldValue.serverTimestamp()
           },
           SetOptions(merge: true),
         );
@@ -902,10 +1051,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             SetOptions(merge: true),
           );
 
-          final currentGood =
-          (userSnap.data()?['partyScoreGood'] ?? 0) as int;
-          final currentBad =
-          (userSnap.data()?['partyScoreBad'] ?? 0) as int;
+          final currentGood = (userSnap.data()?['partyScoreGood'] ?? 0) as int;
+          final currentBad = (userSnap.data()?['partyScoreBad'] ?? 0) as int;
           final newGood = currentGood + deltaGood;
           final newBad = currentBad + deltaBad;
           final total = newGood + newBad;
@@ -927,10 +1074,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-              value == 'good'
-                  ? "Danke für die positive Bewertung!"
-                  : "Danke für dein Feedback!"),
+          content: Text(value == 'good'
+              ? "Danke für die positive Bewertung!"
+              : "Danke für dein Feedback!"),
         ),
       );
     } on StateError catch (e) {
@@ -979,8 +1125,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-              "Wie war „${data['name'] ?? 'die Party'}“? Jetzt bewerten."),
+          content: Text("Wie war „${data['name'] ?? 'die Party'}“? Jetzt bewerten."),
           action: SnackBarAction(
               label: "ÖFFNEN", onPressed: () => _openPartySheet(data, pid)),
         ),
@@ -989,7 +1134,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
   }
 
-  // ---------- Report ----------
   Future<void> _sendReportDialog(String partyId) async {
     final outerContext = context;
     final controller = TextEditingController();
@@ -1025,7 +1169,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                   const Text(
                     "Grund auswählen:",
                     style: TextStyle(
-                        color: Colors.white70, fontWeight: FontWeight.w700),
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
                   Wrap(
@@ -1039,17 +1184,15 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                         onSelected: (v) =>
                             setSB(() => selectedReason = v ? r : null),
                         labelStyle: TextStyle(
-                          color:
-                          selected ? Colors.white : Colors.white70,
+                          color: selected ? Colors.white : Colors.white70,
                           fontWeight: FontWeight.w700,
                         ),
                         selectedColor: Colors.redAccent,
                         backgroundColor: Colors.grey[800],
                         shape: StadiumBorder(
                           side: BorderSide(
-                            color: selected
-                                ? Colors.redAccent
-                                : Colors.grey[700]!,
+                            color:
+                            selected ? Colors.redAccent : Colors.grey[700]!,
                           ),
                         ),
                       );
@@ -1059,7 +1202,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                   const Text(
                     "Optionaler Hinweis:",
                     style: TextStyle(
-                        color: Colors.white70, fontWeight: FontWeight.w700),
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 6),
                   TextField(
@@ -1085,8 +1229,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                 onPressed: isSubmitting
                     ? null
                     : () => Navigator.of(dialogCtx, rootNavigator: true).pop(),
-                style: TextButton.styleFrom(
-                    foregroundColor: Colors.redAccent),
+                style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
                 child: const Text("Abbrechen"),
               ),
               ElevatedButton(
@@ -1112,14 +1255,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                         .add({
                       'partyId': partyId,
                       'partyName': partyName,
-                      'partyDate': party['date'] ??
-                          FieldValue.serverTimestamp(),
-                      'partyAddress':
-                      (party['address'] ?? '').toString(),
-                      'hostName':
-                      (party['hostName'] ?? '').toString(),
-                      'hostId':
-                      (party['hostId'] ?? '').toString(),
+                      'partyDate':
+                      party['date'] ?? FieldValue.serverTimestamp(),
+                      'partyAddress': (party['address'] ?? '').toString(),
+                      'hostName': (party['hostName'] ?? '').toString(),
+                      'hostId': (party['hostId'] ?? '').toString(),
                       'reporterName': _currentUsername,
                       'reason': selectedReason,
                       'note': controller.text.trim(),
@@ -1132,25 +1272,19 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       Navigator.of(outerContext).pop();
                     }
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text("Meldung gesendet"),
-                      ),
+                      const SnackBar(content: Text("Meldung gesendet")),
                     );
                   } on FirebaseException catch (e) {
                     setSB(() => isSubmitting = false);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content:
-                        Text("Fehler: ${e.message ?? e.code}"),
-                      ),
+                          content:
+                          Text("Fehler: ${e.message ?? e.code}")),
                     );
                   } catch (e) {
                     setSB(() => isSubmitting = false);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content:
-                        Text("Unerwarteter Fehler: $e"),
-                      ),
+                      SnackBar(content: Text("Unerwarteter Fehler: $e")),
                     );
                   }
                 },
@@ -1175,8 +1309,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     );
   }
 
-  Stream<DocumentSnapshot<Map<String, dynamic>>>? _rsvpStream(
-      String partyId) {
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _rsvpStream(String partyId) {
     if (_currentUsername == null) return null;
     return FirebaseFirestore.instance
         .collection('Party')
@@ -1257,41 +1390,34 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         currentUsername: _currentUsername,
         inRatingWindow: inRatingWindow,
         isActive: _isActive(data),
-        onSetRsvp: (status) =>
-            _setRsvpStatus(partyId, _currentUsername!, status),
+        onSetRsvp: (status) => _setRsvpStatus(partyId, _currentUsername!, status),
         onClearRsvp: () => _clearRsvp(partyId, _currentUsername!),
-        onSendJoinRequest: () =>
-            _sendJoinRequest(partyId, _currentUsername!),
-        onUpdateRequestStatus: (u, s) =>
-            _updateRequestStatus(partyId, u, s),
+        onSendJoinRequest: () => _sendJoinRequest(partyId, _currentUsername!),
+        onUpdateRequestStatus: (u, s) => _updateRequestStatus(partyId, u, s),
         onSetRating: (val) => _setRating(partyId, _currentUsername!, val),
         onReport: () => _sendReportDialog(partyId),
         rsvpStream: () => _rsvpStream(partyId),
-        comingStream: () =>
-            FirebaseFirestore.instance
-                .collection('Party')
-                .doc(partyId)
-                .collection('coming')
-                .orderBy('timestamp', descending: true)
-                .snapshots(),
-        maybeStream: () =>
-            FirebaseFirestore.instance
-                .collection('Party')
-                .doc(partyId)
-                .collection('maybe')
-                .orderBy('timestamp', descending: true)
-                .snapshots(),
-        ratingsStream: () =>
-            FirebaseFirestore.instance
-                .collection('Party')
-                .doc(partyId)
-                .collection('ratings')
-                .snapshots(),
+        comingStream: () => FirebaseFirestore.instance
+            .collection('Party')
+            .doc(partyId)
+            .collection('coming')
+            .orderBy('timestamp', descending: true)
+            .snapshots(),
+        maybeStream: () => FirebaseFirestore.instance
+            .collection('Party')
+            .doc(partyId)
+            .collection('maybe')
+            .orderBy('timestamp', descending: true)
+            .snapshots(),
+        ratingsStream: () => FirebaseFirestore.instance
+            .collection('Party')
+            .doc(partyId)
+            .collection('ratings')
+            .snapshots(),
         isUserVerified: _isUserVerified,
         recolorOpenMarker: (status) {
           final isHostForThis = _isHostForPartyData(data);
-          _setOpenMarkerColor(partyId,
-              status: status, isHost: isHostForThis);
+          _setOpenMarkerColor(partyId, status: status, isHost: isHostForThis);
         },
         setClosedLockIcon: (status) =>
             _setLockIconForPartyStatus(partyId, status: status),
@@ -1304,60 +1430,48 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     );
   }
 
-  // ---------- Bar BottomSheet ----------
   void _openBarSheet(Map<String, dynamic> data, String barId) async {
     if (!mounted) return;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => BarBottomSheet(
-        barId: barId,
-        barData: data,
-      ),
+      builder: (_) => BarBottomSheet(barId: barId, barData: data),
     );
   }
 
-  Future<void> _setRsvpStatus(
-      String partyId, String username, String status) async {
-    final partyRef =
-    FirebaseFirestore.instance.collection('Party').doc(partyId);
+  Future<void> _setRsvpStatus(String partyId, String username, String status) async {
+    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
     final rsvpRef = partyRef.collection('rsvps').doc(username);
     final comingRef = partyRef.collection('coming').doc(username);
     final maybeRef = partyRef.collection('maybe').doc(username);
 
     await FirebaseFirestore.instance.runTransaction((tx) async {
       tx.set(
-          rsvpRef,
-          {
-            'username': username,
-            'status': status,
-            'timestamp': FieldValue.serverTimestamp()
-          },
-          SetOptions(merge: true));
+        rsvpRef,
+        {'username': username, 'status': status, 'timestamp': FieldValue.serverTimestamp()},
+        SetOptions(merge: true),
+      );
       if (status == 'going') {
-        tx.set(comingRef, {
-          'username': username,
-          'timestamp': FieldValue.serverTimestamp()
-        });
+        tx.set(comingRef, {'username': username, 'timestamp': FieldValue.serverTimestamp()});
         tx.delete(maybeRef);
       } else {
-        tx.set(maybeRef, {
-          'username': username,
-          'timestamp': FieldValue.serverTimestamp()
-        });
+        tx.set(maybeRef, {'username': username, 'timestamp': FieldValue.serverTimestamp()});
         tx.delete(comingRef);
       }
     });
 
     final data = _partyCache[partyId];
     final isHost = data != null && _isHostForPartyData(data);
+
+    // Cache + Marker recolor
+    _openPartyStatus[partyId] = status;
+    _openPartyIsHost[partyId] = isHost;
     _setOpenMarkerColor(partyId, status: status, isHost: isHost);
   }
 
   Future<void> _clearRsvp(String partyId, String username) async {
-    final partyRef =
-    FirebaseFirestore.instance.collection('Party').doc(partyId);
+    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
     await FirebaseFirestore.instance.runTransaction((tx) async {
       tx.delete(partyRef.collection('rsvps').doc(username));
       tx.delete(partyRef.collection('coming').doc(username));
@@ -1366,60 +1480,50 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
     final data = _partyCache[partyId];
     final isHost = data != null && _isHostForPartyData(data);
+
+    // Cache + Marker recolor
+    _openPartyStatus[partyId] = null;
+    _openPartyIsHost[partyId] = isHost;
     _setOpenMarkerColor(partyId, status: null, isHost: isHost);
   }
 
   Future<void> _sendJoinRequest(String partyId, String username) async {
-    final partyRef =
-    FirebaseFirestore.instance.collection('Party').doc(partyId);
+    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
     final reqRef = partyRef.collection('requests').doc(username);
     await FirebaseFirestore.instance.runTransaction((tx) async {
       tx.set(
-          reqRef,
-          {
-            'username': username,
-            'status': 'pending',
-            'timestamp': FieldValue.serverTimestamp()
-          },
-          SetOptions(merge: true));
+        reqRef,
+        {'username': username, 'status': 'pending', 'timestamp': FieldValue.serverTimestamp()},
+        SetOptions(merge: true),
+      );
     });
   }
 
-  Future<void> _updateRequestStatus(
-      String partyId, String username, String status) async {
-    final partyRef =
-    FirebaseFirestore.instance.collection('Party').doc(partyId);
+  Future<void> _updateRequestStatus(String partyId, String username, String status) async {
+    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
     final reqRef = partyRef.collection('requests').doc(username);
     final apprRef = partyRef.collection('approved').doc(username);
 
     await FirebaseFirestore.instance.runTransaction((tx) async {
       tx.set(
-          reqRef,
-          {
-            'username': username,
-            'status': status,
-            'handledAt': FieldValue.serverTimestamp()
-          },
-          SetOptions(merge: true));
+        reqRef,
+        {'username': username, 'status': status, 'handledAt': FieldValue.serverTimestamp()},
+        SetOptions(merge: true),
+      );
       if (status == 'approved') {
-        tx.set(apprRef, {
-          'username': username,
-          'timestamp': FieldValue.serverTimestamp()
-        });
+        tx.set(apprRef, {'username': username, 'timestamp': FieldValue.serverTimestamp()});
         tx.set(
-            partyRef,
-            {
-              'approvedUsers': FieldValue.arrayUnion([username])
-            },
-            SetOptions(merge: true));
+          partyRef,
+          {'approvedUsers': FieldValue.arrayUnion([username])},
+          SetOptions(merge: true),
+        );
       } else {
         tx.delete(apprRef);
         tx.set(
-            partyRef,
-            {
-              'approvedUsers': FieldValue.arrayRemove([username])
-            },
-            SetOptions(merge: true));
+          partyRef,
+          {'approvedUsers': FieldValue.arrayRemove([username])},
+          SetOptions(merge: true),
+        );
       }
     });
 
@@ -1467,8 +1571,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           markerId: MarkerId(hitId),
           position: old.position,
           icon: _hitboxIcon ??
-              BitmapDescriptor.defaultMarkerWithHue(
-                  BitmapDescriptor.hueAzure),
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
           anchor: const Offset(0.5, 0.5),
           zIndex: 9,
           consumeTapEvents: true,
@@ -1478,20 +1581,17 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     });
   }
 
-  // ---------- Zoom → Icon-Scale ----------
-
   double _zoomToScale(double zoom) {
-    // 4–18 -> 0.6–1.0
     final z = zoom.clamp(4.0, 18.0);
-    final t = (z - 4.0) / (18.0 - 4.0); // 0..1
-    return 0.6 + 0.4 * t; // 0.6 bis 1.0
+    final t = (z - 4.0) / (18.0 - 4.0);
+    return 0.6 + 0.4 * t;
   }
 
   Future<void> _onCameraIdle() async {
     if (_lastCameraPosition == null) return;
 
     final newZoom = _lastCameraPosition!.zoom;
-    if ((newZoom - _currentZoom).abs() < 0.5) return; // kleine Änderungen ignorieren
+    if ((newZoom - _currentZoom).abs() < 0.5) return;
 
     _currentZoom = newZoom;
 
@@ -1512,7 +1612,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     final friendsDiameter = (_friendsBaseDiameter * scale).round();
     final hitDiameter = (_hitBaseDiameter * scale).round();
 
-    // Neue Icons rendern (nur lokal, kein Firestore)
     _lockIconBlue = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
       diameter: lockDiameter,
       circleColor: const Color(0xFF1976D2),
@@ -1554,6 +1653,36 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       iconScale: .60,
     ));
 
+    // 🎉 Party-Icons (skalieren wie Lock)
+    _partyIconBlue = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+      diameter: lockDiameter,
+      circleColor: const Color(0xFF1976D2),
+      emoji: "🎉",
+      emojiColor: Colors.white,
+      emojiScale: .62,
+    ));
+    _partyIconGreen = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+      diameter: lockDiameter,
+      circleColor: const Color(0xFF2E7D32),
+      emoji: "🎉",
+      emojiColor: Colors.white,
+      emojiScale: .62,
+    ));
+    _partyIconOrange = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+      diameter: lockDiameter,
+      circleColor: const Color(0xFFF57C00),
+      emoji: "🎉",
+      emojiColor: Colors.white,
+      emojiScale: .62,
+    ));
+    _partyIconRed = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+      diameter: lockDiameter,
+      circleColor: const Color(0xFFD32F2F),
+      emoji: "🎉",
+      emojiColor: Colors.white,
+      emojiScale: .62,
+    ));
+
     _rebuildMarkersWithNewIcons();
   }
 
@@ -1593,6 +1722,20 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           onTap: m.onTap,
           infoWindow: m.infoWindow,
         ));
+      } else if (_partyCache.containsKey(id) &&
+          !_isClosedDoc(_partyCache[id]!) &&
+          !_isFriendsOnlyMarker(id)) {
+        // ✅ Offene Party: 🎉-Icon in korrekter Farbe (aus Cache)
+        newMarkers.add(Marker(
+          markerId: m.markerId,
+          position: m.position,
+          icon: _iconForOpenPartyMarker(id),
+          onTap: m.onTap,
+          infoWindow: m.infoWindow,
+          anchor: m.anchor,
+          zIndex: m.zIndex,
+          consumeTapEvents: m.consumeTapEvents,
+        ));
       } else {
         newMarkers.add(m);
       }
@@ -1615,61 +1758,45 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   BitmapDescriptor _iconForLockMarker(String lockMarkerId) {
     final partyId = lockMarkerId.replaceFirst('lock_', '');
     final data = _partyCache[partyId];
-    if (data == null) {
-      return _lockIconGrey ?? BitmapDescriptor.defaultMarker;
-    }
+    if (data == null) return _lockIconGrey ?? BitmapDescriptor.defaultMarker;
 
     final isHost = _isHostForPartyData(data);
-    if (isHost) {
-      return _lockIconBlue ?? BitmapDescriptor.defaultMarker;
-    }
+    if (isHost) return _lockIconBlue ?? BitmapDescriptor.defaultMarker;
 
     final status = _closedPartyStatus[partyId];
-    if (status == 'approved') {
-      return _lockIconGreen ?? BitmapDescriptor.defaultMarker;
-    } else if (status == 'declined') {
-      return _lockIconRed ?? BitmapDescriptor.defaultMarker;
-    } else {
-      return _lockIconGrey ?? BitmapDescriptor.defaultMarker;
-    }
+    if (status == 'approved') return _lockIconGreen ?? BitmapDescriptor.defaultMarker;
+    if (status == 'declined') return _lockIconRed ?? BitmapDescriptor.defaultMarker;
+    return _lockIconGrey ?? BitmapDescriptor.defaultMarker;
   }
 
-  // ---------- Bar-Event Check ----------
   Future<void> _openBarEventScreenWithCheck() async {
     if (_barId == null || _barId!.trim().isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Kein Bar-Account verknüpft. Bitte Bar-ID in den Einstellungen setzen.',
-          ),
+              'Kein Bar-Account verknüpft. Bitte Bar-ID in den Einstellungen setzen.'),
         ),
       );
       return;
     }
 
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('bars')
-          .doc(_barId!)
-          .get();
+      final snap =
+      await FirebaseFirestore.instance.collection('bars').doc(_barId!).get();
 
       final data = snap.data();
       if (data == null) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Bar-Daten konnten nicht gefunden werden.'),
-          ),
+          const SnackBar(content: Text('Bar-Daten konnten nicht gefunden werden.')),
         );
         return;
       }
 
       final status = (data['status'] ?? '').toString().toLowerCase();
       final reasonRaw =
-      (data['statusReason'] ?? data['moderationNote'] ?? '')
-          .toString()
-          .trim();
+      (data['statusReason'] ?? data['moderationNote'] ?? '').toString().trim();
 
       if (status != 'approved') {
         if (!mounted) return;
@@ -1699,27 +1826,17 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: Colors.grey[900],
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-            title: const Text(
-              "Events aktuell nicht möglich",
-              style: TextStyle(color: Colors.white),
-            ),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            title: const Text("Events aktuell nicht möglich",
+                style: TextStyle(color: Colors.white)),
             content: Text(
               fullText,
-              style: const TextStyle(
-                color: Colors.white70,
-                height: 1.35,
-              ),
+              style: const TextStyle(color: Colors.white70, height: 1.35),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text(
-                  "OK",
-                  style: TextStyle(color: Colors.redAccent),
-                ),
+                child: const Text("OK", style: TextStyle(color: Colors.redAccent)),
               ),
             ],
           ),
@@ -1731,8 +1848,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            "Bar-Status konnte nicht geprüft werden. Versuche es später erneut.",
-          ),
+              "Bar-Status konnte nicht geprüft werden. Versuche es später erneut."),
         ),
       );
       return;
@@ -1747,7 +1863,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     );
   }
 
-  // ---------- Filter-Sheet ----------
+  // ✅ KOMPLETT NEU: Filter-Sheet mit "nur offene" / "nur geschlossene" + Logik an "Partys anzeigen"
   Future<void> _openFilterSheet() async {
     bool showParties = _showParties;
     bool showBars = _showBars;
@@ -1755,12 +1871,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     int? minAge = _minAgeFilter;
     double? maxEntry = _maxEntryFilter;
 
-    final ageCtrl = TextEditingController(
-      text: minAge != null ? minAge.toString() : '',
-    );
-    final entryCtrl = TextEditingController(
-      text: maxEntry != null ? maxEntry.toString() : '',
-    );
+    // ✅ NEU
+    bool onlyOpen = _onlyOpenParties;
+    bool onlyClosed = _onlyClosedParties;
+
+    final ageCtrl =
+    TextEditingController(text: minAge != null ? minAge.toString() : '');
+    final entryCtrl =
+    TextEditingController(text: maxEntry != null ? maxEntry.toString() : '');
 
     final result = await showModalBottomSheet<Map<String, dynamic>?>(
       context: context,
@@ -1779,6 +1897,18 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           ),
           child: StatefulBuilder(
             builder: (ctx, setSB) {
+              void turnOffPartySubFiltersIfNeeded() {
+                if (!showParties) {
+                  onlyOpen = false;
+                  onlyClosed = false;
+                  onlyFree = false;
+                  minAge = null;
+                  maxEntry = null;
+                  ageCtrl.text = '';
+                  entryCtrl.text = '';
+                }
+              }
+
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1798,37 +1928,70 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     ],
                   ),
                   const SizedBox(height: 16),
+
                   SwitchListTile(
                     value: showParties,
-                    onChanged: (v) => setSB(() => showParties = v),
+                    onChanged: (v) => setSB(() {
+                      showParties = v;
+                      // ✅ Wenn Partys aus → Unterfilter auch aus
+                      turnOffPartySubFiltersIfNeeded();
+                    }),
                     activeColor: _accent,
-                    title: const Text(
-                      "Partys anzeigen",
-                      style: TextStyle(color: Colors.white),
-                    ),
+                    title: const Text("Partys anzeigen",
+                        style: TextStyle(color: Colors.white)),
                   ),
+
+                  // ✅ NEU: Party-Typ Filter (nur aktiv wenn showParties = true)
+                  SwitchListTile(
+                    value: onlyOpen,
+                    onChanged: showParties
+                        ? (v) => setSB(() {
+                      onlyOpen = v;
+                      if (v) onlyClosed = false; // exklusiv
+                    })
+                        : null,
+                    activeColor: _accent,
+                    title: const Text("Nur offene Partys",
+                        style: TextStyle(color: Colors.white)),
+                  ),
+                  SwitchListTile(
+                    value: onlyClosed,
+                    onChanged: showParties
+                        ? (v) => setSB(() {
+                      onlyClosed = v;
+                      if (v) onlyOpen = false; // exklusiv
+                    })
+                        : null,
+                    activeColor: _accent,
+                    title: const Text("Nur geschlossene Partys",
+                        style: TextStyle(color: Colors.white)),
+                  ),
+
                   SwitchListTile(
                     value: showBars,
                     onChanged: (v) => setSB(() => showBars = v),
                     activeColor: _accent,
-                    title: const Text(
-                      "Bars anzeigen",
-                      style: TextStyle(color: Colors.white),
-                    ),
+                    title: const Text("Bars anzeigen",
+                        style: TextStyle(color: Colors.white)),
                   ),
+
                   const Divider(color: Colors.white24, height: 24),
+
                   SwitchListTile(
                     value: onlyFree,
-                    onChanged: (v) => setSB(() => onlyFree = v),
+                    onChanged: showParties
+                        ? (v) => setSB(() => onlyFree = v)
+                        : null,
                     activeColor: _accent,
-                    title: const Text(
-                      "Nur gratis Partys (0 € Eintritt)",
-                      style: TextStyle(color: Colors.white),
-                    ),
+                    title: const Text("Nur gratis Partys (0 € Eintritt)",
+                        style: TextStyle(color: Colors.white)),
                   ),
+
                   const SizedBox(height: 4),
+
                   TextField(
                     controller: ageCtrl,
+                    enabled: showParties,
                     style: const TextStyle(color: Colors.white),
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
@@ -1844,9 +2007,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       minAge = val;
                     },
                   ),
+
                   const SizedBox(height: 8),
+
                   TextField(
                     controller: entryCtrl,
+                    enabled: showParties,
                     style: const TextStyle(color: Colors.white),
                     keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
@@ -1864,43 +2030,60 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       maxEntry = val;
                     },
                   ),
+
                   const SizedBox(height: 18),
+
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       TextButton(
                         onPressed: () {
-                          Navigator.of(ctx).pop(<String, dynamic>{
-                            'reset': true,
-                          });
+                          Navigator.of(ctx).pop(<String, dynamic>{'reset': true});
                         },
-                        child: const Text(
-                          "Zurücksetzen",
-                          style: TextStyle(color: Colors.white70),
-                        ),
+                        child: const Text("Zurücksetzen",
+                            style: TextStyle(color: Colors.white70)),
                       ),
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _accent,
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
+                              borderRadius: BorderRadius.circular(10)),
                         ),
                         onPressed: () {
-                          final localMinAge =
-                          int.tryParse(ageCtrl.text.trim());
+                          final localMinAge = int.tryParse(ageCtrl.text.trim());
                           final localMaxEntry = double.tryParse(
-                              entryCtrl.text
-                                  .trim()
-                                  .replaceAll(',', '.'));
+                              entryCtrl.text.trim().replaceAll(',', '.'));
+
+                          // ✅ Hart erzwingen: wenn showParties=false → Unterfilter false
+                          bool finalOnlyOpen = onlyOpen;
+                          bool finalOnlyClosed = onlyClosed;
+                          bool finalOnlyFree = onlyFree;
+
+                          int? finalMinAge = localMinAge;
+                          double? finalMaxEntry = localMaxEntry;
+
+                          if (!showParties) {
+                            finalOnlyOpen = false;
+                            finalOnlyClosed = false;
+                            finalOnlyFree = false;
+                            finalMinAge = null;
+                            finalMaxEntry = null;
+                          }
+
+                          // ✅ Safety: niemals beide true
+                          if (finalOnlyOpen && finalOnlyClosed) {
+                            finalOnlyClosed = false;
+                          }
 
                           Navigator.of(ctx).pop(<String, dynamic>{
                             'showParties': showParties,
                             'showBars': showBars,
-                            'onlyFree': onlyFree,
-                            'minAge': localMinAge,
-                            'maxEntry': localMaxEntry,
+                            'onlyFree': finalOnlyFree,
+                            'minAge': finalMinAge,
+                            'maxEntry': finalMaxEntry,
+                            'onlyOpen': finalOnlyOpen,
+                            'onlyClosed': finalOnlyClosed,
                             'reset': false,
                           });
                         },
@@ -1925,6 +2108,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         _onlyFree = false;
         _minAgeFilter = null;
         _maxEntryFilter = null;
+
+        // ✅ NEU reset
+        _onlyOpenParties = false;
+        _onlyClosedParties = false;
       });
       await _refreshMap();
       return;
@@ -1933,19 +2120,36 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     setState(() {
       _showParties = result['showParties'] as bool? ?? _showParties;
       _showBars = result['showBars'] as bool? ?? _showBars;
+
       _onlyFree = result['onlyFree'] as bool? ?? _onlyFree;
       _minAgeFilter = result['minAge'] as int?;
       _maxEntryFilter = result['maxEntry'] as double?;
+
+      _onlyOpenParties = result['onlyOpen'] as bool? ?? _onlyOpenParties;
+      _onlyClosedParties = result['onlyClosed'] as bool? ?? _onlyClosedParties;
+
+      // ✅ Hart erzwingen: wenn Partys aus → Unterfilter aus
+      if (!_showParties) {
+        _onlyOpenParties = false;
+        _onlyClosedParties = false;
+        _onlyFree = false;
+        _minAgeFilter = null;
+        _maxEntryFilter = null;
+      }
+
+      // ✅ Safety: niemals beide true
+      if (_onlyOpenParties && _onlyClosedParties) {
+        _onlyClosedParties = false;
+      }
     });
+
     await _refreshMap();
   }
 
-  // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
     if (_startPos == null) {
-      return const Scaffold(
-          body: Center(child: CircularProgressIndicator(color: _accent)));
+      return const Scaffold(body: Center(child: CircularProgressIndicator(color: _accent)));
     }
 
     return Scaffold(
@@ -1961,7 +2165,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             fontWeight: FontWeight.w800,
           ),
         ),
-        // Menü + Filter links
         leadingWidth: 96,
         leading: Row(
           mainAxisAlignment: MainAxisAlignment.start,
@@ -1981,7 +2184,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             ),
           ],
         ),
-        // rechts: Reload + Profil
         actions: [
           IconButton(
             tooltip: 'Neu laden',
@@ -1990,16 +2192,13 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                 ? const SizedBox(
               width: 20,
               height: 20,
-              child: CircularProgressIndicator(
-                  strokeWidth: 2, color: Colors.white),
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
             )
                 : const Icon(Icons.refresh, color: Colors.white),
           ),
           IconButton(
             onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const ProfileSettingsScreen())),
+                context, MaterialPageRoute(builder: (_) => const ProfileSettingsScreen())),
             icon: const CircleAvatar(
               radius: 16,
               backgroundColor: _accent,
@@ -2029,7 +2228,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
               circles: _circles,
               zoomControlsEnabled: true,
               zoomGesturesEnabled: true,
-              onMapCreated: (controller) => mapController = controller,
+              onMapCreated: (controller) async {
+                mapController = controller;
+                try {
+                  await controller.setMapStyle(_mapStyleHidePublicPois);
+                } catch (_) {
+                  // wenn MapStyle auf einem Gerät nicht supported ist: ignorieren
+                }
+              },
               onCameraMove: (pos) {
                 _lastCameraPosition = pos;
               },
@@ -2046,53 +2252,36 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                 final query = input.trim();
                 if (query.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Bitte eine Adresse eingeben."),
-                    ),
+                    const SnackBar(content: Text("Bitte eine Adresse eingeben.")),
                   );
                   return;
                 }
 
                 final cc = await _getSelectedCountryCode();
                 final withCity =
-                    "$query, ${_currentCity.trim().isEmpty ? 'Wien' : _currentCity.trim()}";
+                    "$query, ${_currentCity.trim().isNotEmpty ? _currentCity.trim() : 'Wien'}";
 
                 GeocodedLocation? location =
-                await GeocodingService.getLocationFromAddress(
-                  withCity,
-                  countryCode: cc,
-                );
+                await GeocodingService.getLocationFromAddress(withCity, countryCode: cc);
 
-                location ??= await GeocodingService.getLocationFromAddress(
-                  query,
-                  countryCode: cc,
-                );
+                location ??=
+                await GeocodingService.getLocationFromAddress(query, countryCode: cc);
+
+                if (!mounted) return;
 
                 if (location != null) {
                   final pos = LatLng(location.latitude, location.longitude);
-                  setState(() {
-                    _markers.removeWhere(
-                            (m) => m.markerId.value == '__search_marker');
-                    _markers.add(
-                      Marker(
-                        markerId: const MarkerId('__search_marker'),
-                        position: pos,
-                        icon: BitmapDescriptor.defaultMarkerWithHue(
-                            BitmapDescriptor.hueRed),
-                      ),
-                    );
-                  });
-                  mapController?.animateCamera(
-                      CameraUpdate.newLatLngZoom(pos, 15));
+
+                  // ✅ KEIN PIN setzen: nur Kamera bewegen + sehr weit reinzoomen
+                  // (Zoom 18–20 ist sehr nah; 19 kann je nach Gerät/Map-Daten variieren)
+                  mapController?.animateCamera(CameraUpdate.newLatLngZoom(pos, 19));
                 } else {
-                  if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Adresse nicht gefunden."),
-                    ),
+                    const SnackBar(content: Text("Adresse nicht gefunden.")),
                   );
                 }
               },
+
               onClear: () => _searchCtrl.clear(),
             ),
           ),
@@ -2114,21 +2303,15 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         type: BottomNavigationBarType.fixed,
         items: _isBarAccount
             ? const [
-          BottomNavigationBarItem(
-              icon: Icon(Icons.map), label: "Map"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.celebration), label: "Event hosten"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.feedback), label: "Feedback"),
+          BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
+          BottomNavigationBarItem(icon: Icon(Icons.celebration), label: "Event hosten"),
+          BottomNavigationBarItem(icon: Icon(Icons.feedback), label: "Feedback"),
         ]
             : const [
-          BottomNavigationBarItem(
-              icon: Icon(Icons.feedback), label: "Feedback"),
+          BottomNavigationBarItem(icon: Icon(Icons.feedback), label: "Feedback"),
           BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.people), label: "Freunde"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.add), label: "Neue Party"),
+          BottomNavigationBarItem(icon: Icon(Icons.people), label: "Freunde"),
+          BottomNavigationBarItem(icon: Icon(Icons.add), label: "Neue Party"),
         ],
       ),
     );
@@ -2143,10 +2326,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         border: Border.all(color: const Color(0xFFFFEEBA)),
         borderRadius: BorderRadius.circular(12),
         boxShadow: const [
-          BoxShadow(
-              color: Color(0x22000000),
-              blurRadius: 8,
-              offset: Offset(0, 3))
+          BoxShadow(color: Color(0x22000000), blurRadius: 8, offset: Offset(0, 3))
         ],
       ),
       child: Row(
@@ -2157,9 +2337,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           const Expanded(
             child: Text(
               "WICHTIG: Das Erstellen von Fake-Partys ist rechtlich VERBOTEN. Nur echte, wahrheitsgemäße Angaben machen.",
-              style: TextStyle(
-                  color: Color(0xFF856404),
-                  fontWeight: FontWeight.w800),
+              style: TextStyle(color: Color(0xFF856404), fontWeight: FontWeight.w800),
             ),
           ),
           IconButton(
@@ -2173,26 +2351,19 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   }
 
   void _onBottomNavTapped(int index) async {
-    // BAR-ACCOUNT: Map, Event hosten, Feedback (eigener Screen)
     if (_isBarAccount) {
       if (index == 0) {
-        if (_currentIndex != 0) {
-          setState(() => _currentIndex = 0);
-        }
+        if (_currentIndex != 0) setState(() => _currentIndex = 0);
         return;
       }
-
       if (index == 1) {
         setState(() => _currentIndex = 1);
-
         await _openBarEventScreenWithCheck();
-
         if (!mounted) return;
         setState(() => _currentIndex = 0);
         await _refreshMap();
         return;
       }
-
       if (index == 2) {
         setState(() => _currentIndex = 2);
         await Navigator.push(
@@ -2200,18 +2371,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           MaterialPageRoute(builder: (_) => const BarFeedbackScreen()),
         );
         if (!mounted) return;
-        setState(() => _currentIndex = 0); // zurück zur Map
+        setState(() => _currentIndex = 0);
         return;
       }
-
       return;
     }
 
-    // NORMALER ACCOUNT
     if (index == 1) {
-      if (_currentIndex != 1) {
-        setState(() => _currentIndex = 1);
-      }
+      if (_currentIndex != 1) setState(() => _currentIndex = 1);
       return;
     }
 
@@ -2227,9 +2394,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       final me = (_currentUsername ?? '').trim();
       if (me.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Username fehlt. In den Einstellungen setzen.'),
-          ),
+          const SnackBar(content: Text('Username fehlt. In den Einstellungen setzen.')),
         );
         return;
       }
@@ -2295,8 +2460,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
               child: ScaleTransition(
                 scale: scale,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 18, vertical: 14),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                   decoration: BoxDecoration(
                     color: Colors.grey[900]!.withOpacity(0.96),
                     borderRadius: BorderRadius.circular(14),
@@ -2321,8 +2485,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                           shape: BoxShape.circle,
                           color: Colors.green,
                         ),
-                        child: const Icon(Icons.check_rounded,
-                            color: Colors.white, size: 18),
+                        child: const Icon(Icons.check_rounded, color: Colors.white, size: 18),
                       ),
                       const SizedBox(width: 12),
                       Text(
@@ -2367,15 +2530,13 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   Future<bool> _ensureLegalConsentBeforeCreating() async {
     final prefs = await SharedPreferences.getInstance();
-    final alreadyAccepted =
-        prefs.getBool('legal_consent_create_v1') ?? false;
+    final alreadyAccepted = prefs.getBool('legal_consent_create_v1') ?? false;
     if (alreadyAccepted) return true;
 
     final acceptedNow = await _showLegalGateDialog();
     if (acceptedNow) {
       await prefs.setBool('legal_consent_create_v1', true);
-      await prefs.setString(
-          'legal_consent_create_v1_date', DateTime.now().toIso8601String());
+      await prefs.setString('legal_consent_create_v1_date', DateTime.now().toIso8601String());
     }
     return acceptedNow;
   }
@@ -2392,14 +2553,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           builder: (ctx, setSB) {
             return AlertDialog(
               backgroundColor: Colors.grey[900],
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               title: Row(
                 children: const [
                   Icon(Icons.gavel_outlined, color: Colors.redAccent),
                   SizedBox(width: 8),
-                  Text("Rechtlicher Hinweis",
-                      style: TextStyle(color: Colors.white)),
+                  Text("Rechtlicher Hinweis", style: TextStyle(color: Colors.white)),
                 ],
               ),
               content: SingleChildScrollView(
@@ -2409,9 +2568,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     const Text(
                       "Das Erstellen von Fake-Partys ist VERBOTEN. Du bestätigst, dass alle Angaben wahrheitsgemäß sind und die Veranstaltung wirklich stattfindet.",
                       style: TextStyle(
-                          color: Colors.white70,
-                          height: 1.35,
-                          fontWeight: FontWeight.w600),
+                        color: Colors.white70,
+                        height: 1.35,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 12),
                     CheckboxListTile(
@@ -2428,8 +2588,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                   ],
                 ),
               ),
-              actionsPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              actionsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               actions: [
                 OutlinedButton.icon(
                   onPressed: () {
@@ -2437,14 +2596,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     Navigator.of(ctx).pop();
                   },
                   icon: const Icon(Icons.close, color: Colors.redAccent),
-                  label: const Text("Abbrechen",
-                      style: TextStyle(color: Colors.redAccent)),
+                  label: const Text("Abbrechen", style: TextStyle(color: Colors.redAccent)),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.redAccent),
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 12, horizontal: 16),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
                 if (checkbox)
@@ -2454,15 +2610,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       Navigator.of(ctx).pop();
                     },
                     icon: const Icon(Icons.check_circle_outline),
-                    label: const Text("Fertig",
-                        style: TextStyle(color: Colors.white)),
+                    label: const Text("Fertig", style: TextStyle(color: Colors.white)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.redAccent,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 12, horizontal: 18),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 18),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
               ],
@@ -2476,7 +2629,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   }
 }
 
-// ---------- Suchkarte ----------
 class _SearchCard extends StatelessWidget {
   final TextEditingController controller;
   final Future<void> Function(String) onSearch;
@@ -2496,8 +2648,7 @@ class _SearchCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.grey[850],
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: Colors.redAccent.withOpacity(.85), width: 1.2),
+          border: Border.all(color: Colors.redAccent.withOpacity(.85), width: 1.2),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(.5),
@@ -2519,8 +2670,7 @@ class _SearchCard extends StatelessWidget {
                 onSubmitted: onSearch,
                 decoration: const InputDecoration(
                   hintText: "Adresse eingeben",
-                  hintStyle: TextStyle(
-                      color: Colors.white54, fontWeight: FontWeight.w600),
+                  hintStyle: TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
                   border: InputBorder.none,
                 ),
               ),
@@ -2528,15 +2678,13 @@ class _SearchCard extends StatelessWidget {
             if (controller.text.isNotEmpty)
               IconButton(
                 onPressed: onClear,
-                icon: const Icon(Icons.close,
-                    color: Colors.white70, size: 18),
+                icon: const Icon(Icons.close, color: Colors.white70, size: 18),
                 tooltip: 'Löschen',
               )
             else
               IconButton(
                 onPressed: () => onSearch(controller.text),
-                icon: const Icon(Icons.arrow_forward_rounded,
-                    color: Colors.white),
+                icon: const Icon(Icons.arrow_forward_rounded, color: Colors.white),
                 tooltip: 'Suchen',
               ),
           ],

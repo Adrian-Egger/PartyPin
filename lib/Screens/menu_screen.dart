@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 
 import '../Services/language_services.dart';
 import '../Screens/party_map_screen.dart';
 import '../Screens/selection_screen.dart';
 import '../Screens/feedback_screen.dart';
-import '../Screens/AdminCreatesBarScreen.dart'; // Admin-Screen
+import '../Screens/AdminCreatesBarScreen.dart';
+import '../Services/paypal.dart'; // PayPal-Service
 
-// --- Zentrales Farb-Theme wie PartyMap / Selection ---
+// --- Zentrales Farb-Theme ---
 const _gradTop = Color(0xFF0E0F12);
 const _gradBottom = Color(0xFF141A22);
 const _panel = Color(0xFF15171C);
@@ -17,14 +17,13 @@ const _panelBorder = Color(0xFF2A2F38);
 const _card = Color(0xFF1C1F26);
 const _textPrimary = Colors.white;
 const _textSecondary = Color(0xFFB6BDC8);
-const _accent = Color(0xFFFF3B30); // kräftiges Rot
-const _secondary = Color(0xFF00C2A8); // Türkis (optional)
+const _accent = Color(0xFFFF3B30);
+const _secondary = Color(0xFF00C2A8);
 
 // ------------------- Menu Screen -------------------
 class MenuScreen extends StatelessWidget {
   const MenuScreen({super.key});
 
-  // Username, der den Admin-Eintrag sieht
   static const String _adminUsername = "admin_pp";
 
   Future<Map<String, dynamic>?> _getSavedLocation() async {
@@ -115,14 +114,11 @@ class MenuScreen extends StatelessWidget {
               icon: Icons.map,
               title: LanguageService.getText('party_map', lang),
               onTap: () async {
-                // Wenn unter dem Menü bereits die Map im Stack liegt,
-                // einfach zurückpoppen statt eine neue PartyMapScreen zu erstellen.
                 if (Navigator.of(context).canPop()) {
                   Navigator.of(context).pop();
                   return;
                 }
 
-                // Fallback, falls das Menü jemals als Root-Screen laufen sollte:
                 final location = await _getSavedLocation();
                 if (location != null) {
                   Navigator.pushReplacement(
@@ -141,8 +137,6 @@ class MenuScreen extends StatelessWidget {
                 }
               },
             ),
-
-            // ---------- Premium-Eintrag ----------
             _menuTile(
               icon: Icons.workspace_premium,
               title: "Premium ⭐",
@@ -155,7 +149,6 @@ class MenuScreen extends StatelessWidget {
                 );
               },
             ),
-
             _menuTile(
               icon: Icons.language,
               title: LanguageService.getText('change_language', lang),
@@ -252,8 +245,6 @@ class MenuScreen extends StatelessWidget {
                 );
               },
             ),
-
-            // --------- ADMIN-EINTRAG GANZ UNTEN (nur admin_pp) ----------
             FutureBuilder<bool>(
               future: _isCurrentUserAdmin(),
               builder: (context, snapshot) {
@@ -580,7 +571,6 @@ class PremiumScreen extends StatefulWidget {
 class _PremiumScreenState extends State<PremiumScreen> {
   String _selectedPlan = 'monthly'; // 'monthly' oder 'yearly'
   bool _isLoading = false;
-  String? _lastOrderId;
   String? _currentUsername;
 
   @override
@@ -596,10 +586,32 @@ class _PremiumScreenState extends State<PremiumScreen> {
     });
   }
 
-  Future<void> _startPaypalCheckout() async {
-    if (_currentUsername == null) {
+  String _planTitle(String plan) => plan == 'monthly' ? 'Monatlich' : 'Jährlich';
+
+  String _planPriceText(String plan) =>
+      plan == 'monthly' ? '1,49 € / Monat' : '14,99 € / Jahr';
+
+  String _payButtonLabel(String plan) => plan == 'monthly'
+      ? 'Mit PayPal zahlen'
+      : 'Mit PayPal zahlen';
+
+  String _savingsText() {
+    // 12 * 1,49 = 17,88 ; 17,88 - 14,99 = 2,89 Ersparnis
+    return 'Spare ca. 2,89 € pro Jahr';
+  }
+
+  Future<void> _openSubscriptionCheckout() async {
+    final u = _currentUsername?.trim() ?? '';
+    if (u.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kein Username gefunden. Bitte neu einloggen.')),
+        const SnackBar(
+          backgroundColor: _panel,
+          content: Text(
+            'Kein Username gefunden. Bitte neu einloggen.',
+            style: TextStyle(color: _textPrimary),
+          ),
+        ),
       );
       return;
     }
@@ -607,82 +619,34 @@ class _PremiumScreenState extends State<PremiumScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final callable = FirebaseFunctions.instance.httpsCallable('createPaypalOrder');
-      final result = await callable.call(<String, dynamic>{
-        'plan': _selectedPlan,
-        'username': _currentUsername,
-      });
+      final uri = PayPalCheckout.buildCheckoutUri(
+        username: u,
+        plan: _selectedPlan, // monthly/yearly
+      );
 
-      final data = Map<String, dynamic>.from(result.data as Map);
-      final approvalUrl = data['approvalUrl']?.toString();
-      final orderId = data['orderId']?.toString();
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok) throw Exception('Konnte PayPal-Seite nicht öffnen.');
 
-      if (approvalUrl == null || orderId == null) {
-        throw Exception('Ungültige Antwort von createPaypalOrder');
-      }
-
-      _lastOrderId = orderId;
-
-      final uri = Uri.parse(approvalUrl);
-      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-        throw Exception('Konnte PayPal nicht öffnen.');
-      }
-
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
+          backgroundColor: _panel,
           content: Text(
-            'PayPal im Browser geöffnet. Bitte dort bezahlen und danach auf "Zahlung prüfen" tippen.',
+            'PayPal geöffnet (${_planTitle(_selectedPlan)}). Nach Abschluss wird Premium automatisch aktiviert.',
+            style: const TextStyle(color: _textPrimary),
           ),
         ),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Fehler beim Starten der Zahlung: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _verifyPayment() async {
-    if (_lastOrderId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Keine Bestellung vorhanden. Bitte zuerst bezahlen.')),
-      );
-      return;
-    }
-    if (_currentUsername == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kein Username gefunden.')),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      final callable = FirebaseFunctions.instance.httpsCallable('verifyPaypalOrder');
-      final result = await callable.call(<String, dynamic>{
-        'orderId': _lastOrderId,
-        'username': _currentUsername,
-        'plan': _selectedPlan,
-      });
-
-      final data = Map<String, dynamic>.from(result.data as Map);
-      final status = data['status']?.toString();
-
-      if (status == 'ok') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Premium aktiviert – viel Spaß! 🎉')),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Zahlung noch nicht abgeschlossen: $status')),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Fehler bei der Zahlungsprüfung: $e')),
+        SnackBar(
+          backgroundColor: _panel,
+          content: Text(
+            'Fehler beim Öffnen von PayPal: $e',
+            style: const TextStyle(color: _textPrimary),
+          ),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -695,15 +659,27 @@ class _PremiumScreenState extends State<PremiumScreen> {
     const panel = Color(0xFF141A22);
     const accentRed = Color(0xFFFF3B30);
 
+    final yearlySelected = _selectedPlan == 'yearly';
+
     return Scaffold(
       backgroundColor: bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF141A22),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+
+        // ✅ kleiner roter Zurückpfeil
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+          tooltip: 'Zurück',
+        ),
+
+
         title: const Text(
           'Premium ⭐',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
         ),
-        centerTitle: true,
       ),
       body: _currentUsername == null
           ? const Center(
@@ -717,53 +693,78 @@ class _PremiumScreenState extends State<PremiumScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // ✅ Header-Karte kundenfreundlicher
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: panel,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: Colors.white12),
               ),
-              child: const Text(
-                'Mit PartyPin Premium siehst du, auf welche Partys deine Freunde gehen – '
-                    'inklusive „Ich komme / Vielleicht“ in Echtzeit.\n\n'
-                    'Außerdem bekommst du früher Zugriff auf neue Features.',
-                style: TextStyle(color: Colors.white70, height: 1.4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Mehr Überblick. Mehr Spaß.',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 18,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Mit PartyPin Premium siehst du live, auf welche Partys deine Freunde gehen '
+                        '(„Ich komme“ / „Vielleicht“). Außerdem bekommst du früher Zugriff auf neue Features.',
+                    style: TextStyle(color: Colors.white70, height: 1.4),
+                  ),
+                  const SizedBox(height: 14),
+
+                  _benefitRow(Icons.people_alt, 'Freunde-Status in Echtzeit'),
+                  const SizedBox(height: 8),
+                  _benefitRow(Icons.bolt, 'Früher Zugriff auf neue Features'),
+                  const SizedBox(height: 8),
+                  _benefitRow(Icons.shield, 'Premium ist accountgebunden'),
+                ],
               ),
             ),
+
             const SizedBox(height: 16),
+
             const Text(
               'Wähle dein Abo',
               style: TextStyle(
                 color: Colors.white70,
-                fontWeight: FontWeight.w700,
-                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                fontSize: 14,
               ),
             ),
-            const SizedBox(height: 8),
-            _planTile(
+            const SizedBox(height: 10),
+
+            // ✅ Plans
+            _planCard(
               title: 'Monatlich',
-              description: 'Flexibel kündbar – ideal zum Testen.',
-              price: '4,99 € / Monat',
+              subtitle: 'Flexibel kündbar – ideal zum Testen.',
+              price: _planPriceText('monthly'),
               selected: _selectedPlan == 'monthly',
-              onTap: () {
-                setState(() => _selectedPlan = 'monthly');
-              },
+              highlight: null,
+              onTap: () => setState(() => _selectedPlan = 'monthly'),
             ),
             const SizedBox(height: 10),
-            _planTile(
+            _planCard(
               title: 'Jährlich',
-              description: 'Sparpreis – ca. 2 Monate geschenkt.',
-              price: '49,99 € / Jahr',
-              badge: 'Beliebt',
-              selected: _selectedPlan == 'yearly',
-              onTap: () {
-                setState(() => _selectedPlan = 'yearly');
-              },
+              subtitle: 'Bestes Angebot – weniger Aufwand.',
+              price: _planPriceText('yearly'),
+              selected: yearlySelected,
+              highlight: _savingsText(),
+              onTap: () => setState(() => _selectedPlan = 'yearly'),
             ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: _isLoading ? null : _startPaypalCheckout,
+
+            const SizedBox(height: 18),
+
+            // ✅ klarerer Checkout-Button (kurzer Text + Preis separat)
+            ElevatedButton(
+              onPressed: _isLoading ? null : _openSubscriptionCheckout,
               style: ElevatedButton.styleFrom(
                 backgroundColor: accentRed,
                 foregroundColor: Colors.white,
@@ -772,44 +773,45 @@ class _PremiumScreenState extends State<PremiumScreen> {
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              icon: const Icon(Icons.payment),
-              label: Text(
-                _selectedPlan == 'monthly'
-                    ? 'Mit PayPal zahlen – 4,99 € / Monat'
-                    : 'Mit PayPal zahlen – 49,99 € / Jahr',
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.payment, size: 18),
+                  const SizedBox(width: 10),
+                  Text(
+                    _payButtonLabel(_selectedPlan),
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    '• ${_planPriceText(_selectedPlan)}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: _isLoading ? null : _verifyPayment,
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.white38),
-                foregroundColor: Colors.white70,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+
+            const SizedBox(height: 10),
+
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0F121A),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white10),
               ),
-              child: _isLoading
-                  ? const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
-              )
-                  : const Text('Zahlung prüfen'),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Hinweis: Zahlungen werden von PayPal abgewickelt. '
-                  'PartyPin speichert keine Kreditkarten- oder Kontodaten.',
-              style: TextStyle(color: Colors.white38, fontSize: 11),
+              child: const Text(
+                'Hinweis: Abos werden über PayPal abgewickelt. Premium wird nach erfolgreicher Bestätigung automatisch aktiviert. '
+                    'Kündigung jederzeit in PayPal möglich.',
+                style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.3),
+              ),
             ),
           ],
         ),
@@ -817,22 +819,40 @@ class _PremiumScreenState extends State<PremiumScreen> {
     );
   }
 
-  Widget _planTile({
+  Widget _benefitRow(IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon, color: Colors.white70, size: 18),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _planCard({
     required String title,
-    required String description,
+    required String subtitle,
     required String price,
     required bool selected,
     required VoidCallback onTap,
-    String? badge,
+    String? highlight,
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(18),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: selected ? const Color(0xFF1E2230) : const Color(0xFF141824),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
             color: selected ? Colors.amber : Colors.white12,
             width: selected ? 1.4 : 1.0,
@@ -841,10 +861,11 @@ class _PremiumScreenState extends State<PremiumScreen> {
         child: Row(
           children: [
             Icon(
-              Icons.workspace_premium,
-              color: selected ? Colors.amber : Colors.white54,
+              selected ? Icons.check_circle : Icons.circle_outlined,
+              color: selected ? Colors.amber : Colors.white38,
+              size: 20,
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -855,26 +876,25 @@ class _PremiumScreenState extends State<PremiumScreen> {
                         title,
                         style: const TextStyle(
                           color: Colors.white,
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w900,
                           fontSize: 15,
                         ),
                       ),
-                      if (badge != null) ...[
+                      if (highlight != null) ...[
                         const SizedBox(width: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
-                            color: Colors.amber.withOpacity(0.15),
+                            color: Colors.amber.withOpacity(0.12),
                             borderRadius: BorderRadius.circular(999),
                             border: Border.all(color: Colors.amber),
                           ),
                           child: Text(
-                            badge,
+                            highlight,
                             style: const TextStyle(
                               color: Colors.amber,
                               fontSize: 10,
-                              fontWeight: FontWeight.w700,
+                              fontWeight: FontWeight.w800,
                             ),
                           ),
                         ),
@@ -883,11 +903,11 @@ class _PremiumScreenState extends State<PremiumScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    description,
+                    subtitle,
                     style: const TextStyle(
                       color: Colors.white60,
                       fontSize: 12,
-                      height: 1.3,
+                      height: 1.25,
                     ),
                   ),
                 ],
@@ -898,7 +918,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
               price,
               style: const TextStyle(
                 color: Colors.white,
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w800,
                 fontSize: 13,
               ),
               textAlign: TextAlign.right,
@@ -909,3 +929,4 @@ class _PremiumScreenState extends State<PremiumScreen> {
     );
   }
 }
+
