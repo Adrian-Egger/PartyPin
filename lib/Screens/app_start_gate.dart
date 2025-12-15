@@ -50,58 +50,70 @@ class _AppStartGateState extends State<AppStartGate>
   }
 
   Future<void> _boot() async {
-    final prefs = await SharedPreferences.getInstance();
+    try {
+      final prefs = await SharedPreferences.getInstance()
+          .timeout(const Duration(seconds: 5));
 
-    // 1) Login-Status
-    final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
-    if (!isLoggedIn) {
-      _go(const CreateAccountScreen());
-      return;
-    }
+      // 1) Login-Status
+      final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+      if (!isLoggedIn) {
+        _go(const CreateAccountScreen());
+        return;
+      }
 
-    // 2) Terms
-    final termsAccepted = prefs.getBool('termsAccepted') ?? false;
-    if (!termsAccepted) {
-      _go(const TermsScreen());
-      return;
-    }
+      // 2) Terms
+      final termsAccepted = prefs.getBool('termsAccepted') ?? false;
+      if (!termsAccepted) {
+        _go(const TermsScreen());
+        return;
+      }
 
-    // 3) Age Sync + Birthday
-    final username = prefs.getString('currentUsername') ?? '';
-    if (username.isNotEmpty) {
-      // Achtung: du übergibst username als docId – passt nur, wenn dein Doc wirklich so heißt.
-      final result = await AgeService.syncAgeAndCheckBirthday(docId: username);
-      if (!mounted) return;
+      // 3) Age Sync + Birthday (darf NIE blockieren)
+      final username = prefs.getString('currentUsername') ?? '';
+      if (username.isNotEmpty) {
+        try {
+          final result = await AgeService.syncAgeAndCheckBirthday(docId: username)
+              .timeout(const Duration(seconds: 6));
 
-      if (result.isBirthdayToday) {
-        final now = DateTime.now();
-        final todayKey = '${now.year}-${now.month}-${now.day}';
-        final lastShown = prefs.getString('birthdayShownOn');
+          if (!mounted) return;
 
-        if (lastShown != todayKey) {
-          await prefs.setString('birthdayShownOn', todayKey);
-          _go(BirthdayScreen(username: username));
-          return;
+          if (result.isBirthdayToday) {
+            final now = DateTime.now();
+            final todayKey = '${now.year}-${now.month}-${now.day}';
+            final lastShown = prefs.getString('birthdayShownOn');
+
+            if (lastShown != todayKey) {
+              await prefs.setString('birthdayShownOn', todayKey);
+              _go(BirthdayScreen(username: username));
+              return;
+            }
+          }
+        } catch (_) {
+          // Firestore/Network/DocId falsch → wir ignorieren und machen normal weiter
         }
       }
-    }
 
-    // 4) Location
-    final savedCity = prefs.getString('city');
-    final savedCountry = prefs.getString('country');
-    final savedLat = prefs.getDouble('selectedLat');
-    final savedLng = prefs.getDouble('selectedLng');
+      // 4) Location
+      final savedCity = prefs.getString('city');
+      final savedCountry = prefs.getString('country');
+      final savedLat = prefs.getDouble('selectedLat');
+      final savedLng = prefs.getDouble('selectedLng');
 
-    final hasLocationData =
-        savedCity != null && savedCountry != null && savedLat != null && savedLng != null;
+      final hasLocationData =
+          savedCity != null && savedCountry != null && savedLat != null && savedLng != null;
 
-    if (!hasLocationData) {
+      if (!hasLocationData) {
+        _go(const SelectionScreen());
+        return;
+      }
+
+      // 5) Alles erfüllt → Karte
+      _go(const PartyMapScreen());
+    } catch (_) {
+      // Notfall-Fallback: nie im Loader hängen
+      if (!mounted) return;
       _go(const SelectionScreen());
-      return;
     }
-
-    // 5) Alles erfüllt → Karte
-    _go(const PartyMapScreen());
   }
 
   void _go(Widget screen) {
