@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:party_pin/Services/age_services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '/Services/age_services.dart';
+import '../Services/age_services.dart';
 import 'birthday_screen.dart';
 import 'party_map_screen.dart';
 import 'create_account_screen.dart';
@@ -70,6 +69,7 @@ class _AppStartGateState extends State<AppStartGate>
     // 3) Age Sync + Birthday
     final username = prefs.getString('currentUsername') ?? '';
     if (username.isNotEmpty) {
+      // Achtung: du übergibst username als docId – passt nur, wenn dein Doc wirklich so heißt.
       final result = await AgeService.syncAgeAndCheckBirthday(docId: username);
       if (!mounted) return;
 
@@ -93,10 +93,7 @@ class _AppStartGateState extends State<AppStartGate>
     final savedLng = prefs.getDouble('selectedLng');
 
     final hasLocationData =
-        savedCity != null &&
-            savedCountry != null &&
-            savedLat != null &&
-            savedLng != null;
+        savedCity != null && savedCountry != null && savedLat != null && savedLng != null;
 
     if (!hasLocationData) {
       _go(const SelectionScreen());
@@ -141,7 +138,6 @@ class _AppStartGateState extends State<AppStartGate>
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // ✅ Asset-Pfad passend zu deiner pubspec.yaml
                       Image.asset(
                         'lib/Pics/PartyPinLogo.png',
                         width: 140,
