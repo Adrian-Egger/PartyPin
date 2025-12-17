@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // ✅ FIX: für anonymous auth
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -82,6 +83,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         avatarUrl = (data['avatarUrl'] ?? '').toString().trim();
         password = (data['password'] ?? '').toString();
 
+        if (!mounted) return;
         setState(() {
           _docId = doc.id;
           _username = (data['username'] ?? username).toString();
@@ -94,6 +96,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
 
     // Fallback: nur Prefs, falls Firestore nichts gefunden hat
+    if (!mounted) return;
     setState(() {
       _username = username;
       _usernameController.text = username;
@@ -110,7 +113,22 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         .update({field: value});
   }
 
-  // ---------- Avatar / Foto (funktioniert für alle, weil Storage URL) ----------
+  // ---------- ✅ FIX: sicherstellen, dass Storage Upload erlaubt ist ----------
+  Future<User?> _ensureFirebaseUser(BuildContext context) async {
+    final auth = FirebaseAuth.instance;
+
+    if (auth.currentUser != null) return auth.currentUser;
+
+    try {
+      final cred = await auth.signInAnonymously();
+      return cred.user;
+    } catch (e) {
+      _showSnack("Firebase Login fehlgeschlagen: $e");
+      return null;
+    }
+  }
+
+  // ---------- Avatar / Foto ----------
 
   Future<bool> _ensurePermissionForSource(ImageSource source) async {
     if (source == ImageSource.camera) {
@@ -122,37 +140,58 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       return true;
     }
 
-    // Galerie
-    PermissionStatus status;
-    if (Platform.isAndroid) {
-      // Android 13+ -> photos, ältere -> storage
-      status = await Permission.photos.request();
-      if (!status.isGranted) {
-        status = await Permission.storage.request();
-      }
-    } else {
-      // iOS
-      status = await Permission.photos.request();
-    }
+    // Galerie:
+    // - Android: je nach Version storage/photos – wir versuchen beides robust.
+    // - iOS: photos
+    try {
+      if (Platform.isAndroid) {
+        // Erst "photos" versuchen (Android 13+ in neueren permission_handler Versionen),
+        // wenn das nicht geht/abgelehnt wird -> storage.
+        final p = await Permission.photos.request();
+        if (p.isGranted) return true;
 
-    if (!status.isGranted) {
-      _showSnack("Zugriff auf Fotos wurde verweigert.");
-      return false;
+        final s = await Permission.storage.request();
+        if (!s.isGranted) {
+          _showSnack("Zugriff auf Fotos wurde verweigert.");
+          return false;
+        }
+        return true;
+      } else {
+        final status = await Permission.photos.request();
+        if (!status.isGranted) {
+          _showSnack("Zugriff auf Fotos wurde verweigert.");
+          return false;
+        }
+        return true;
+      }
+    } catch (_) {
+      // Falls Permission.photos auf Android in deiner Version nicht sauber unterstützt ist:
+      final s = await Permission.storage.request();
+      if (!s.isGranted) {
+        _showSnack("Zugriff auf Fotos wurde verweigert.");
+        return false;
+      }
+      return true;
     }
-    return true;
   }
 
   Future<void> _pickFromSource(ImageSource source) async {
     if (_busyAvatar) return;
 
-    final ok = await _ensurePermissionForSource(source);
-    if (!ok) return;
+    final okPerm = await _ensurePermissionForSource(source);
+    if (!okPerm) return;
 
-    final XFile? image = await _picker.pickImage(
-      source: source,
-      imageQuality: 85,
-      maxWidth: 900,
-    );
+    XFile? image;
+    try {
+      image = await _picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 900,
+      );
+    } catch (e) {
+      _showSnack("Bild wählen fehlgeschlagen: $e");
+      return;
+    }
 
     if (image == null) return;
 
@@ -161,14 +200,22 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       return;
     }
 
+    // ✅ FIX: sicherstellen, dass wir in Firebase auth sind (Storage Rules)
+    final fbUser = await _ensureFirebaseUser(context);
+    if (fbUser == null) return;
+
+    if (!mounted) return;
     setState(() => _busyAvatar = true);
 
     final file = File(image.path);
 
     try {
-      // Upload nach Firebase Storage
-      final ref =
-      FirebaseStorage.instance.ref().child('avatars/$_docId.jpg');
+      // Cache-busting: immer neuer Dateiname (sonst zeigt das Handy manchmal alte Bilder)
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child('avatars')
+          .child('$_docId-$ts.jpg');
 
       await ref.putFile(
         file,
@@ -177,6 +224,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
       final url = await ref.getDownloadURL();
 
+      if (!mounted) return;
       setState(() => _avatar = url);
 
       // Firestore + Prefs speichern (URL)
@@ -186,6 +234,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       await prefs.setString('avatar', url);
 
       _showSnack("Profilbild aktualisiert.");
+    } on FirebaseException catch (e) {
+      _showSnack("Upload fehlgeschlagen: ${e.code}");
     } catch (e) {
       _showSnack("Upload fehlgeschlagen: $e");
     } finally {
@@ -264,6 +314,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
 
     if (newUsername == _username) {
+      if (!mounted) return;
       setState(() => _editingUsername = false);
       return;
     }
@@ -295,6 +346,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     await prefs.setString('username', newUsername);
     await prefs.setString('currentUsername', newUsername);
 
+    if (!mounted) return;
     setState(() {
       _username = newUsername;
       _editingUsername = false;
@@ -317,10 +369,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       return;
     }
 
-    final snap = await FirebaseFirestore.instance
-        .collection("users")
-        .doc(_docId)
-        .get();
+    final snap =
+    await FirebaseFirestore.instance.collection("users").doc(_docId).get();
 
     final data = snap.data();
     final pwInDb = (data?['password'] ?? '').toString();
@@ -332,6 +382,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
     await _updateFirestoreField("password", newPass);
 
+    if (!mounted) return;
     setState(() {
       _editingPassword = false;
       _currentPasswordController.clear();
@@ -426,8 +477,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Abbrechen",
-                style: TextStyle(color: _textSecondary)),
+            child:
+            const Text("Abbrechen", style: TextStyle(color: _textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
@@ -443,7 +494,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     if (confirm2 == true && _docId.isNotEmpty) {
       // Optional: Avatar in Storage löschen (kein Muss)
       try {
-        await FirebaseStorage.instance.ref().child('avatars/$_docId.jpg').delete();
+        // ⚠️ wir haben jetzt timestamped Dateien – du kannst alternativ im users-doc die URL speichern
+        // und daraus den Path ableiten. Hier lassen wir es bewusst weg.
       } catch (_) {}
 
       await FirebaseFirestore.instance.collection("users").doc(_docId).delete();
@@ -535,8 +587,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                           height: 14,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor:
-                            AlwaysStoppedAnimation<Color>(Colors.white),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white),
                           ),
                         )
                             : const Icon(
@@ -661,8 +713,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                   width: double.infinity,
                   child: OutlinedButton.icon(
                     onPressed: _deleteAccount,
-                    icon:
-                    const Icon(Icons.delete_forever, color: _accent),
+                    icon: const Icon(Icons.delete_forever, color: _accent),
                     label: const Text(
                       "Account löschen",
                       style: TextStyle(color: _accent),

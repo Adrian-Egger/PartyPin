@@ -569,7 +569,7 @@ class PremiumScreen extends StatefulWidget {
 }
 
 class _PremiumScreenState extends State<PremiumScreen> {
-  String _selectedPlan = 'monthly'; // 'monthly' oder 'yearly'
+  PayPalPlan _selectedPlan = PayPalPlan.monthly; // ✅ Enum statt String
   bool _isLoading = false;
   String? _currentUsername;
 
@@ -586,14 +586,13 @@ class _PremiumScreenState extends State<PremiumScreen> {
     });
   }
 
-  String _planTitle(String plan) => plan == 'monthly' ? 'Monatlich' : 'Jährlich';
+  String _planTitle(PayPalPlan plan) =>
+      plan == PayPalPlan.monthly ? 'Monatlich' : 'Jährlich';
 
-  String _planPriceText(String plan) =>
-      plan == 'monthly' ? '1,49 € / Monat' : '14,99 € / Jahr';
+  String _planPriceText(PayPalPlan plan) =>
+      plan == PayPalPlan.monthly ? '1,49 € / Monat' : '14,99 € / Jahr';
 
-  String _payButtonLabel(String plan) => plan == 'monthly'
-      ? 'Mit PayPal zahlen'
-      : 'Mit PayPal zahlen';
+  String _payButtonLabel(PayPalPlan plan) => 'Mit PayPal zahlen';
 
   String _savingsText() {
     // 12 * 1,49 = 17,88 ; 17,88 - 14,99 = 2,89 Ersparnis
@@ -621,7 +620,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     try {
       final uri = PayPalCheckout.buildCheckoutUri(
         username: u,
-        plan: _selectedPlan, // monthly/yearly
+        plan: _selectedPlan, // ✅ Enum (monthly/yearly)
       );
 
       final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -659,7 +658,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     const panel = Color(0xFF141A22);
     const accentRed = Color(0xFFFF3B30);
 
-    final yearlySelected = _selectedPlan == 'yearly';
+    final yearlySelected = _selectedPlan == PayPalPlan.yearly;
 
     return Scaffold(
       backgroundColor: bg,
@@ -668,13 +667,12 @@ class _PremiumScreenState extends State<PremiumScreen> {
         elevation: 0,
         centerTitle: true,
 
-        // ✅ kleiner roter Zurückpfeil
+        // ✅ kleiner Zurückpfeil
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Colors.white),
           onPressed: () => Navigator.pop(context),
           tooltip: 'Zurück',
         ),
-
 
         title: const Text(
           'Premium ⭐',
@@ -693,7 +691,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ✅ Header-Karte kundenfreundlicher
+            // ✅ Header-Karte kundenfreundlicher (wie bei dir)
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -741,28 +739,28 @@ class _PremiumScreenState extends State<PremiumScreen> {
             ),
             const SizedBox(height: 10),
 
-            // ✅ Plans
+            // ✅ Plans (wie bei dir)
             _planCard(
               title: 'Monatlich',
               subtitle: 'Flexibel kündbar – ideal zum Testen.',
-              price: _planPriceText('monthly'),
-              selected: _selectedPlan == 'monthly',
+              price: _planPriceText(PayPalPlan.monthly),
+              selected: _selectedPlan == PayPalPlan.monthly,
               highlight: null,
-              onTap: () => setState(() => _selectedPlan = 'monthly'),
+              onTap: () => setState(() => _selectedPlan = PayPalPlan.monthly),
             ),
             const SizedBox(height: 10),
             _planCard(
               title: 'Jährlich',
               subtitle: 'Bestes Angebot – weniger Aufwand.',
-              price: _planPriceText('yearly'),
+              price: _planPriceText(PayPalPlan.yearly),
               selected: yearlySelected,
               highlight: _savingsText(),
-              onTap: () => setState(() => _selectedPlan = 'yearly'),
+              onTap: () => setState(() => _selectedPlan = PayPalPlan.yearly),
             ),
 
             const SizedBox(height: 18),
 
-            // ✅ klarerer Checkout-Button (kurzer Text + Preis separat)
+            // ✅ klarerer Checkout-Button (wie bei dir)
             ElevatedButton(
               onPressed: _isLoading ? null : _openSubscriptionCheckout,
               style: ElevatedButton.styleFrom(
@@ -800,6 +798,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
             const SizedBox(height: 10),
 
+            // ✅ Hinweis-Box (wie bei dir)
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -845,6 +844,10 @@ class _PremiumScreenState extends State<PremiumScreen> {
     required VoidCallback onTap,
     String? highlight,
   }) {
+    // ✅ Wenn du NICHT willst, dass "selected" rot ist:
+    // ersetze unten accentRed durch Colors.amber (oder was du willst).
+    const accentRed = Color(0xFFFF3B30);
+
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(18),
@@ -854,7 +857,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
           color: selected ? const Color(0xFF1E2230) : const Color(0xFF141824),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: selected ? Colors.amber : Colors.white12,
+            color: selected ? accentRed : Colors.white12,
             width: selected ? 1.4 : 1.0,
           ),
         ),
@@ -862,7 +865,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
           children: [
             Icon(
               selected ? Icons.check_circle : Icons.circle_outlined,
-              color: selected ? Colors.amber : Colors.white38,
+              color: selected ? accentRed : Colors.white38,
               size: 20,
             ),
             const SizedBox(width: 12),
@@ -885,14 +888,14 @@ class _PremiumScreenState extends State<PremiumScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
-                            color: Colors.amber.withOpacity(0.12),
+                            color: accentRed.withOpacity(0.12),
                             borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: Colors.amber),
+                            border: Border.all(color: accentRed),
                           ),
                           child: Text(
                             highlight,
                             style: const TextStyle(
-                              color: Colors.amber,
+                              color: accentRed,
                               fontSize: 10,
                               fontWeight: FontWeight.w800,
                             ),
@@ -929,4 +932,3 @@ class _PremiumScreenState extends State<PremiumScreen> {
     );
   }
 }
-

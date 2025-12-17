@@ -1,11 +1,11 @@
-// ===================
-// bar_bottom_sheet.dart
-// ===================
+// lib/Widgets/bar_bottom_sheet.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../Services/app_draggable_sheet.dart';
+import '../Screens/bar_event_screen.dart';
 
 /// ✅ Stabiler Event-Key (verhindert doppelte Keys durch UTC/Local/String/Timestamp Mix)
 String computeEventKey(dynamic rawDate) {
@@ -36,6 +36,10 @@ class BarBottomSheet extends StatefulWidget {
 class _BarBottomSheetState extends State<BarBottomSheet> {
   bool _showEventView = true;
 
+  // ✅ Owner-Fallback (wenn dein Setup: barName == Account-Name aus Login)
+  // -> Wir laden currentUsername einmal und vergleichen damit.
+  String _currentUsernameLower = '';
+
   static const List<Map<String, String>> _days = [
     {'key': 'mon', 'short': 'Mo'},
     {'key': 'tue', 'short': 'Di'},
@@ -47,256 +51,652 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
   ];
 
   @override
-  Widget build(BuildContext context) {
-    final barData = widget.barData;
+  void initState() {
+    super.initState();
+    _loadCurrentUsername();
+  }
 
-    // ---------- BAR-DATEN ----------
-    final barName = (barData['barName'] ?? 'Bar').toString();
-    final address = (barData['address'] ?? '').toString();
-    final city = (barData['city'] ?? '').toString();
-    final country = (barData['country'] ?? '').toString();
-    final description = (barData['description'] ?? '').toString();
-    final profileImageUrl = (barData['profileImageUrl'] ?? '').toString().trim();
+  Future<void> _loadCurrentUsername() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final u = (prefs.getString('currentUsername') ?? '').trim().toLowerCase();
+      if (mounted) setState(() => _currentUsernameLower = u);
+    } catch (_) {
+      // ignore
+    }
+  }
 
-    final fullAddress = [
-      address,
-      [city, country].where((e) => e.trim().isNotEmpty).join(', ')
-    ].where((e) => e.trim().isNotEmpty).join(' · ');
+  /// ✅ Besitzer-Check
+  /// 1) primär über UID-Felder
+  /// 2) Fallback: barName == currentUsername (SharedPreferences)
+  bool _isOwner(Map<String, dynamic> barData) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return false;
 
-    final double? ratingAvg =
-    barData['ratingAvg'] != null ? (barData['ratingAvg'] as num).toDouble() : null;
-    final int ratingCount =
-    barData['ratingCount'] != null ? (barData['ratingCount'] as num).toInt() : 0;
+    final ownerUid = (barData['ownerUid'] ??
+        barData['ownerId'] ??
+        barData['createdBy'] ??
+        barData['userId'] ??
+        '')
+        .toString()
+        .trim();
 
-    final Map<String, dynamic>? openingHoursRaw = barData['openingHours'] is Map<String, dynamic>
-        ? Map<String, dynamic>.from(barData['openingHours'])
-        : null;
+    if (ownerUid.isNotEmpty && ownerUid == uid) return true;
 
-    final List<Map<String, dynamic>> barHighlights = _safeHighlights(barData['barHighlights']);
-
-    // ---------- EVENT-DATEN ----------
-    final bool eventActive = barData['eventActive'] == true;
-
-    DateTime? eventDateTime;
-    final rawDate = barData['eventDate']; // ✅ rawDate behalten!
-    if (rawDate is Timestamp) {
-      eventDateTime = rawDate.toDate();
-    } else if (rawDate is String) {
-      eventDateTime = DateTime.tryParse(rawDate);
+    final barName = (barData['barName'] ?? '').toString().trim().toLowerCase();
+    if (barName.isNotEmpty && _currentUsernameLower.isNotEmpty && barName == _currentUsernameLower) {
+      return true;
     }
 
-    final String eventTitle = (barData['eventTitle'] ?? '').toString().trim();
-    final String eventTagline = (barData['eventTagline'] ?? '').toString().trim();
-    final String eventDesc = (barData['eventDescription'] ?? '').toString().trim();
+    return false;
+  }
 
-    final bool entryEnabled = barData['eventEntryEnabled'] != false;
-    final bool ageEnabled = barData['eventAgeEnabled'] != false;
-    final bool musicEnabled = barData['eventMusicEnabled'] != false;
-    final bool dresscodeEnabled = barData['eventDresscodeEnabled'] != false;
+  // --------------------------------------------------------------------------
+  // WICHTIGER FIX: KEINE Composite-Index-Queries mehr
+  // --------------------------------------------------------------------------
 
-    final String entryRaw = (barData['eventEntry'] ?? '').toString().trim();
-    final String ageRaw = (barData['eventAge'] ?? '').toString().trim();
-    final String musicRaw = (barData['eventMusic'] ?? '').toString().trim();
-    final String dresscodeRaw = (barData['eventDresscode'] ?? '').toString().trim();
+  /// ✅ Sichtbares Event: Kandidaten nach visibleFrom (desc) holen, lokal filtern.
+  Query<Map<String, dynamic>> _visibleEventCandidatesQuery(String barId) {
+    final nowTs = Timestamp.fromDate(DateTime.now());
+    return FirebaseFirestore.instance
+        .collection('bars')
+        .doc(barId)
+        .collection('events')
+        .where('visibleFrom', isLessThanOrEqualTo: nowTs)
+        .orderBy('visibleFrom', descending: true)
+        .limit(25);
+  }
 
-    final String entryText =
-    entryEnabled ? (entryRaw.isEmpty ? 'Details folgen' : entryRaw) : 'Kein Eintritt';
-    final String ageText =
-    ageEnabled ? (ageRaw.isEmpty ? 'Standard (z. B. 18+)' : ageRaw) : 'Kein Mindestalter';
-    final String musicText = musicEnabled
-        ? (musicRaw.isEmpty ? 'Musik wird noch bekannt gegeben' : musicRaw)
-        : 'Keine Musikangabe';
-    final String dresscodeText =
-    dresscodeEnabled ? (dresscodeRaw.isEmpty ? 'Kein Dresscode vorgegeben' : dresscodeRaw) : 'Kein Dresscode';
+  /// ✅ Upcoming Liste: nach startAt sortiert holen, lokal filtern.
+  Query<Map<String, dynamic>> _upcomingCandidatesQuery(String barId) {
+    return FirebaseFirestore.instance
+        .collection('bars')
+        .doc(barId)
+        .collection('events')
+        .orderBy('startAt', descending: false)
+        .limit(50);
+  }
 
-    final List<Map<String, dynamic>> sections = _safeSections(barData['eventSections']);
+  DateTime? _readDate(dynamic v) {
+    if (v is Timestamp) return v.toDate();
+    if (v is String) return DateTime.tryParse(v);
+    if (v is DateTime) return v;
+    return null;
+  }
 
-    // ---------- Event-Status ----------
+  bool _isActive(Map<String, dynamic> e) => e['active'] == true;
+
+  bool _isNotOver(Map<String, dynamic> e) {
+    final cleanupAt = _readDate(e['cleanupAt']);
+    if (cleanupAt == null) return true; // wenn fehlt: lieber anzeigen als verstecken
+    return DateTime.now().isBefore(cleanupAt);
+  }
+
+  bool _isVisibleNow(Map<String, dynamic> e) {
+    final vf = _readDate(e['visibleFrom']);
+    if (vf == null) return true; // wenn fehlt: lieber anzeigen als verstecken
     final now = DateTime.now();
-    bool hasEvent = eventActive && eventDateTime != null;
-    bool showEventCard = false; // 7 Tage davor bis 12h nach Start
-    bool eventRunning12hWindow = false; // Start bis +12h
+    return now.isAfter(vf) || now.isAtSameMomentAs(vf);
+  }
 
-    if (hasEvent) {
-      final startRaw = eventDateTime!;
-      final start = startRaw.subtract(const Duration(hours: 1));
+  /// ✅ Mapping: Event-Dokument (neues Schema) -> Legacy Keys (damit bestehende UI/EventBottomSheet passt)
+  Map<String, dynamic> _applyEventMappingToBarData({
+    required Map<String, dynamic> baseBarData,
+    required String eventId,
+    required Map<String, dynamic> e,
+  }) {
+    final merged = Map<String, dynamic>.from(baseBarData);
 
-      // ✅ 7 Tage vorher (statt 2)
-      final sevenDaysBefore = start.subtract(const Duration(days: 7));
-      final twelveAfter = start.add(const Duration(hours: 12));
+    merged['eventId'] = eventId;
 
-      if (now.isAfter(sevenDaysBefore) && now.isBefore(twelveAfter)) {
-        showEventCard = true;
-      }
-      if (now.isAfter(start) && now.isBefore(twelveAfter)) {
-        eventRunning12hWindow = true;
-      }
-    }
+    // Legacy Keys
+    merged['eventActive'] = true;
+    merged['eventDate'] = e['startAt']; // Timestamp
+    merged['eventVisibleFrom'] = e['visibleFrom']; // Timestamp
+    merged['eventCleanupAt'] = e['cleanupAt']; // Timestamp
 
-    // ---------- AVATAR ----------
-    Widget avatar;
-    if (profileImageUrl.isNotEmpty) {
-      avatar = CircleAvatar(
-        radius: 48,
-        backgroundColor: const Color(0xFF1C1F26),
-        backgroundImage: NetworkImage(profileImageUrl),
-      );
-    } else {
-      avatar = Container(
-        width: 96,
-        height: 96,
-        decoration: const BoxDecoration(
-          shape: BoxShape.circle,
-          color: Color(0xFF1C1F26),
+    merged['eventTitle'] = (e['title'] ?? '').toString();
+    merged['eventTagline'] = (e['tagline'] ?? '').toString();
+    merged['eventDescription'] = (e['desc'] ?? '').toString();
+
+    merged['eventSections'] = e['sections'];
+
+    merged['eventEntry'] = (e['entry'] ?? '').toString();
+    merged['eventEntryEnabled'] = e['entryEnabled'];
+
+    merged['eventAge'] = (e['age'] ?? '').toString();
+    merged['eventAgeEnabled'] = e['ageEnabled'];
+
+    merged['eventMusic'] = (e['music'] ?? '').toString();
+    merged['eventMusicEnabled'] = e['musicEnabled'];
+
+    merged['eventDresscode'] = (e['dresscode'] ?? '').toString();
+    merged['eventDresscodeEnabled'] = e['dresscodeEnabled'];
+
+    return merged;
+  }
+
+  Future<void> _openEditEvent(String eventId) async {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BarEventScreen(
+          barId: widget.barId,
+          eventId: eventId,
         ),
-        child: const Icon(Icons.local_bar, color: Colors.white70, size: 40),
+      ),
+    );
+  }
+
+  Future<bool> _confirmDeleteOnce({
+    required String title,
+    required String message,
+    required String confirmText,
+  }) async {
+    final res = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF0E1117),
+          title: Text(title, style: const TextStyle(color: Colors.white)),
+          content: Text(message, style: const TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Abbrechen', style: TextStyle(color: Colors.white70)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(confirmText),
+            ),
+          ],
+        );
+      },
+    );
+    return res == true;
+  }
+
+  Future<void> _deleteEventWithDoubleConfirm({
+    required String eventId,
+    required String title,
+  }) async {
+    final ok1 = await _confirmDeleteOnce(
+      title: 'Event löschen?',
+      message: 'Möchtest du "$title" wirklich löschen?',
+      confirmText: 'Löschen',
+    );
+    if (!ok1) return;
+
+    final ok2 = await _confirmDeleteOnce(
+      title: 'Wirklich endgültig löschen?',
+      message: 'Das kann nicht rückgängig gemacht werden.',
+      confirmText: 'Endgültig löschen',
+    );
+    if (!ok2) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('bars')
+          .doc(widget.barId)
+          .collection('events')
+          .doc(eventId)
+          .delete();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Event gelöscht.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Fehler beim Löschen des Events.')),
       );
     }
+  }
 
-    final bool showAnyEventUi = hasEvent && showEventCard && eventDateTime != null;
+  @override
+  Widget build(BuildContext context) {
+    // 1) Stream für Kandidaten (sichtbares Event)
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _visibleEventCandidatesQuery(widget.barId).snapshots(),
+      builder: (context, visibleSnap) {
+        final Map<String, dynamic> mergedBarData = Map<String, dynamic>.from(widget.barData);
 
-    return AppDraggableSheet(
-      initialChildSize: 0.75,
-      minChildSize: 0.25,
-      maxChildSize: 0.98,
-      snapSizes: const [0.75, 0.98],
-      panelColor: const Color(0xCC090B10),
-      borderColor: const Color(0x22FFFFFF),
-      autoFit: true,
-      childBuilder: (context, scrollController) {
-        return SafeArea(
-          top: false,
-          child: ListView(
-            controller: scrollController,
-            padding: EdgeInsets.fromLTRB(
-              16,
-              8,
-              16,
-              MediaQuery.of(context).viewInsets.bottom + 16,
+        // Wenn Firestore-Query wirklich hart scheitert, zeigen wir trotzdem das Sheet ohne Event
+        if (visibleSnap.hasError) {
+          mergedBarData['eventActive'] = false;
+          mergedBarData.remove('eventId');
+          return _buildWithUpcomingStream(context, mergedBarData, visibleError: visibleSnap.error);
+        }
+
+        if (visibleSnap.hasData && (visibleSnap.data?.docs.isNotEmpty ?? false)) {
+          // Kandidaten: aktiv + sichtbar + nicht vorbei
+          final candidates = visibleSnap.data!.docs.where((d) {
+            final e = d.data();
+            return _isActive(e) && _isVisibleNow(e) && _isNotOver(e);
+          }).toList();
+
+          if (candidates.isNotEmpty) {
+            final doc = candidates.first;
+            final e = doc.data();
+
+            final mapped = _applyEventMappingToBarData(
+              baseBarData: mergedBarData,
+              eventId: doc.id,
+              e: e,
+            );
+
+            mapped['eventActive'] = true;
+            return _buildWithUpcomingStream(context, mapped);
+          }
+        }
+
+        // Kein sichtbares Event
+        mergedBarData['eventActive'] = false;
+        mergedBarData.remove('eventId');
+        return _buildWithUpcomingStream(context, mergedBarData);
+      },
+    );
+  }
+
+  /// 2) Stream für kommende Events Liste (Bar-Infos)
+  Widget _buildWithUpcomingStream(
+      BuildContext context,
+      Map<String, dynamic> barDataForUi, {
+        Object? visibleError,
+      }) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _upcomingCandidatesQuery(widget.barId).snapshots(),
+      builder: (context, upcomingSnap) {
+        final upcomingDocs = (upcomingSnap.data?.docs ?? []);
+
+        // ---------- BAR-DATEN ----------
+        final barName = (barDataForUi['barName'] ?? 'Bar').toString();
+        final address = (barDataForUi['address'] ?? '').toString();
+        final city = (barDataForUi['city'] ?? '').toString();
+        final country = (barDataForUi['country'] ?? '').toString();
+        final description = (barDataForUi['description'] ?? '').toString();
+        final profileImageUrl = (barDataForUi['profileImageUrl'] ?? '').toString().trim();
+
+        final fullAddress = [
+          address,
+          [city, country].where((e) => e.trim().isNotEmpty).join(', ')
+        ].where((e) => e.trim().isNotEmpty).join(' · ');
+
+        final double? ratingAvg =
+        barDataForUi['ratingAvg'] != null ? (barDataForUi['ratingAvg'] as num).toDouble() : null;
+        final int ratingCount =
+        barDataForUi['ratingCount'] != null ? (barDataForUi['ratingCount'] as num).toInt() : 0;
+
+        final Map<String, dynamic>? openingHoursRaw = barDataForUi['openingHours'] is Map<String, dynamic>
+            ? Map<String, dynamic>.from(barDataForUi['openingHours'])
+            : null;
+
+        final List<Map<String, dynamic>> barHighlights = _safeHighlights(barDataForUi['barHighlights']);
+
+        // ---------- EVENT-DATEN (sichtbares Event für Event-Tab) ----------
+        final bool eventActive = barDataForUi['eventActive'] == true;
+
+        DateTime? eventDateTime;
+        final rawDate = barDataForUi['eventDate'];
+        if (rawDate is Timestamp) {
+          eventDateTime = rawDate.toDate();
+        } else if (rawDate is String) {
+          eventDateTime = DateTime.tryParse(rawDate);
+        }
+
+        final String eventTitle = (barDataForUi['eventTitle'] ?? '').toString().trim();
+        final String eventTagline = (barDataForUi['eventTagline'] ?? '').toString().trim();
+        final String eventDesc = (barDataForUi['eventDescription'] ?? '').toString().trim();
+
+        final bool entryEnabled = barDataForUi['eventEntryEnabled'] != false;
+        final bool ageEnabled = barDataForUi['eventAgeEnabled'] != false;
+        final bool musicEnabled = barDataForUi['eventMusicEnabled'] != false;
+        final bool dresscodeEnabled = barDataForUi['eventDresscodeEnabled'] != false;
+
+        final String entryRaw = (barDataForUi['eventEntry'] ?? '').toString().trim();
+        final String ageRaw = (barDataForUi['eventAge'] ?? '').toString().trim();
+        final String musicRaw = (barDataForUi['eventMusic'] ?? '').toString().trim();
+        final String dresscodeRaw = (barDataForUi['eventDresscode'] ?? '').toString().trim();
+
+        final String entryText = entryEnabled ? (entryRaw.isEmpty ? 'Details folgen' : entryRaw) : 'Kein Eintritt';
+        final String ageText = ageEnabled ? (ageRaw.isEmpty ? 'Standard (z. B. 18+)' : ageRaw) : 'Kein Mindestalter';
+        final String musicText =
+        musicEnabled ? (musicRaw.isEmpty ? 'Musik wird noch bekannt gegeben' : musicRaw) : 'Keine Musikangabe';
+        final String dresscodeText =
+        dresscodeEnabled ? (dresscodeRaw.isEmpty ? 'Kein Dresscode vorgegeben' : dresscodeRaw) : 'Kein Dresscode';
+
+        final List<Map<String, dynamic>> sections = _safeSections(barDataForUi['eventSections']);
+
+        // Sichtbarkeit/cleanup fürs sichtbare Event
+        DateTime? eventVisibleFrom;
+        final rawVisibleFrom = barDataForUi['eventVisibleFrom'];
+        if (rawVisibleFrom is Timestamp) {
+          eventVisibleFrom = rawVisibleFrom.toDate();
+        } else if (rawVisibleFrom is String) {
+          eventVisibleFrom = DateTime.tryParse(rawVisibleFrom);
+        }
+
+        DateTime? eventCleanupAt;
+        final rawCleanupAt = barDataForUi['eventCleanupAt'];
+        if (rawCleanupAt is Timestamp) {
+          eventCleanupAt = rawCleanupAt.toDate();
+        } else if (rawCleanupAt is String) {
+          eventCleanupAt = DateTime.tryParse(rawCleanupAt);
+        }
+
+        // ---------- Event-Status (sichtbares Event) ----------
+        final now = DateTime.now();
+        bool hasEvent = eventActive && eventDateTime != null;
+
+        bool showEventCard = false; // sichtbar bis cleanupAt
+        bool eventRunning12hWindow = false; // Start-1h bis cleanupAt
+        bool showOnlyEventDateHint = false; // Vor Sichtbarkeit: nur Datum-Hinweis
+
+        DateTime? start; // eventDate - 1h
+
+        if (hasEvent) {
+          final startAt = eventDateTime!;
+          start = startAt.subtract(const Duration(hours: 1));
+
+          final visibleFrom = eventVisibleFrom ?? start.subtract(const Duration(days: 7));
+          final cleanupAt = eventCleanupAt ?? start.add(const Duration(hours: 12));
+
+          if (now.isAfter(cleanupAt)) {
+            showEventCard = false;
+            showOnlyEventDateHint = false;
+            hasEvent = false;
+          } else {
+            if ((now.isAfter(visibleFrom) || now.isAtSameMomentAs(visibleFrom)) && now.isBefore(cleanupAt)) {
+              showEventCard = true;
+            }
+
+            if ((now.isAfter(start) || now.isAtSameMomentAs(start)) && now.isBefore(cleanupAt)) {
+              eventRunning12hWindow = true;
+            }
+
+            if (!showEventCard && now.isBefore(visibleFrom)) {
+              showOnlyEventDateHint = true;
+            }
+          }
+        }
+
+        // ---------- AVATAR ----------
+        Widget avatar;
+        if (profileImageUrl.isNotEmpty) {
+          avatar = CircleAvatar(
+            radius: 48,
+            backgroundColor: const Color(0xFF1C1F26),
+            backgroundImage: NetworkImage(profileImageUrl),
+          );
+        } else {
+          avatar = Container(
+            width: 96,
+            height: 96,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFF1C1F26),
             ),
-            children: [
-              const SizedBox(height: 8),
+            child: const Icon(Icons.local_bar, color: Colors.white70, size: 40),
+          );
+        }
 
-              Center(child: avatar),
-              const SizedBox(height: 14),
+        final bool showAnyEventUi = hasEvent && showEventCard && eventDateTime != null;
 
-              Text(
-                barName,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
+        // Datum-Hinweis Text (für "davor nur Datum")
+        String? eventDateHintText;
+        if (hasEvent && eventDateTime != null) {
+          final dateStr =
+              '${eventDateTime.day.toString().padLeft(2, '0')}.${eventDateTime.month.toString().padLeft(2, '0')}.${eventDateTime.year}';
+          final timeStr =
+              '${eventDateTime.hour.toString().padLeft(2, '0')}:${eventDateTime.minute.toString().padLeft(2, '0')}';
+          eventDateHintText = 'Nächstes Event: $dateStr · $timeStr';
+        }
+
+        final bool isOwner = _isOwner(barDataForUi);
+
+        // ---------- UPCOMING LIST MODEL (für Bar-Infos) ----------
+        // Filter: active == true, cleanupAt > now (oder fehlt), startAt vorhanden, title nicht leer
+        final List<_UpcomingEventItem> upcomingItems = upcomingDocs.map((d) {
+          final data = d.data();
+
+          final startAt = _readDate(data['startAt']);
+          final title = (data['title'] ?? '').toString().trim();
+
+          return _UpcomingEventItem(
+            eventId: d.id,
+            startAt: startAt,
+            title: title,
+            active: data['active'] == true,
+            cleanupAt: _readDate(data['cleanupAt']),
+          );
+        }).where((e) {
+          if (!e.active) return false;
+          if (e.startAt == null) return false;
+          if (e.title.trim().isEmpty) return false;
+          if (e.cleanupAt != null && !DateTime.now().isBefore(e.cleanupAt!)) return false;
+          return true;
+        }).toList();
+
+        // Wenn Upcoming Query error hat: trotzdem anzeigen, aber ohne Liste
+        final upcomingHasError = upcomingSnap.hasError;
+
+        return AppDraggableSheet(
+          initialChildSize: 0.75,
+          minChildSize: 0.25,
+          maxChildSize: 0.98,
+          snapSizes: const [0.75, 0.98],
+          panelColor: const Color(0xCC090B10),
+          borderColor: const Color(0x22FFFFFF),
+          autoFit: true,
+          childBuilder: (context, scrollController) {
+            return SafeArea(
+              top: false,
+              child: ListView(
+                controller: scrollController,
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  8,
+                  16,
+                  MediaQuery.of(context).viewInsets.bottom + 16,
                 ),
-              ),
+                children: [
+                  const SizedBox(height: 8),
 
-              if (ratingAvg != null && ratingCount > 0) ...[
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.star, color: Colors.amber, size: 18),
-                    const SizedBox(width: 4),
-                    Text(
-                      ratingAvg.toStringAsFixed(1),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                      ),
+                  Center(child: avatar),
+                  const SizedBox(height: 14),
+
+                  Text(
+                    barName,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '($ratingCount)',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
-                      ),
+                  ),
+
+                  if (ratingAvg != null && ratingCount > 0) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.star, color: Colors.amber, size: 18),
+                        const SizedBox(width: 4),
+                        Text(
+                          ratingAvg.toStringAsFixed(1),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '($ratingCount)',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
-                ),
-              ],
 
-              const SizedBox(height: 8),
+                  const SizedBox(height: 8),
 
-              if (fullAddress.isNotEmpty)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.location_on, color: Colors.redAccent, size: 18),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        fullAddress,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Color(0xFFB6BDC8),
-                          fontSize: 14,
+                  if (fullAddress.isNotEmpty)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.location_on, color: Colors.redAccent, size: 18),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            fullAddress,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Color(0xFFB6BDC8),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                  const SizedBox(height: 10),
+
+                  // Optional: kleine Info, falls sichtbares Event Stream error hatte
+                  if (visibleError != null)
+                    Container(
+                      margin: const EdgeInsets.only(top: 10, bottom: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF141A22),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: const Text(
+                        'Event-Laden fehlgeschlagen. Bar-Infos werden trotzdem angezeigt.',
+                        style: TextStyle(color: Colors.white60, fontSize: 12),
+                      ),
+                    ),
+
+                  // ✅ VOR Sichtbarkeit: Datum-Hinweis (Owner klickt -> Edit)
+                  if (showOnlyEventDateHint && eventDateHintText != null) ...[
+                    InkWell(
+                      onTap: isOwner
+                          ? () {
+                        final String? eventId =
+                        (barDataForUi['eventId'] ?? '').toString().trim().isEmpty
+                            ? null
+                            : (barDataForUi['eventId'] ?? '').toString().trim();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => BarEventScreen(
+                              barId: widget.barId,
+                              eventId: eventId,
+                            ),
+                          ),
+                        );
+                      }
+                          : null,
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF141A22),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white12),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.event, color: Colors.white70, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                eventDateHintText,
+                                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                              ),
+                            ),
+                            if (isOwner) const Icon(Icons.edit, color: Colors.white38, size: 18),
+                          ],
                         ),
                       ),
                     ),
+                    const SizedBox(height: 18),
+                  ] else ...[
+                    const SizedBox(height: 18),
                   ],
-                ),
 
-              const SizedBox(height: 18),
-
-              if (showAnyEventUi) ...[
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    ChoiceChip(
-                      label: const Text('Event 🎉'),
-                      selected: _showEventView,
-                      onSelected: (_) => setState(() => _showEventView = true),
-                      selectedColor: Colors.redAccent,
-                      backgroundColor: const Color(0xFF1C1F26),
-                      labelStyle: TextStyle(
-                        color: _showEventView ? Colors.white : Colors.white70,
-                        fontWeight: FontWeight.w600,
-                      ),
+                  // ✅ Tabs nur wenn Event-Card sichtbar ist (wie vorher)
+                  if (showAnyEventUi) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Event 🎉'),
+                          selected: _showEventView,
+                          onSelected: (_) => setState(() => _showEventView = true),
+                          selectedColor: Colors.redAccent,
+                          backgroundColor: const Color(0xFF1C1F26),
+                          labelStyle: TextStyle(
+                            color: _showEventView ? Colors.white : Colors.white70,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: const Text('Bar-Infos 🍹'),
+                          selected: !_showEventView,
+                          onSelected: (_) => setState(() => _showEventView = false),
+                          selectedColor: Colors.redAccent,
+                          backgroundColor: const Color(0xFF1C1F26),
+                          labelStyle: TextStyle(
+                            color: !_showEventView ? Colors.white : Colors.white70,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    ChoiceChip(
-                      label: const Text('Bar-Infos 🍹'),
-                      selected: !_showEventView,
-                      onSelected: (_) => setState(() => _showEventView = false),
-                      selectedColor: Colors.redAccent,
-                      backgroundColor: const Color(0xFF1C1F26),
-                      labelStyle: TextStyle(
-                        color: !_showEventView ? Colors.white : Colors.white70,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    const SizedBox(height: 12),
                   ],
-                ),
-                const SizedBox(height: 12),
-              ],
 
-              if (showAnyEventUi && _showEventView)
-                _buildEventInfoCard(
-                  context: context,
-                  eventDateTime: eventDateTime!,
-                  eventRunning: eventRunning12hWindow,
-                  eventData: barData,
-                  entryText: entryText,
-                  ageText: ageText,
-                  musicText: musicText,
-                  dresscodeText: dresscodeText,
-                  sections: sections,
-                  eventTitle: eventTitle,
-                  eventTagline: eventTagline,
-                  eventDesc: eventDesc,
-                )
-              else
-                _buildBarInfoContent(
-                  description: description,
-                  openingHours: openingHoursRaw,
-                  barHighlights: barHighlights,
-                ),
+                  if (showAnyEventUi && _showEventView)
+                    _buildEventInfoCard(
+                      context: context,
+                      eventDateTime: eventDateTime!,
+                      eventRunning: eventRunning12hWindow,
+                      eventData: barDataForUi,
+                      entryText: entryText,
+                      ageText: ageText,
+                      musicText: musicText,
+                      dresscodeText: dresscodeText,
+                      sections: sections,
+                      eventTitle: eventTitle,
+                      eventTagline: eventTagline,
+                      eventDesc: eventDesc,
+                    )
+                  else
+                    _buildBarInfoContent(
+                      description: description,
+                      openingHours: openingHoursRaw,
+                      barHighlights: barHighlights,
+                      isOwner: isOwner,
+                      upcoming: upcomingHasError ? const [] : upcomingItems,
+                      showUpcomingErrorHint: upcomingHasError,
+                    ),
 
-              const SizedBox(height: 12),
-            ],
-          ),
+                  const SizedBox(height: 12),
+                ],
+              ),
+            );
+          },
         );
       },
     );
@@ -340,10 +740,15 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     );
   }
 
+  // ----------------- BAR INFOS + UPCOMING LIST -----------------
+
   Widget _buildBarInfoContent({
     required String description,
     required Map<String, dynamic>? openingHours,
     required List<Map<String, dynamic>> barHighlights,
+    required bool isOwner,
+    required List<_UpcomingEventItem> upcoming,
+    required bool showUpcomingErrorHint,
   }) {
     return Container(
       width: double.infinity,
@@ -356,6 +761,108 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (showUpcomingErrorHint)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF141A22),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: const Text(
+                'Kommende Events konnten nicht geladen werden.',
+                style: TextStyle(color: Colors.white60, fontSize: 12),
+              ),
+            ),
+
+          // ✅ UPCOMING EVENTS LIST
+          if (upcoming.isNotEmpty) ...[
+            const Text(
+              'Kommende Events',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 10),
+            ...upcoming.map((e) => _upcomingEventRow(e, isOwner)),
+
+            // ✅ Button am Ende der Liste (nur Owner)
+            if (isOwner) ...[
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.redAccent,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => BarEventScreen(
+                          barId: widget.barId,
+                          eventId: null, // neues Event
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text(
+                    'Event erstellen',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+            ],
+
+            const SizedBox(height: 16),
+          ] else ...[
+            // Wenn keine Events da sind: Owner bekommt trotzdem einen Button
+            if (isOwner) ...[
+              const Text(
+                'Kommende Events',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.redAccent,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => BarEventScreen(
+                          barId: widget.barId,
+                          eventId: null,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text(
+                    'Erstes Event erstellen',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ],
+
           Text(
             description.trim().isNotEmpty ? description : 'Keine zusätzlichen Bar-Infos hinterlegt.',
             style: const TextStyle(
@@ -389,6 +896,58 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
             ),
             const SizedBox(height: 8),
             ..._buildHighlightCards(barHighlights),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _upcomingEventRow(_UpcomingEventItem e, bool isOwner) {
+    final dt = e.startAt!;
+    final dateStr =
+        '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
+    final timeStr =
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF141A22),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.event, color: Colors.white70, size: 18),
+          const SizedBox(width: 10),
+
+          Expanded(
+            child: Text(
+              '$dateStr · $timeStr — ${e.title}',
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+
+          if (isOwner) ...[
+            IconButton(
+              tooltip: 'Bearbeiten',
+              onPressed: () => _openEditEvent(e.eventId),
+              icon: const Icon(Icons.edit, color: Colors.white70, size: 20),
+            ),
+            IconButton(
+              tooltip: 'Löschen',
+              onPressed: () => _deleteEventWithDoubleConfirm(
+                eventId: e.eventId,
+                title: e.title.isEmpty ? 'Event' : e.title,
+              ),
+              icon: const Icon(Icons.close, color: Colors.redAccent, size: 20),
+            ),
           ],
         ],
       ),
@@ -518,132 +1077,142 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     required String eventDesc,
   }) {
     final now = DateTime.now();
+
     final startRaw = eventDateTime;
     final start = startRaw.subtract(const Duration(hours: 1));
-    final twelveAfter = start.add(const Duration(hours: 12));
+
+    // cleanupAt bevorzugt (aus Firestore), sonst fallback 12h
+    DateTime? cleanupAt;
+    final rawCleanupAt = eventData['eventCleanupAt'];
+    if (rawCleanupAt is Timestamp) cleanupAt = rawCleanupAt.toDate();
+    if (rawCleanupAt is String) cleanupAt = DateTime.tryParse(rawCleanupAt);
+    cleanupAt ??= start.add(const Duration(hours: 12));
 
     String label;
     if (now.isBefore(start)) {
       final diff = start.difference(now);
       label = '⏱️ Event startet in ${_formatDuration(diff)}';
-    } else if (now.isAfter(start) && now.isBefore(twelveAfter)) {
-      final diff = twelveAfter.difference(now);
+    } else if (now.isAfter(start) && now.isBefore(cleanupAt)) {
+      final diff = cleanupAt.difference(now);
       label = '🔥 Event läuft noch ${_formatDuration(diff)}';
     } else {
       label = 'Event ist bereits vorbei.';
     }
 
     final dateStr =
-        '${eventDateTime.day.toString().padLeft(2, '0')}.'
-        '${eventDateTime.month.toString().padLeft(2, '0')}.'
-        '${eventDateTime.year}';
+        '${eventDateTime.day.toString().padLeft(2, '0')}.${eventDateTime.month.toString().padLeft(2, '0')}.${eventDateTime.year}';
     final timeStr =
-        '${eventDateTime.hour.toString().padLeft(2, '0')}:'
-        '${eventDateTime.minute.toString().padLeft(2, '0')}';
+        '${eventDateTime.hour.toString().padLeft(2, '0')}:${eventDateTime.minute.toString().padLeft(2, '0')}';
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.redAccent.withOpacity(0.45)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            eventRunning ? 'Live-Event 🔥' : 'Nächstes Event 🎉',
-            style: const TextStyle(
-              color: Colors.redAccent,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            eventTitle.isEmpty ? 'Event' : eventTitle,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              const Icon(Icons.calendar_month, color: Colors.white70, size: 18),
-              const SizedBox(width: 6),
-              Text(
-                '$dateStr · $timeStr',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+    void openEventInfos() {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withOpacity(0.35),
+        builder: (_) => EventBottomSheet(
+          eventData: eventData,
+          barId: widget.barId,
+        ),
+      );
+    }
+
+    return InkWell(
+      onTap: openEventInfos,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1C1F26),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.redAccent.withOpacity(0.45)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              eventRunning ? 'Live-Event 🔥' : 'Nächstes Event 🎉',
+              style: const TextStyle(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.w700,
               ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.35),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: Colors.redAccent),
             ),
-            child: Row(
+            const SizedBox(height: 4),
+            Text(
+              eventTitle.isEmpty ? 'Event' : eventTitle,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
               children: [
-                const Icon(Icons.timer, color: Colors.redAccent, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                const Icon(Icons.calendar_month, color: Colors.white70, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  '$dateStr · $timeStr',
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              _smallInfoChip(Icons.attach_money, entryText),
-              _smallInfoChip(Icons.cake, ageText),
-              _smallInfoChip(Icons.music_note, musicText),
-              _smallInfoChip(Icons.checkroom, dresscodeText),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerRight,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.35),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.redAccent),
               ),
-              onPressed: () {
-                showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  useSafeArea: true,
-                  backgroundColor: Colors.transparent,
-                  barrierColor: Colors.black.withOpacity(0.35),
-                  builder: (_) => EventBottomSheet(
-                    eventData: eventData,
-                    barId: widget.barId,
+              child: Row(
+                children: [
+                  const Icon(Icons.timer, color: Colors.redAccent, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
-                );
-              },
-              child: const Text(
-                'Event-Infos',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ],
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _smallInfoChip(Icons.attach_money, entryText),
+                _smallInfoChip(Icons.cake, ageText),
+                _smallInfoChip(Icons.music_note, musicText),
+                _smallInfoChip(Icons.checkroom, dresscodeText),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                ),
+                onPressed: openEventInfos,
+                child: const Text(
+                  'Event-Infos',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -663,6 +1232,22 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
   }
 }
 
+class _UpcomingEventItem {
+  final String eventId;
+  final DateTime? startAt;
+  final String title;
+  final bool active;
+  final DateTime? cleanupAt;
+
+  _UpcomingEventItem({
+    required this.eventId,
+    required this.startAt,
+    required this.title,
+    required this.active,
+    required this.cleanupAt,
+  });
+}
+
 /// BottomSheet nur für das Event
 class EventBottomSheet extends StatelessWidget {
   final Map<String, dynamic> eventData;
@@ -673,6 +1258,13 @@ class EventBottomSheet extends StatelessWidget {
     required this.eventData,
     required this.barId,
   });
+
+  DateTime? _readDate(dynamic v) {
+    if (v is Timestamp) return v.toDate();
+    if (v is String) return DateTime.tryParse(v);
+    if (v is DateTime) return v;
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -700,39 +1292,37 @@ class EventBottomSheet extends StatelessWidget {
     final String musicRaw = (eventData['eventMusic'] ?? '').toString().trim();
     final String dresscodeRaw = (eventData['eventDresscode'] ?? '').toString().trim();
 
-    final String entryText =
-    entryEnabled ? (entryRaw.isEmpty ? 'Details folgen' : entryRaw) : 'Kein Eintritt';
-    final String ageText =
-    ageEnabled ? (ageRaw.isEmpty ? 'Standard (z. B. 18+)' : ageRaw) : 'Kein Mindestalter';
-    final String musicText = musicEnabled
-        ? (musicRaw.isEmpty ? 'Musik wird noch bekannt gegeben' : musicRaw)
-        : 'Keine Musikangabe';
+    final String entryText = entryEnabled ? (entryRaw.isEmpty ? 'Details folgen' : entryRaw) : 'Kein Eintritt';
+    final String ageText = ageEnabled ? (ageRaw.isEmpty ? 'Standard (z. B. 18+)' : ageRaw) : 'Kein Mindestalter';
+    final String musicText =
+    musicEnabled ? (musicRaw.isEmpty ? 'Musik wird noch bekannt gegeben' : musicRaw) : 'Keine Musikangabe';
     final String dresscodeText =
     dresscodeEnabled ? (dresscodeRaw.isEmpty ? 'Kein Dresscode vorgegeben' : dresscodeRaw) : 'Kein Dresscode';
 
     final List<Map<String, dynamic>> sections = _safeSections(eventData['eventSections']);
 
+    // ✅ Laufzeit / Rating aus cleanupAt ableiten
     final now = DateTime.now();
     bool hasEvent = eventActive && eventDateTime != null;
+
     bool eventRunning = false;
     bool ratingAllowed = false;
 
     if (hasEvent) {
-      final startRaw = eventDateTime!;
-      final start = startRaw.subtract(const Duration(hours: 1));
+      final startAt = eventDateTime!;
+      final start = startAt.subtract(const Duration(hours: 1));
 
-      final sevenDaysBefore = start.subtract(const Duration(days: 7));
-      final twelveAfter = start.add(const Duration(hours: 12));
-      final twentyFourAfter = start.add(const Duration(hours: 24));
+      DateTime? cleanupAt = _readDate(eventData['eventCleanupAt']);
+      cleanupAt ??= start.add(const Duration(hours: 12));
 
-      if (now.isBefore(sevenDaysBefore) || now.isAfter(twentyFourAfter)) {
+      if (now.isAfter(cleanupAt)) {
         hasEvent = false;
-      }
-      if (now.isAfter(start) && now.isBefore(twentyFourAfter)) {
-        eventRunning = true;
-      }
-      if (now.isAfter(start) && now.isBefore(twelveAfter)) {
-        ratingAllowed = true;
+      } else {
+        eventRunning = (now.isAfter(start) || now.isAtSameMomentAs(start)) && now.isBefore(cleanupAt);
+
+        // rating nur im 12h-Fenster wie vorher
+        final ratingUntil = start.add(const Duration(hours: 12));
+        ratingAllowed = (now.isAfter(start) || now.isAtSameMomentAs(start)) && now.isBefore(ratingUntil);
       }
     }
 
@@ -763,7 +1353,7 @@ class EventBottomSheet extends StatelessWidget {
                   tagline: eventTagline,
                   desc: eventDesc,
                   eventDateTime: eventDateTime!,
-                  rawEventDate: rawDate, // ✅ NEU
+                  rawEventDate: rawDate,
                   eventRunning: eventRunning,
                   entryText: entryText,
                   ageText: ageText,
@@ -796,7 +1386,7 @@ class EventDetailsCard extends StatelessWidget {
   final String tagline;
   final String desc;
   final DateTime eventDateTime;
-  final dynamic rawEventDate; // ✅ NEU (Timestamp/String/...)
+  final dynamic rawEventDate;
   final bool eventRunning;
   final String entryText;
   final String ageText;
@@ -812,7 +1402,7 @@ class EventDetailsCard extends StatelessWidget {
     required this.tagline,
     required this.desc,
     required this.eventDateTime,
-    required this.rawEventDate, // ✅ NEU
+    required this.rawEventDate,
     required this.eventRunning,
     required this.entryText,
     required this.ageText,
@@ -822,18 +1412,30 @@ class EventDetailsCard extends StatelessWidget {
     required this.ratingAllowed,
   });
 
-  // ✅ Stabiler Key überall identisch
   String get _eventKey => computeEventKey(rawEventDate);
+
+  Future<User?> _ensureUser(BuildContext context) async {
+    final auth = FirebaseAuth.instance;
+
+    if (auth.currentUser != null) return auth.currentUser;
+
+    try {
+      final cred = await auth.signInAnonymously();
+      return cred.user;
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Login fehlgeschlagen. Bitte App neu starten.')),
+      );
+      return null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final dateStr =
-        '${eventDateTime.day.toString().padLeft(2, '0')}.'
-        '${eventDateTime.month.toString().padLeft(2, '0')}.'
-        '${eventDateTime.year}';
+        '${eventDateTime.day.toString().padLeft(2, '0')}.${eventDateTime.month.toString().padLeft(2, '0')}.${eventDateTime.year}';
     final timeStr =
-        '${eventDateTime.hour.toString().padLeft(2, '0')}:'
-        '${eventDateTime.minute.toString().padLeft(2, '0')}';
+        '${eventDateTime.hour.toString().padLeft(2, '0')}:${eventDateTime.minute.toString().padLeft(2, '0')}';
 
     final headline = eventRunning ? 'Event läuft gerade 🔥' : 'Nächstes Event 🎉';
 
@@ -899,7 +1501,6 @@ class EventDetailsCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-
           _infoRow('💸', Colors.greenAccent, 'Eintritt', entryText),
           const SizedBox(height: 6),
           _infoRow('🎂', Colors.pinkAccent, 'Mindestalter', ageText),
@@ -907,9 +1508,9 @@ class EventDetailsCard extends StatelessWidget {
           _infoRow('🎵', Colors.lightBlueAccent, 'Musik', musicText),
           const SizedBox(height: 6),
           _infoRow('👗', Colors.deepPurpleAccent, 'Dresscode', dresscodeText),
-
           const SizedBox(height: 16),
-
+          _EventRatingSummary(barId: barId, eventKey: _eventKey),
+          const SizedBox(height: 16),
           if (desc.isNotEmpty)
             Align(
               alignment: hasAnySectionImage ? Alignment.centerLeft : Alignment.center,
@@ -923,10 +1524,6 @@ class EventDetailsCard extends StatelessWidget {
                 ),
               ),
             ),
-
-          const SizedBox(height: 16),
-          _EventRatingSummary(barId: barId, eventKey: _eventKey),
-
           if (sections.isNotEmpty) ...[
             const SizedBox(height: 18),
             const Text(
@@ -940,7 +1537,6 @@ class EventDetailsCard extends StatelessWidget {
             const SizedBox(height: 10),
             ..._buildSections(sections),
           ],
-
           if (ratingAllowed) ...[
             const SizedBox(height: 20),
             Align(
@@ -952,10 +1548,7 @@ class EventDetailsCard extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
                 ),
-
-                // ✅ NEU: zuerst prüfen ob schon bewertet -> dann Textfeld anzeigen
                 onPressed: () async => _handleRatePressed(context),
-
                 icon: const Icon(Icons.star_rate_rounded, size: 18),
                 label: const Text(
                   'Event / Bar bewerten ⭐',
@@ -969,15 +1562,9 @@ class EventDetailsCard extends StatelessWidget {
     );
   }
 
-  // ✅ NEU: Prüfen ob User schon bewertet hat
   Future<void> _handleRatePressed(BuildContext context) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bitte logge dich ein, um zu bewerten.')),
-      );
-      return;
-    }
+    final user = await _ensureUser(context);
+    if (user == null) return;
 
     final uid = user.uid;
     final firestore = FirebaseFirestore.instance;
@@ -999,15 +1586,12 @@ class EventDetailsCard extends StatelessWidget {
         return;
       }
 
-      // noch nicht bewertet -> normales Dialog
       _openRatingDialog(context);
     } catch (_) {
-      // wenn check fehlschlägt -> trotzdem normales Dialog öffnen (besser UX)
       _openRatingDialog(context);
     }
   }
 
-  // ✅ NEU: Textfeld anzeigen "schon bewertet"
   void _showAlreadyRatedSheet({
     required BuildContext context,
     required int rating,
@@ -1060,8 +1644,6 @@ class EventDetailsCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 10),
-
-                  // Sterne anzeigen
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: List.generate(5, (i) {
@@ -1072,10 +1654,7 @@ class EventDetailsCard extends StatelessWidget {
                       );
                     }),
                   ),
-
                   const SizedBox(height: 12),
-
-                  // ✅ Textfeld (wie gewünscht)
                   TextField(
                     controller: c,
                     readOnly: true,
@@ -1094,7 +1673,6 @@ class EventDetailsCard extends StatelessWidget {
                       ),
                     ),
                   ),
-
                   if (comment.trim().isNotEmpty) ...[
                     const SizedBox(height: 10),
                     Container(
@@ -1111,7 +1689,6 @@ class EventDetailsCard extends StatelessWidget {
                       ),
                     ),
                   ],
-
                   const SizedBox(height: 14),
                   SizedBox(
                     width: double.infinity,
@@ -1138,8 +1715,6 @@ class EventDetailsCard extends StatelessWidget {
   void _openRatingDialog(BuildContext context) {
     final TextEditingController controller = TextEditingController();
     int selectedRating = 0;
-
-    // ✅ NEU: anonym Toggle
     bool isAnonymous = false;
 
     showModalBottomSheet(
@@ -1199,8 +1774,6 @@ class EventDetailsCard extends StatelessWidget {
                           );
                         }),
                       ),
-
-                      // ✅ Anonym bleiben
                       SwitchListTile(
                         value: isAnonymous,
                         onChanged: (v) => setState(() => isAnonymous = v),
@@ -1214,7 +1787,6 @@ class EventDetailsCard extends StatelessWidget {
                           style: TextStyle(color: Colors.white54, fontSize: 12),
                         ),
                       ),
-
                       const SizedBox(height: 8),
                       TextField(
                         controller: controller,
@@ -1286,14 +1858,13 @@ class EventDetailsCard extends StatelessWidget {
     );
   }
 
-  // ✅ anonymous Parameter
   Future<void> _submitRating(
       BuildContext context,
       int rating,
       String? comment,
       bool anonymous,
       ) async {
-    final user = FirebaseAuth.instance.currentUser;
+    final user = await _ensureUser(context);
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Bitte logge dich ein, um zu bewerten.')),
@@ -1302,16 +1873,18 @@ class EventDetailsCard extends StatelessWidget {
     }
 
     final uid = user.uid;
-    final userName = user.displayName?.trim().isNotEmpty == true ? user.displayName!.trim() : 'Unbekannter Nutzer';
+
+    final prefs = await SharedPreferences.getInstance();
+    final savedUsername = (prefs.getString('currentUsername') ?? '').trim();
+
+    final fallbackName = user.displayName?.trim().isNotEmpty == true ? user.displayName!.trim() : 'Unbekannter Nutzer';
+    final userName = savedUsername.isNotEmpty ? savedUsername : fallbackName;
 
     final firestore = FirebaseFirestore.instance;
     final barRef = firestore.collection('bars').doc(barId);
     final feedbackRef = barRef.collection('eventFeedback');
 
-    // ✅ EventKey IMMER stabil
     final String eventKey = _eventKey;
-
-    // ✅ pro User pro Event nur 1 Dokument
     final String docId = '${eventKey}_$uid';
 
     try {
@@ -1666,12 +2239,9 @@ class BarFeedbackStream extends StatelessWidget {
               final comment = (data['comment'] ?? '').toString().trim();
               final createdAt = data['createdAt'] as Timestamp?;
               final dateStr = createdAt != null
-                  ? '${createdAt.toDate().day.toString().padLeft(2, '0')}.'
-                  '${createdAt.toDate().month.toString().padLeft(2, '0')}.'
-                  '${createdAt.toDate().year}'
+                  ? '${createdAt.toDate().day.toString().padLeft(2, '0')}.${createdAt.toDate().month.toString().padLeft(2, '0')}.${createdAt.toDate().year}'
                   : '';
 
-              // ✅ Name anzeigen (oder anonym)
               final bool anonymous = data['anonymous'] == true;
               final String userName = anonymous
                   ? 'Anonym'

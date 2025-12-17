@@ -9,7 +9,15 @@ import 'package:image_picker/image_picker.dart';
 class BarEventScreen extends StatefulWidget {
   final String barId;
 
-  const BarEventScreen({super.key, required this.barId});
+  /// - wenn null => "Neues Event erstellen"
+  /// - wenn gesetzt => "Event bearbeiten"
+  final String? eventId;
+
+  const BarEventScreen({
+    super.key,
+    required this.barId,
+    this.eventId,
+  });
 
   @override
   State<BarEventScreen> createState() => _BarEventScreenState();
@@ -25,11 +33,16 @@ class _BarEventScreenState extends State<BarEventScreen> {
   final _ageCtrl = TextEditingController();
 
   DateTime? _selectedDate;
-  TimeOfDay? _selectedTime;      // Startzeit
-  TimeOfDay? _selectedEndTime;   // Endzeit
-  bool _openEnd = false;         // Open End aktiv?
+  TimeOfDay? _selectedTime; // Startzeit
+  TimeOfDay? _selectedEndTime; // Endzeit
+  bool _openEnd = false; // Open End aktiv?
+
+  // ab wann soll der Event-Loop sichtbar sein?
+  DateTime? _visibleFromDateTime;
+  String _visibleMode = '7d'; // '7d' | '24h' | 'custom'
 
   bool _isSaving = false;
+  bool _isLoading = true;
 
   // optionale Felder
   bool _showMusic = true;
@@ -39,10 +52,20 @@ class _BarEventScreenState extends State<BarEventScreen> {
 
   final List<_EventSection> _sections = [];
 
+  // interne ID (bei neuen Events wird die hier gesetzt)
+  String? _eventId;
+
+  CollectionReference<Map<String, dynamic>> get _eventsCol =>
+      FirebaseFirestore.instance.collection('bars').doc(widget.barId).collection('events');
+
+  DocumentReference<Map<String, dynamic>> _eventRef(String eventId) => _eventsCol.doc(eventId);
+
   @override
   void initState() {
     super.initState();
-    _loadExistingEvent();
+    _eventId = widget.eventId;
+    _resetFormState();
+    _loadIfEdit();
   }
 
   @override
@@ -74,6 +97,9 @@ class _BarEventScreenState extends State<BarEventScreen> {
     _selectedEndTime = null;
     _openEnd = false;
 
+    _visibleFromDateTime = null;
+    _visibleMode = '7d';
+
     _showMusic = true;
     _showEntry = true;
     _showDresscode = true;
@@ -91,42 +117,40 @@ class _BarEventScreenState extends State<BarEventScreen> {
     );
   }
 
+  // ----------------------------
+  // Helpers
+  // ----------------------------
+
+  List<Map<String, dynamic>> _safeSections(dynamic raw) {
+    if (raw is List) {
+      return raw.where((e) => e is Map).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+    return <Map<String, dynamic>>[];
+  }
+
   Future<void> _deleteImageFromStorage(String? url) async {
     if (url == null || url.trim().isEmpty) return;
     try {
       final ref = FirebaseStorage.instance.refFromURL(url);
       await ref.delete();
     } catch (_) {
-      // Bild existiert evtl. schon nicht mehr → ignorieren
+      // ignorieren
     }
   }
 
-  /// Hilfsfunktion: eventSections sicher in eine Liste von Maps verwandeln
-  List<Map<String, dynamic>> _safeSections(dynamic raw) {
-    if (raw is List) {
-      return raw
-          .where((e) => e is Map)
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList();
-    }
-    return <Map<String, dynamic>>[];
-  }
-
-  /// endDateTime für Auto-Cleanup berechnen (mit OpenEnd + eventEndTime)
-  DateTime _computeEventEndForCleanup({
-    required DateTime startDateTime, // eventDate (Start) aus Firestore
+  // Cleanup-Zeit berechnen (für "Event vorbei")
+  DateTime _computeCleanupAt({
+    required DateTime startAt,
     required bool openEnd,
     required String endTimeStr,
   }) {
-    // "Start" im System = eventDate - 1h (gleiche Logik wie im BottomSheet)
-    final start = startDateTime.subtract(const Duration(hours: 1));
+    // alte Logik: "Start" = startAt - 1h
+    final start = startAt.subtract(const Duration(hours: 1));
 
     if (openEnd) {
-      // Open End → Cleanup 12h ab Start
       return start.add(const Duration(hours: 12));
     }
 
-    // Keine Endzeit hinterlegt → fallback 12h
     if (!endTimeStr.contains(':')) {
       return start.add(const Duration(hours: 12));
     }
@@ -135,199 +159,160 @@ class _BarEventScreenState extends State<BarEventScreen> {
     final h = int.tryParse(parts[0]) ?? 0;
     final m = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
 
-    // Endzeit auf gleiche Datum-Basis wie Start
-    var end = DateTime(
-      startDateTime.year,
-      startDateTime.month,
-      startDateTime.day,
-      h,
-      m,
-    );
+    var end = DateTime(startAt.year, startAt.month, startAt.day, h, m);
 
-    // Falls Endzeit früher als Start (z. B. über Mitternacht), dann +1 Tag
     if (end.isBefore(start)) {
       end = end.add(const Duration(days: 1));
+    }
+
+    if (end.isBefore(start)) {
+      return start.add(const Duration(hours: 12));
     }
 
     return end;
   }
 
-  /// Wirkliches Aufräumen in Firestore + Bilder löschen
-  Future<void> _clearEventOnFirestore(
-      Map<String, dynamic> data,
-      DocumentReference<Map<String, dynamic>> barRef,
-      ) async {
-    // Bilder aus eventSections löschen
-    final sections = _safeSections(data['eventSections']);
-    for (final s in sections) {
-      final url = (s['imageUrl'] ?? '').toString().trim();
-      await _deleteImageFromStorage(url);
+  DateTime _computeDefaultVisibleFrom(DateTime startAt) {
+    switch (_visibleMode) {
+      case '24h':
+        return startAt.subtract(const Duration(hours: 24));
+      case '7d':
+      default:
+        return startAt.subtract(const Duration(days: 7));
     }
-
-    // Alle Event-Felder killen + Sections auf leeres Array
-    await barRef.update({
-      'eventActive': false,
-      'eventTitle': FieldValue.delete(),
-      'eventTagline': FieldValue.delete(),
-      'eventDescription': FieldValue.delete(),
-      'eventDate': FieldValue.delete(),
-      'eventTime': FieldValue.delete(),
-      'eventEndTime': FieldValue.delete(),
-      'eventOpenEnd': FieldValue.delete(),
-      'eventSections': <Map<String, dynamic>>[],
-      'eventUpdatedAt': FieldValue.delete(),
-      'eventEntry': FieldValue.delete(),
-      'eventEntryEnabled': FieldValue.delete(),
-      'eventAge': FieldValue.delete(),
-      'eventAgeEnabled': FieldValue.delete(),
-      'eventMusic': FieldValue.delete(),
-      'eventMusicEnabled': FieldValue.delete(),
-      'eventDresscode': FieldValue.delete(),
-      'eventDresscodeEnabled': FieldValue.delete(),
-    });
   }
 
-  Future<void> _loadExistingEvent() async {
-    final barRef =
-    FirebaseFirestore.instance.collection('bars').doc(widget.barId);
-    final snap = await barRef.get();
-    final data = snap.data();
+  // ----------------------------
+  // Loading (Edit)
+  // ----------------------------
 
-    if (!mounted) return;
+  DateTime? _readDate(dynamic v) {
+    if (v is Timestamp) return v.toDate();
+    if (v is String) return DateTime.tryParse(v);
+    return null;
+  }
 
-    // kein Bar-Dokument → Formular leer
-    if (data == null) {
-      setState(() {
-        _resetFormState();
-      });
+  Future<void> _loadIfEdit() async {
+    if (_eventId == null) {
+      setState(() => _isLoading = false);
       return;
     }
 
-    final bool eventActive = data['eventActive'] == true;
-
-    // eventDate lesen
-    DateTime? eventDateTime;
-    final rawDate = data['eventDate'];
-    if (rawDate is Timestamp) {
-      eventDateTime = rawDate.toDate();
-    } else if (rawDate is String) {
-      eventDateTime = DateTime.tryParse(rawDate);
-    }
-
-    final bool storedOpenEnd = data['eventOpenEnd'] == true;
-    final String storedEndTimeStr =
-    (data['eventEndTime'] ?? '').toString().trim();
-
-    // ------------------- AUTO-CLEANUP: Event abgelaufen? -------------------
-    bool shouldCleanup = false;
-    if (eventActive && eventDateTime != null) {
-      final endForCleanup = _computeEventEndForCleanup(
-        startDateTime: eventDateTime,
-        openEnd: storedOpenEnd,
-        endTimeStr: storedEndTimeStr,
-      );
-
-      if (DateTime.now().isAfter(endForCleanup)) {
-        shouldCleanup = true;
-      }
-    }
-
-    if (shouldCleanup) {
-      await _clearEventOnFirestore(data, barRef);
+    try {
+      final snap = await _eventRef(_eventId!).get();
+      final data = snap.data();
 
       if (!mounted) return;
+
+      if (data == null) {
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      // Soft-Cleanup: wenn vorbei -> löschen (optional, Cloud Function macht's später)
+      final startAt = _readDate(data['startAt']) ?? _readDate(data['eventDate']);
+      final bool openEnd = data['openEnd'] == true;
+      final String endTimeStr = (data['endTime'] ?? '').toString().trim();
+
+      if (startAt != null) {
+        final cleanupAt = _computeCleanupAt(
+          startAt: startAt,
+          openEnd: openEnd,
+          endTimeStr: endTimeStr,
+        );
+        if (DateTime.now().isAfter(cleanupAt)) {
+          await _deleteEventCompletely(eventId: _eventId!, existingData: data);
+          if (!mounted) return;
+          _eventId = null;
+          _resetFormState();
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Event war vorbei → wurde automatisch gelöscht.')),
+          );
+          return;
+        }
+      }
+
       setState(() {
         _resetFormState();
-      });
 
+        // Fallback: neue Keys + BottomSheet-Keys
+        _titleCtrl.text = (data['title'] ?? data['eventTitle'] ?? '').toString();
+        _taglineCtrl.text = (data['tagline'] ?? data['eventTagline'] ?? '').toString();
+        _descCtrl.text = (data['desc'] ?? data['eventDescription'] ?? '').toString();
+
+        _musicCtrl.text = (data['music'] ?? data['eventMusic'] ?? '').toString();
+        _entryCtrl.text = (data['entry'] ?? data['eventEntry'] ?? '').toString();
+        _dresscodeCtrl.text = (data['dresscode'] ?? data['eventDresscode'] ?? '').toString();
+        _ageCtrl.text = (data['age'] ?? data['eventAge'] ?? '').toString();
+
+        _showMusic = (data['musicEnabled'] is bool ? data['musicEnabled'] : data['eventMusicEnabled']) != false;
+        _showEntry = (data['entryEnabled'] is bool ? data['entryEnabled'] : data['eventEntryEnabled']) != false;
+        _showDresscode = (data['dresscodeEnabled'] is bool ? data['dresscodeEnabled'] : data['eventDresscodeEnabled']) != false;
+        _showAge = (data['ageEnabled'] is bool ? data['ageEnabled'] : data['eventAgeEnabled']) != false;
+
+        _openEnd = data['openEnd'] == true;
+
+        // startAt
+        final DateTime? st = _readDate(data['startAt']) ?? _readDate(data['eventDate']);
+        if (st != null) {
+          _selectedDate = DateTime(st.year, st.month, st.day);
+          _selectedTime = TimeOfDay.fromDateTime(st);
+        }
+
+        // endTime
+        final String et = (data['endTime'] ?? '').toString().trim();
+        if (!_openEnd && et.contains(':')) {
+          final parts = et.split(':');
+          final h = int.tryParse(parts[0]) ?? 0;
+          final m = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
+          _selectedEndTime = TimeOfDay(hour: h, minute: m);
+        } else {
+          _selectedEndTime = null;
+        }
+
+        // visibleFrom (fallback: BottomSheet-key eventVisibleFrom)
+        final DateTime? vf = _readDate(data['visibleFrom']) ?? _readDate(data['eventVisibleFrom']);
+        _visibleFromDateTime = vf;
+
+        final storedMode = (data['visibleMode'] ?? '').toString().trim();
+        if (storedMode.isNotEmpty) {
+          _visibleMode = storedMode;
+        } else {
+          _visibleMode = (_visibleFromDateTime == null) ? '7d' : 'custom';
+        }
+
+        // sections (fallback: BottomSheet-key eventSections)
+        final sections = _safeSections(data['sections'] ?? data['eventSections']);
+        _sections.clear();
+        for (var i = 0; i < sections.length; i++) {
+          final s = sections[i];
+          _sections.add(
+            _EventSection(
+              textCtrl: TextEditingController(text: (s['text'] ?? '').toString()),
+              imageUrl: (s['imageUrl'] ?? '').toString(),
+              imageLeft: s['imageLeft'] == true,
+            ),
+          );
+        }
+        if (_sections.isEmpty) {
+          _sections.add(_EventSection(textCtrl: TextEditingController(), imageLeft: true));
+        }
+
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Das Event ist abgelaufen. Alle Event-Daten (inkl. Bilder) wurden gelöscht.',
-          ),
-        ),
+        SnackBar(content: Text('Fehler beim Laden: $e')),
       );
-      return;
     }
-
-    // Wenn kein aktives Event oder kein Datum → Formular wie frisch
-    if (!eventActive || eventDateTime == null) {
-      setState(() {
-        _resetFormState();
-      });
-      return;
-    }
-
-    // ------------------- Event noch gültig → in Formular laden -------------------
-    setState(() {
-      _resetFormState(); // vorher alles sauber leeren
-
-      _titleCtrl.text = (data['eventTitle'] ?? '').toString();
-      _taglineCtrl.text = (data['eventTagline'] ?? '').toString();
-      _descCtrl.text = (data['eventDescription'] ?? '').toString();
-      _musicCtrl.text = (data['eventMusic'] ?? '').toString();
-      _entryCtrl.text = (data['eventEntry'] ?? '').toString();
-      _dresscodeCtrl.text = (data['eventDresscode'] ?? '').toString();
-      _ageCtrl.text = (data['eventAge'] ?? '').toString();
-
-      _showMusic = data['eventMusicEnabled'] is bool
-          ? data['eventMusicEnabled']
-          : true;
-      _showEntry = data['eventEntryEnabled'] is bool
-          ? data['eventEntryEnabled']
-          : true;
-      _showDresscode = data['eventDresscodeEnabled'] is bool
-          ? data['eventDresscodeEnabled']
-          : true;
-      _showAge = data['eventAgeEnabled'] is bool
-          ? data['eventAgeEnabled']
-          : true;
-
-      _openEnd = storedOpenEnd;
-
-      // Startzeit ins Formular holen
-      _selectedDate = DateTime(
-        eventDateTime!.year,
-        eventDateTime.month,
-        eventDateTime.day,
-      );
-      _selectedTime = TimeOfDay.fromDateTime(eventDateTime);
-
-      // Endzeit, falls vorhanden und kein Open End
-      if (!_openEnd && storedEndTimeStr.contains(':')) {
-        final parts = storedEndTimeStr.split(':');
-        final h = int.tryParse(parts[0]) ?? 0;
-        final m = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
-        _selectedEndTime = TimeOfDay(hour: h, minute: m);
-      } else {
-        _selectedEndTime = null;
-      }
-
-      // Sections laden
-      final sections = _safeSections(data['eventSections']);
-      _sections.clear();
-      for (var i = 0; i < sections.length; i++) {
-        final s = sections[i];
-        final ctrl =
-        TextEditingController(text: (s['text'] ?? '').toString());
-        _sections.add(
-          _EventSection(
-            textCtrl: ctrl,
-            imageUrl: (s['imageUrl'] ?? '').toString(),
-            imageLeft: s['imageLeft'] == true,
-          ),
-        );
-      }
-      if (_sections.isEmpty) {
-        _sections.add(
-          _EventSection(
-            textCtrl: TextEditingController(),
-            imageLeft: true,
-          ),
-        );
-      }
-    });
   }
+
+  // ----------------------------
+  // Picking date/time/visibleFrom
+  // ----------------------------
 
   Future<void> _pickDate() async {
     final now = DateTime.now();
@@ -360,10 +345,44 @@ class _BarEventScreenState extends State<BarEventScreen> {
     if (result != null) {
       setState(() {
         _selectedEndTime = result;
-        _openEnd = false; // wenn explizit Endzeit gewählt wird → kein Open End
+        _openEnd = false;
       });
     }
   }
+
+  Future<void> _pickVisibleFromDateTime() async {
+    final now = DateTime.now();
+    final base = _visibleFromDateTime ?? now;
+
+    final pickedDate = await showDatePicker(
+      context: context,
+      firstDate: now.subtract(const Duration(days: 1)),
+      lastDate: now.add(const Duration(days: 365)),
+      initialDate: base,
+    );
+    if (pickedDate == null) return;
+
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(base),
+    );
+    if (pickedTime == null) return;
+
+    setState(() {
+      _visibleMode = 'custom';
+      _visibleFromDateTime = DateTime(
+        pickedDate.year,
+        pickedDate.month,
+        pickedDate.day,
+        pickedTime.hour,
+        pickedTime.minute,
+      );
+    });
+  }
+
+  // ----------------------------
+  // Sections
+  // ----------------------------
 
   void _addSection() {
     final index = _sections.length;
@@ -379,7 +398,6 @@ class _BarEventScreenState extends State<BarEventScreen> {
   void _removeSection(int index) async {
     final section = _sections[index];
 
-    // Bild in Storage löschen, falls vorhanden
     await _deleteImageFromStorage(section.imageUrl);
 
     if (_sections.length == 1) {
@@ -395,37 +413,32 @@ class _BarEventScreenState extends State<BarEventScreen> {
 
   Future<void> _pickImageForSection(int index) async {
     final picker = ImagePicker();
-    final picked =
-    await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
     if (picked == null) return;
 
     final section = _sections[index];
 
-    // altes Bild in Storage löschen (falls vorhanden)
     await _deleteImageFromStorage(section.imageUrl);
 
     setState(() {
       section.imageFile = File(picked.path);
-      section.imageUrl = null; // wird neu hochgeladen
+      section.imageUrl = null;
     });
   }
 
-  /// Hochladen der Section-Bilder + Payload bauen.
-  Future<List<Map<String, dynamic>>> _uploadSectionsAndBuildPayload() async {
+  Future<List<Map<String, dynamic>>> _uploadSectionsAndBuildPayload({
+    required String eventId,
+  }) async {
     final storage = FirebaseStorage.instance;
     final List<Map<String, dynamic>> result = [];
 
     for (var i = 0; i < _sections.length; i++) {
       final s = _sections[i];
       final text = s.textCtrl.text.trim();
-      final bool hasImageFile = s.imageFile != null;
-      final bool hasImageUrl =
-          s.imageUrl != null && s.imageUrl!.trim().isNotEmpty;
+      final hasImageFile = s.imageFile != null;
+      final hasImageUrl = s.imageUrl != null && s.imageUrl!.trim().isNotEmpty;
 
-      // komplett leere Reihe weglassen
-      if (text.isEmpty && !hasImageFile && !hasImageUrl) {
-        continue;
-      }
+      if (text.isEmpty && !hasImageFile && !hasImageUrl) continue;
 
       String? imageUrl = s.imageUrl;
 
@@ -436,9 +449,9 @@ class _BarEventScreenState extends State<BarEventScreen> {
               .child('bars')
               .child(widget.barId)
               .child('events')
+              .child(eventId)
               .child('sections')
-              .child(
-              'section_${i}_${DateTime.now().millisecondsSinceEpoch}.jpg');
+              .child('section_${i}_${DateTime.now().millisecondsSinceEpoch}.jpg');
 
           final taskSnapshot = await ref.putFile(s.imageFile!);
 
@@ -488,6 +501,26 @@ class _BarEventScreenState extends State<BarEventScreen> {
     return result;
   }
 
+  // ----------------------------
+  // Delete Event completely
+  // ----------------------------
+
+  Future<void> _deleteEventCompletely({
+    required String eventId,
+    required Map<String, dynamic> existingData,
+  }) async {
+    final sections = _safeSections(existingData['sections'] ?? existingData['eventSections']);
+    for (final s in sections) {
+      final url = (s['imageUrl'] ?? '').toString().trim();
+      await _deleteImageFromStorage(url);
+    }
+    await _eventRef(eventId).delete();
+  }
+
+  // ----------------------------
+  // Save
+  // ----------------------------
+
   Future<void> _saveEvent() async {
     final title = _titleCtrl.text.trim();
     final desc = _descCtrl.text.trim();
@@ -506,18 +539,14 @@ class _BarEventScreenState extends State<BarEventScreen> {
       return;
     }
 
-    // Entweder Endzeit oder Open End
     if (!_openEnd && _selectedEndTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-          Text('Bitte eine Endzeit wählen oder „Open End“ aktivieren.'),
-        ),
+        const SnackBar(content: Text('Bitte eine Endzeit wählen oder „Open End“ aktivieren.')),
       );
       return;
     }
 
-    final dt = DateTime(
+    final startAt = DateTime(
       _selectedDate!.year,
       _selectedDate!.month,
       _selectedDate!.day,
@@ -525,53 +554,81 @@ class _BarEventScreenState extends State<BarEventScreen> {
       _selectedTime!.minute,
     );
 
+    final String endTimeStr = _openEnd || _selectedEndTime == null
+        ? ''
+        : '${_selectedEndTime!.hour.toString().padLeft(2, '0')}:${_selectedEndTime!.minute.toString().padLeft(2, '0')}';
+
+    final visibleFrom = (_visibleMode == 'custom' && _visibleFromDateTime != null)
+        ? _visibleFromDateTime!
+        : _computeDefaultVisibleFrom(startAt);
+
+    final cleanupAt = _computeCleanupAt(
+      startAt: startAt,
+      openEnd: _openEnd,
+      endTimeStr: endTimeStr,
+    );
+
     setState(() => _isSaving = true);
 
     try {
-      final sectionsPayload = await _uploadSectionsAndBuildPayload();
+      final String eventId = _eventId ?? _eventsCol.doc().id;
+      _eventId = eventId;
 
-      final barRef =
-      FirebaseFirestore.instance.collection('bars').doc(widget.barId);
+      final sectionsPayload = await _uploadSectionsAndBuildPayload(eventId: eventId);
 
-      final Map<String, dynamic> payload = {
+      // ✅ WICHTIG: Wir speichern *deine* Keys + die Keys die BarBottomSheet liest.
+      final payload = <String, dynamic>{
+        // --- deine (internen) Keys ---
+        'active': true,
+        'title': title,
+        'tagline': _taglineCtrl.text.trim(),
+        'desc': desc,
+        'startAt': Timestamp.fromDate(startAt),
+        'endTime': _openEnd ? '' : endTimeStr,
+        'openEnd': _openEnd,
+        'visibleFrom': Timestamp.fromDate(visibleFrom),
+        'visibleMode': _visibleMode,
+        'cleanupAt': Timestamp.fromDate(cleanupAt),
+        'sections': sectionsPayload,
+        'entry': _entryCtrl.text.trim(),
+        'entryEnabled': _showEntry,
+        'age': _ageCtrl.text.trim(),
+        'ageEnabled': _showAge,
+        'music': _musicCtrl.text.trim(),
+        'musicEnabled': _showMusic,
+        'dresscode': _dresscodeCtrl.text.trim(),
+        'dresscodeEnabled': _showDresscode,
+
+        // --- BottomSheet-Kompatibilität (damit alles wieder angezeigt wird) ---
         'eventActive': true,
+        'eventDate': Timestamp.fromDate(startAt),
         'eventTitle': title,
         'eventTagline': _taglineCtrl.text.trim(),
         'eventDescription': desc,
-        'eventDate': Timestamp.fromDate(dt),
-        'eventTime':
-        '${_selectedTime!.hour.toString().padLeft(2, '0')}:${_selectedTime!.minute.toString().padLeft(2, '0')}',
+        'eventVisibleFrom': Timestamp.fromDate(visibleFrom),
         'eventSections': sectionsPayload,
-        'eventUpdatedAt': FieldValue.serverTimestamp(),
-        'eventOpenEnd': _openEnd,
+        'eventEntry': _entryCtrl.text.trim(),
+        'eventEntryEnabled': _showEntry,
+        'eventAge': _ageCtrl.text.trim(),
+        'eventAgeEnabled': _showAge,
+        'eventMusic': _musicCtrl.text.trim(),
+        'eventMusicEnabled': _showMusic,
+        'eventDresscode': _dresscodeCtrl.text.trim(),
+        'eventDresscodeEnabled': _showDresscode,
+
+        'updatedAt': FieldValue.serverTimestamp(),
+        if (widget.eventId == null) 'createdAt': FieldValue.serverTimestamp(),
       };
 
-      if (!_openEnd && _selectedEndTime != null) {
-        payload['eventEndTime'] =
-        '${_selectedEndTime!.hour.toString().padLeft(2, '0')}:${_selectedEndTime!.minute.toString().padLeft(2, '0')}';
-      } else {
-        payload['eventEndTime'] = FieldValue.delete();
-      }
-
-      payload['eventEntry'] = _entryCtrl.text.trim();
-      payload['eventEntryEnabled'] = _showEntry;
-
-      payload['eventAge'] = _ageCtrl.text.trim();
-      payload['eventAgeEnabled'] = _showAge;
-
-      payload['eventMusic'] = _musicCtrl.text.trim();
-      payload['eventMusicEnabled'] = _showMusic;
-
-      payload['eventDresscode'] = _dresscodeCtrl.text.trim();
-      payload['eventDresscodeEnabled'] = _showDresscode;
-
-      await barRef.set(payload, SetOptions(merge: true));
+      await _eventRef(eventId).set(payload, SetOptions(merge: true));
 
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('🎉 Event gespeichert und aktiviert.')),
+        SnackBar(content: Text(widget.eventId == null ? '🎉 Event erstellt.' : '✅ Event gespeichert.')),
       );
-      Navigator.pop(context);
+
+      Navigator.pop(context, eventId);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -581,13 +638,20 @@ class _BarEventScreenState extends State<BarEventScreen> {
     }
   }
 
+  // ----------------------------
+  // UI
+  // ----------------------------
+
   @override
   Widget build(BuildContext context) {
+    final isEdit = widget.eventId != null;
+
     final dateText = _selectedDate == null
         ? '📅 Datum wählen'
         : '${_selectedDate!.day.toString().padLeft(2, '0')}.'
         '${_selectedDate!.month.toString().padLeft(2, '0')}.'
         '${_selectedDate!.year}';
+
     final timeText = _selectedTime == null
         ? '⏰ Startzeit wählen'
         : '${_selectedTime!.hour.toString().padLeft(2, '0')}:'
@@ -600,13 +664,27 @@ class _BarEventScreenState extends State<BarEventScreen> {
         : 'Ende: ${_selectedEndTime!.hour.toString().padLeft(2, '0')}:'
         '${_selectedEndTime!.minute.toString().padLeft(2, '0')}';
 
+    String visibleText;
+    if (_selectedDate == null || _selectedTime == null) {
+      visibleText = '👀 Sichtbarkeit festlegen (erst Datum+Startzeit wählen)';
+    } else if (_visibleMode == 'custom' && _visibleFromDateTime != null) {
+      final v = _visibleFromDateTime!;
+      visibleText =
+      'Ab: ${v.day.toString().padLeft(2, '0')}.${v.month.toString().padLeft(2, '0')}.${v.year} '
+          '${v.hour.toString().padLeft(2, '0')}:${v.minute.toString().padLeft(2, '0')}';
+    } else {
+      visibleText = _visibleMode == '24h' ? '24h vor Start' : '7 Tage vor Start';
+    }
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('🍹 Bar-Event hosten'),
+        title: Text(isEdit ? '✏️ Event bearbeiten' : '🍹 Neues Event erstellen'),
         backgroundColor: const Color(0xFF141A22),
       ),
       backgroundColor: const Color(0xFF0E0F12),
-      body: Column(
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
         children: [
           Expanded(
             child: SingleChildScrollView(
@@ -641,12 +719,8 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: _isSaving ? null : _pickDate,
-                          icon: const Icon(Icons.calendar_today,
-                              color: Colors.white),
-                          label: Text(
-                            dateText,
-                            style: const TextStyle(color: Colors.white),
-                          ),
+                          icon: const Icon(Icons.calendar_today, color: Colors.white),
+                          label: Text(dateText, style: const TextStyle(color: Colors.white)),
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Colors.white24),
                             backgroundColor: const Color(0xFF141A22),
@@ -657,12 +731,8 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: _isSaving ? null : _pickTime,
-                          icon: const Icon(Icons.schedule,
-                              color: Colors.white),
-                          label: Text(
-                            timeText,
-                            style: const TextStyle(color: Colors.white),
-                          ),
+                          icon: const Icon(Icons.schedule, color: Colors.white),
+                          label: Text(timeText, style: const TextStyle(color: Colors.white)),
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Colors.white24),
                             backgroundColor: const Color(0xFF141A22),
@@ -672,19 +742,13 @@ class _BarEventScreenState extends State<BarEventScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  // Endzeit + Open End
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed:
-                          _isSaving || _openEnd ? null : _pickEndTime,
-                          icon: const Icon(Icons.schedule_outlined,
-                              color: Colors.white),
-                          label: Text(
-                            endTimeText,
-                            style: const TextStyle(color: Colors.white),
-                          ),
+                          onPressed: _isSaving || _openEnd ? null : _pickEndTime,
+                          icon: const Icon(Icons.schedule_outlined, color: Colors.white),
+                          label: Text(endTimeText, style: const TextStyle(color: Colors.white)),
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Colors.white24),
                             backgroundColor: const Color(0xFF141A22),
@@ -698,13 +762,76 @@ class _BarEventScreenState extends State<BarEventScreen> {
                         onChanged: (v) {
                           setState(() {
                             _openEnd = v ?? false;
-                            if (_openEnd) {
-                              _selectedEndTime = null;
-                            }
+                            if (_openEnd) _selectedEndTime = null;
                           });
                         },
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 14),
+                  _sectionTitle('Sichtbarkeit'),
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF141A22),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Ab wann soll das Event als Event-Karte erscheinen?',
+                          style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.3),
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _choicePill(
+                              label: '7 Tage vorher',
+                              selected: _visibleMode == '7d',
+                              onTap: _isSaving
+                                  ? null
+                                  : () => setState(() {
+                                _visibleMode = '7d';
+                                _visibleFromDateTime = null;
+                              }),
+                            ),
+                            _choicePill(
+                              label: '24h vorher',
+                              selected: _visibleMode == '24h',
+                              onTap: _isSaving
+                                  ? null
+                                  : () => setState(() {
+                                _visibleMode = '24h';
+                                _visibleFromDateTime = null;
+                              }),
+                            ),
+                            _choicePill(
+                              label: 'Custom',
+                              selected: _visibleMode == 'custom',
+                              onTap: _isSaving
+                                  ? null
+                                  : () async {
+                                if (_selectedDate == null || _selectedTime == null) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Bitte zuerst Datum und Startzeit wählen.')),
+                                  );
+                                  return;
+                                }
+                                await _pickVisibleFromDateTime();
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Text(visibleText, style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -721,8 +848,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       _toggleChip(
                         label: 'Eintritt anzeigen',
                         value: _showEntry,
-                        onChanged: (v) =>
-                            setState(() => _showEntry = v ?? true),
+                        onChanged: (v) => setState(() => _showEntry = v ?? true),
                       ),
                     ],
                   ),
@@ -741,8 +867,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       _toggleChip(
                         label: 'Alter anzeigen',
                         value: _showAge,
-                        onChanged: (v) =>
-                            setState(() => _showAge = v ?? true),
+                        onChanged: (v) => setState(() => _showAge = v ?? true),
                       ),
                     ],
                   ),
@@ -761,8 +886,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       _toggleChip(
                         label: 'Musik anzeigen',
                         value: _showMusic,
-                        onChanged: (v) =>
-                            setState(() => _showMusic = v ?? true),
+                        onChanged: (v) => setState(() => _showMusic = v ?? true),
                       ),
                     ],
                   ),
@@ -781,8 +905,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       _toggleChip(
                         label: 'Dresscode anzeigen',
                         value: _showDresscode,
-                        onChanged: (v) =>
-                            setState(() => _showDresscode = v ?? true),
+                        onChanged: (v) => setState(() => _showDresscode = v ?? true),
                       ),
                     ],
                   ),
@@ -800,16 +923,8 @@ class _BarEventScreenState extends State<BarEventScreen> {
                         backgroundColor: const Color(0xFF141A22),
                       ),
                       icon: const Icon(Icons.add, color: Colors.redAccent),
-                      label: const Text(
-                        'Reihe hinzufügen',
-                        style: TextStyle(color: Colors.redAccent),
-                      ),
+                      label: const Text('Reihe hinzufügen', style: TextStyle(color: Colors.redAccent)),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Tipp: Nutze die Reihen, um Bilder von Drinks, DJs, Specials usw. mit Text zu kombinieren.',
-                    style: TextStyle(color: Colors.white38, fontSize: 12),
                   ),
                   const SizedBox(height: 80),
                 ],
@@ -820,52 +935,29 @@ class _BarEventScreenState extends State<BarEventScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: const BoxDecoration(
               color: Color(0xFF141A22),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black54,
-                  blurRadius: 10,
-                  offset: Offset(0, -4),
-                ),
-              ],
+              boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, -4))],
             ),
             child: Row(
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: _isSaving
-                        ? null
-                        : () {
-                      Navigator.pop(context);
-                    },
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.white38),
-                    ),
-                    child: const Text(
-                      'Abbrechen',
-                      style: TextStyle(color: Colors.white70),
-                    ),
+                    onPressed: _isSaving ? null : () => Navigator.pop(context),
+                    style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.white38)),
+                    child: const Text('Abbrechen', style: TextStyle(color: Colors.white70)),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
                     onPressed: _isSaving ? null : _saveEvent,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.redAccent,
-                    ),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
                     child: _isSaving
                         ? const SizedBox(
                       width: 20,
                       height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                     )
-                        : const Text(
-                      'Event speichern',
-                      style: TextStyle(color: Colors.white),
-                    ),
+                        : Text(isEdit ? 'Speichern' : 'Erstellen', style: const TextStyle(color: Colors.white)),
                   ),
                 ),
               ],
@@ -876,18 +968,18 @@ class _BarEventScreenState extends State<BarEventScreen> {
     );
   }
 
+  // ----------------------------
+  // Widgets
+  // ----------------------------
+
   Widget _sectionTitle(String text) {
     return Row(
       children: [
-        const Icon(Icons.local_fire_department,
-            color: Colors.redAccent, size: 18),
+        const Icon(Icons.local_fire_department, color: Colors.redAccent, size: 18),
         const SizedBox(width: 6),
         Text(
           text,
-          style: const TextStyle(
-            color: Colors.white70,
-            fontWeight: FontWeight.w700,
-          ),
+          style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700),
         ),
       ],
     );
@@ -906,9 +998,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
         decoration: BoxDecoration(
           color: value ? Colors.green.withOpacity(0.12) : Colors.transparent,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: value ? Colors.greenAccent : Colors.white24,
-          ),
+          border: Border.all(color: value ? Colors.greenAccent : Colors.white24),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -921,12 +1011,36 @@ class _BarEventScreenState extends State<BarEventScreen> {
             const SizedBox(width: 4),
             Text(
               label,
-              style: TextStyle(
-                color: value ? Colors.greenAccent : Colors.white54,
-                fontSize: 11,
-              ),
+              style: TextStyle(color: value ? Colors.greenAccent : Colors.white54, fontSize: 11),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _choicePill({
+    required String label,
+    required bool selected,
+    required VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? Colors.redAccent.withOpacity(0.15) : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: selected ? Colors.redAccent : Colors.white24),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.redAccent : Colors.white70,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );
@@ -946,9 +1060,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: TextStyle(
-          color: enabled ? Colors.white70 : Colors.white24,
-        ),
+        labelStyle: TextStyle(color: enabled ? Colors.white70 : Colors.white24),
         hintText: hint,
         hintStyle: const TextStyle(color: Colors.white30),
         filled: true,
@@ -962,9 +1074,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
           borderRadius: BorderRadius.circular(12),
         ),
         focusedBorder: OutlineInputBorder(
-          borderSide: BorderSide(
-            color: enabled ? Colors.redAccent : Colors.white12,
-          ),
+          borderSide: BorderSide(color: enabled ? Colors.redAccent : Colors.white12),
           borderRadius: BorderRadius.circular(12),
         ),
       ),
@@ -976,18 +1086,9 @@ class _BarEventScreenState extends State<BarEventScreen> {
     for (var i = 0; i < _sections.length; i++) {
       final s = _sections[i];
       final rowChildren = <Widget>[
-        Expanded(
-          flex: 4,
-          child: _imageCard(
-            index: i,
-            section: s,
-          ),
-        ),
+        Expanded(flex: 4, child: _imageCard(index: i, section: s)),
         const SizedBox(width: 10),
-        Expanded(
-          flex: 6,
-          child: _contentTextCard(section: s),
-        ),
+        Expanded(flex: 6, child: _contentTextCard(section: s)),
       ];
 
       widgets.add(
@@ -998,28 +1099,19 @@ class _BarEventScreenState extends State<BarEventScreen> {
             children: [
               Row(
                 children: [
-                  Text(
-                    'Reihe ${i + 1}',
-                    style: const TextStyle(
-                      color: Colors.white60,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                  Text('Reihe ${i + 1}',
+                      style: const TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w600)),
                   const Spacer(),
                   IconButton(
                     onPressed: _isSaving ? null : () => _removeSection(i),
-                    icon: const Icon(Icons.delete_outline,
-                        color: Colors.redAccent, size: 18),
+                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 18),
                     tooltip: 'Reihe entfernen',
                   ),
                 ],
               ),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: s.imageLeft
-                    ? rowChildren
-                    : rowChildren.reversed.toList(),
+                children: s.imageLeft ? rowChildren : rowChildren.reversed.toList(),
               ),
             ],
           ),
@@ -1034,22 +1126,12 @@ class _BarEventScreenState extends State<BarEventScreen> {
     if (section.imageFile != null) {
       child = ClipRRect(
         borderRadius: BorderRadius.circular(12),
-        child: Image.file(
-          section.imageFile!,
-          height: 120,
-          width: double.infinity,
-          fit: BoxFit.cover,
-        ),
+        child: Image.file(section.imageFile!, height: 120, width: double.infinity, fit: BoxFit.cover),
       );
     } else if (section.imageUrl != null && section.imageUrl!.isNotEmpty) {
       child = ClipRRect(
         borderRadius: BorderRadius.circular(12),
-        child: Image.network(
-          section.imageUrl!,
-          height: 120,
-          width: double.infinity,
-          fit: BoxFit.cover,
-        ),
+        child: Image.network(section.imageUrl!, height: 120, width: double.infinity, fit: BoxFit.cover),
       );
     } else {
       child = Column(
@@ -1057,10 +1139,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
         children: const [
           Icon(Icons.add_a_photo, color: Colors.white70),
           SizedBox(height: 4),
-          Text(
-            'Bild hinzufügen',
-            style: TextStyle(color: Colors.white54, fontSize: 12),
-          ),
+          Text('Bild hinzufügen', style: TextStyle(color: Colors.white54, fontSize: 12)),
         ],
       );
     }

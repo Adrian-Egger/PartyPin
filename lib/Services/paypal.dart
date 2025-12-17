@@ -1,26 +1,55 @@
-class PayPalPlans {
-  // ✅ Deine Plan-IDs
-  static const String monthly = 'P-55588718AV729883XNE6MJ5Y';
+/// ===============================
+/// PayPal Konfiguration – PartyPin
+/// ===============================
 
-  // ✅ Dein neuer Jahres-Plan (den du genannt hast)
-  static const String yearly = 'P-0WL99384633096336NE6WUSA';
+/// Erlaubte PayPal-Pläne (LIVE)
+enum PayPalPlan {
+  monthly,
+  yearly,
+}
+
+class PayPalPlans {
+  /// LIVE Plan IDs (PayPal Dashboard → LIVE)
+  static const String monthly = 'P-55588718AV729883XNE6MJ5Y';
+  static const String yearly  = 'P-0WL99384633096336NE6WUSA';
+
+  /// Gibt die richtige Plan-ID zurück
+  static String idFor(PayPalPlan plan) {
+    switch (plan) {
+      case PayPalPlan.yearly:
+        return yearly;
+      case PayPalPlan.monthly:
+      default:
+        return monthly;
+    }
+  }
 }
 
 class PayPalCheckout {
-  // ✅ Deine Firebase Hosting URL zur Checkout-Seite
+  /// ✅ Firebase Hosting URL zu deiner Checkout-Seite
+  /// MUSS https sein
   static const String checkoutBaseUrl =
       'https://partypin-5dc3f.web.app/subscribe.html';
 
-  /// Baut die URL mit Username + Plan + Cache-Buster
+  /// Baut die finale Checkout-URL
+  /// Beispiel:
+  /// https://partypin-5dc3f.web.app/subscribe.html?u=Adrian&plan=monthly&v=123
   static Uri buildCheckoutUri({
     required String username,
-    required String plan, // "monthly" oder "yearly"
+    required PayPalPlan plan,
   }) {
-    return Uri.parse(checkoutBaseUrl).replace(queryParameters: {
-      'u': username,
-      'plan': plan,
-      // verhindert, dass Android/Chrome eine alte HTML cached
-      'v': DateTime.now().millisecondsSinceEpoch.toString(),
-    });
+    if (username.trim().isEmpty) {
+      throw ArgumentError('username darf nicht leer sein');
+    }
+
+    return Uri.parse(checkoutBaseUrl).replace(
+      queryParameters: {
+        'u': username.trim(),        // EXAKT wie Firestore username
+        'plan': plan.name,           // "monthly" | "yearly"
+        'v': DateTime.now()
+            .millisecondsSinceEpoch
+            .toString(),              // Cache-Buster
+      },
+    );
   }
 }

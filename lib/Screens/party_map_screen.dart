@@ -2222,25 +2222,26 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             ),
           ),
           Positioned.fill(
-            child: GoogleMap(
+            child:GoogleMap(
               initialCameraPosition: _startPos!,
               markers: _markers,
               circles: _circles,
-              zoomControlsEnabled: true,
-              zoomGesturesEnabled: true,
+
+              // ✅ DAS ist der Fix
+              padding: const EdgeInsets.only(
+                top: 140, // AppBar + Suchleiste (+ evtl. Warnbanner)
+              ),
+
               onMapCreated: (controller) async {
                 mapController = controller;
                 try {
                   await controller.setMapStyle(_mapStyleHidePublicPois);
-                } catch (_) {
-                  // wenn MapStyle auf einem Gerät nicht supported ist: ignorieren
-                }
+                } catch (_) {}
               },
-              onCameraMove: (pos) {
-                _lastCameraPosition = pos;
-              },
+              onCameraMove: (pos) => _lastCameraPosition = pos,
               onCameraIdle: _onCameraIdle,
-            ),
+            )
+            ,
           ),
           Positioned(
             left: 12,

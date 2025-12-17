@@ -114,20 +114,81 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     await _refreshQuota24h();
   }
 
-  // Feedback-Liste einmalig / auf Knopfdruck laden
+  // ✅ NEU: schreibt fehlendes "rand" bei geladenen docs einmalig nach
+  Future<void> _ensureRandForDocs(List<QueryDocumentSnapshot> docs) async {
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      bool hasAny = false;
+
+      for (final d in docs) {
+        final data = d.data() as Map<String, dynamic>? ?? {};
+        if (!data.containsKey('rand') || data['rand'] == null) {
+          batch.set(d.reference, {'rand': Random().nextDouble()}, SetOptions(merge: true));
+          hasAny = true;
+        }
+      }
+
+      if (hasAny) {
+        await batch.commit();
+      }
+    } catch (_) {
+      // bewusst ignorieren – Anzeige soll trotzdem funktionieren
+    }
+  }
+
+  // ✅ Feedback-Liste = 10 RANDOM Feedbacks, aber 100% zuverlässig (Fallback ohne rand)
   Future<void> _loadFeedbacks() async {
     setState(() {
       _isLoadingFeedback = true;
       _feedbackError = false;
     });
+
     try {
-      final snap = await FirebaseFirestore.instance
+      final docs = <QueryDocumentSnapshot>[];
+
+      // 1) Versuch: echte Random-Query über rand (funktioniert nur, wenn rand existiert)
+      final r = Random().nextDouble();
+
+      final q1 = await FirebaseFirestore.instance
           .collection("feedbacks")
-          .orderBy("timestamp", descending: true)
+          .where("rand", isGreaterThanOrEqualTo: r)
+          .orderBy("rand")
+          .limit(10)
           .get();
 
+      docs.addAll(q1.docs);
+
+      if (docs.length < 10) {
+        final q2 = await FirebaseFirestore.instance
+            .collection("feedbacks")
+            .where("rand", isLessThan: r)
+            .orderBy("rand")
+            .limit(10 - docs.length)
+            .get();
+
+        docs.addAll(q2.docs);
+      }
+
+      // 2) Fallback: wenn rand fehlt (alte Docs), hole letzte 100 nach timestamp und wähle random 10
+      if (docs.isEmpty) {
+        final qFallback = await FirebaseFirestore.instance
+            .collection("feedbacks")
+            .orderBy("timestamp", descending: true)
+            .limit(100)
+            .get();
+
+        final fallbackDocs = qFallback.docs.toList();
+        fallbackDocs.shuffle();
+        docs.addAll(fallbackDocs.take(10));
+      }
+
+      // 3) Für die Zukunft: rand bei den geladenen Docs nachschreiben, damit Random-Query künftig klappt
+      await _ensureRandForDocs(docs);
+
+      docs.shuffle(); // damit es wirklich random wirkt
+
       setState(() {
-        _feedbackDocs = snap.docs;
+        _feedbackDocs = docs.take(10).toList(); // ✅ exakt max 10
         _isLoadingFeedback = false;
       });
     } catch (_) {
@@ -175,8 +236,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         }
       }
 
-      subsUtc =
-      subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
+      subsUtc = subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
 
       DateTime? lockUntil;
       if (subsUtc.length >= kWindowLimit) {
@@ -229,8 +289,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   Future<void> _reloadAll() async {
     await _refreshQuota24h();
-    await _loadFeedbacks();
-    // keine Snackbars
+    await _loadFeedbacks(); // ✅ lädt jetzt 10 random, zuverlässig
   }
 
   // Senden
@@ -276,8 +335,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         }
 
         final windowStartUtc = nowUtc.subtract(kWindow);
-        subsUtc =
-        subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
+        subsUtc = subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
 
         if (subsUtc.length >= kWindowLimit) {
           throw FirebaseException(
@@ -295,6 +353,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             "message": feedbackText,
             "timestamp": FieldValue.serverTimestamp(),
             "submissions": newSubs.map((d) => Timestamp.fromDate(d)).toList(),
+
+            // ✅ rand immer setzen (für Random-Query)
+            "rand": Random().nextDouble(),
           },
           SetOptions(merge: true),
         );
@@ -303,7 +364,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _feedbackController.clear();
       HapticFeedback.lightImpact();
       await _refreshQuota24h();
-      await _loadFeedbacks(); // Liste nur hier (und beim Refresh-Button) neu laden
+      await _loadFeedbacks(); // ✅ lädt jetzt 10 random
 
       // kurzer grüner Flash
       if (mounted) {
@@ -314,7 +375,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       }
     } catch (_) {
       HapticFeedback.heavyImpact();
-      // keine Snackbars
     }
   }
 
@@ -329,14 +389,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         tooltip: "Zurück",
         icon: const Icon(Icons.arrow_back, color: _accent),
         onPressed: () {
-          // WICHTIG: keine neue Map-Instanz bauen, einfach zurück
           Navigator.pop(context);
         },
       ),
       title: const Text(
         "Feedback",
-        style:
-        TextStyle(color: _text, fontWeight: FontWeight.w800, fontSize: 22),
+        style: TextStyle(color: _text, fontWeight: FontWeight.w800, fontSize: 22),
       ),
       actions: [
         Container(
@@ -376,8 +434,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           ),
           child: Row(
             children: [
-              Icon(locked ? Icons.lock_clock : Icons.av_timer,
-                  size: 18, color: _muted),
+              Icon(locked ? Icons.lock_clock : Icons.av_timer, size: 18, color: _muted),
               const SizedBox(width: 8),
               Expanded(
                 child: ValueListenableBuilder<Duration>(
@@ -386,8 +443,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     locked
                         ? "24h-Limit erreicht · noch ${_fmtDur(rem)}"
                         : "Heute verfügbar: $_remainingToday von $kWindowLimit",
-                    style: const TextStyle(
-                        color: _muted, fontWeight: FontWeight.w600),
+                    style: const TextStyle(color: _muted, fontWeight: FontWeight.w600),
                   ),
                 ),
               ),
@@ -418,8 +474,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         ),
         title: Text(
           message,
-          style: const TextStyle(
-              color: _text, fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(color: _text, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         subtitle: Text(
           "Von: $user",
@@ -455,19 +510,16 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   decoration: InputDecoration(
                     hintText: locked ? "Gesperrt …" : _hint,
                     hintStyle: const TextStyle(color: _muted),
-                    contentPadding: const EdgeInsets.symmetric(
-                        vertical: 14, horizontal: 12),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
                     filled: true,
                     fillColor: _panel,
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                          color: borderColor, width: _sentFlash ? 1.2 : 0),
+                      borderSide: BorderSide(color: borderColor, width: _sentFlash ? 1.2 : 0),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                          color: _sentFlash ? _ok : _accent, width: 1),
+                      borderSide: BorderSide(color: _sentFlash ? _ok : _accent, width: 1),
                     ),
                   ),
                   textInputAction: TextInputAction.newline,
@@ -482,18 +534,15 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                 return ValueListenableBuilder<Duration>(
                   valueListenable: _remainingVN,
                   builder: (_, rem, __) => ElevatedButton(
-                    onPressed: (locked ||
-                        _feedbackController.text.trim().isEmpty)
+                    onPressed: (locked || _feedbackController.text.trim().isEmpty)
                         ? null
                         : _sendFeedback,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: sendColor,
                       disabledBackgroundColor: Colors.white12,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          vertical: 14, horizontal: 18),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     child: Text(
                       locked ? _fmtDur(rem) : "Senden",
@@ -535,7 +584,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     return ListView.builder(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 100, top: 8),
-      itemCount: _feedbackDocs.length,
+      itemCount: _feedbackDocs.length, // ✅ max 10
       itemBuilder: (context, i) {
         final raw = _feedbackDocs[i].data() as Map<String, dynamic>;
         final msg = (raw["message"] as String?) ?? "";
