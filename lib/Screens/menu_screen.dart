@@ -213,14 +213,14 @@ class MenuScreen extends StatelessWidget {
               icon: Icons.feedback,
               title: "Feedback",
               onTap: () {
-                Navigator.push(
-                  context,
+                Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (context) => const FeedbackScreen(),
+                    builder: (_) => const FeedbackScreen(openedFromMenu: true),
                   ),
                 );
               },
             ),
+
             _menuTile(
               icon: Icons.info,
               title: "Rechtliches",

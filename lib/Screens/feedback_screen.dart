@@ -8,7 +8,13 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class FeedbackScreen extends StatefulWidget {
-  const FeedbackScreen({super.key});
+  // steuert ob links oben der rote Pfeil angezeigt wird
+  final bool openedFromMenu;
+
+  const FeedbackScreen({
+    super.key,
+    this.openedFromMenu = false,
+  });
 
   @override
   State<FeedbackScreen> createState() => _FeedbackScreenState();
@@ -23,46 +29,70 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   static const _text = Colors.white;
   static const _muted = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30);
-  static const _ok = Color(0xFF22C55E); // Grün beim Erfolg
+  static const _ok = Color(0xFF22C55E);
 
   // Limits
   static const int kWindowLimit = 3;
   static const Duration kWindow = Duration(hours: 24);
 
   // State
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _feedbackController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _feedbackController = TextEditingController();
+
+  // Rebuild-arm: UI-Status über Notifier
   final ValueNotifier<Duration> _remainingVN = ValueNotifier(Duration.zero);
   final ValueNotifier<bool> _isLockedVN = ValueNotifier(false);
+  final ValueNotifier<bool> _sendingVN = ValueNotifier(false);
+  final ValueNotifier<bool> _canSendVN = ValueNotifier(false);
 
   int _usedInWindow = 0;
   DateTime? _lockUntilLocal;
   Timer? _ticker;
 
-  // Feedback-Liste (statt StreamBuilder)
-  List<QueryDocumentSnapshot> _feedbackDocs = [];
+  // Feedback-Liste
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _feedbackDocs = const [];
   bool _isLoadingFeedback = true;
   bool _feedbackError = false;
 
-  // kurzer Erfolgs-Flash
   bool _sentFlash = false;
 
+  // Firestore Reads minimieren: Quota-Refresh nicht zu oft
+  DateTime _lastQuotaFetchLocal = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _quotaMinInterval = Duration(seconds: 6);
+
+  // Device/User key für Quota + "eigenes Feedback anzeigen"
+  String _userKey = "";
+
   // Hints
-  final List<String> _hints = const [
+  static const List<String> _hints = [
     "Hast du einen Vorschlag?",
     "Was können wir verbessern?",
     "Dein Feedback ist wichtig.",
     "Teile uns deine Idee mit.",
   ];
   String get _hint => _hints[Random().nextInt(_hints.length)];
-  int get _remainingToday =>
-      (kWindowLimit - _usedInWindow).clamp(0, kWindowLimit);
+  int get _remainingToday => (kWindowLimit - _usedInWindow).clamp(0, kWindowLimit);
 
   @override
   void initState() {
     super.initState();
-    _loadUserName();
-    _loadFeedbacks();
+
+    _feedbackController.addListener(() {
+      final can = _feedbackController.text.trim().isNotEmpty;
+      if (_canSendVN.value != can) _canSendVN.value = can;
+    });
+
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _loadUserName();
+    await _ensureUserKey();
+
+    await Future.wait([
+      _refreshQuota24h(force: true),
+      _loadFeedbacks(),
+    ]);
   }
 
   @override
@@ -70,6 +100,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     _ticker?.cancel();
     _remainingVN.dispose();
     _isLockedVN.dispose();
+    _sendingVN.dispose();
+    _canSendVN.dispose();
     _nameController.dispose();
     _feedbackController.dispose();
     super.dispose();
@@ -98,64 +130,75 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         "${s.toString().padLeft(2, '0')}";
   }
 
-  String _docIdForName(String name) {
-    if (name.trim().isEmpty) {
-      return DateTime.now().millisecondsSinceEpoch.toString();
-    }
-    return name.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '_');
-  }
-
-  // Init
   Future<void> _loadUserName() async {
     final prefs = await SharedPreferences.getInstance();
-    final vorname = prefs.getString("vorname") ?? "";
-    final nachname = prefs.getString("nachname") ?? "";
-    _nameController.text = "$vorname $nachname".trim();
-    await _refreshQuota24h();
+    final vorname = (prefs.getString("vorname") ?? "").trim();
+    final nachname = (prefs.getString("nachname") ?? "").trim();
+    _nameController.text = ("$vorname $nachname").trim();
   }
 
-  // ✅ NEU: schreibt fehlendes "rand" bei geladenen docs einmalig nach
-  Future<void> _ensureRandForDocs(List<QueryDocumentSnapshot> docs) async {
+  String _randomKey() {
+    const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+    final r = Random();
+    return List.generate(24, (_) => chars[r.nextInt(chars.length)]).join();
+  }
+
+  Future<void> _ensureUserKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = (prefs.getString("feedback_user_key") ?? "").trim();
+    if (existing.isNotEmpty) {
+      _userKey = existing;
+      return;
+    }
+    final key = _randomKey();
+    await prefs.setString("feedback_user_key", key);
+    _userKey = key;
+  }
+
+  String _displayName() {
+    final name = _nameController.text.trim();
+    return name.isEmpty ? "Anonym" : name;
+  }
+
+  // ✅ schreibt fehlendes rand bei geladenen docs einmalig nach
+  Future<void> _ensureRandForDocs(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
     try {
       final batch = FirebaseFirestore.instance.batch();
       bool hasAny = false;
 
       for (final d in docs) {
-        final data = d.data() as Map<String, dynamic>? ?? {};
+        final data = d.data();
         if (!data.containsKey('rand') || data['rand'] == null) {
           batch.set(d.reference, {'rand': Random().nextDouble()}, SetOptions(merge: true));
           hasAny = true;
         }
       }
 
-      if (hasAny) {
-        await batch.commit();
-      }
+      if (hasAny) await batch.commit();
     } catch (_) {
-      // bewusst ignorieren – Anzeige soll trotzdem funktionieren
+      // ignorieren
     }
   }
 
-  // ✅ Feedback-Liste = 10 RANDOM Feedbacks, aber 100% zuverlässig (Fallback ohne rand)
+  // ✅ 10 zufällige Feedbacks + eigenes letztes Feedback zusätzlich oben rein (falls vorhanden)
   Future<void> _loadFeedbacks() async {
+    if (!mounted) return;
     setState(() {
       _isLoadingFeedback = true;
       _feedbackError = false;
     });
 
     try {
-      final docs = <QueryDocumentSnapshot>[];
-
-      // 1) Versuch: echte Random-Query über rand (funktioniert nur, wenn rand existiert)
+      final docs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
       final r = Random().nextDouble();
 
+      // 1) Random via rand (10)
       final q1 = await FirebaseFirestore.instance
           .collection("feedbacks")
           .where("rand", isGreaterThanOrEqualTo: r)
           .orderBy("rand")
           .limit(10)
           .get();
-
       docs.addAll(q1.docs);
 
       if (docs.length < 10) {
@@ -165,33 +208,57 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             .orderBy("rand")
             .limit(10 - docs.length)
             .get();
-
         docs.addAll(q2.docs);
       }
 
-      // 2) Fallback: wenn rand fehlt (alte Docs), hole letzte 100 nach timestamp und wähle random 10
+      // 2) Fallback (falls rand noch nicht überall): letzte 100 -> shuffle -> take 10
       if (docs.isEmpty) {
         final qFallback = await FirebaseFirestore.instance
             .collection("feedbacks")
             .orderBy("timestamp", descending: true)
             .limit(100)
             .get();
-
-        final fallbackDocs = qFallback.docs.toList();
-        fallbackDocs.shuffle();
-        docs.addAll(fallbackDocs.take(10));
+        final fallback = qFallback.docs.toList()..shuffle();
+        docs.addAll(fallback.take(10));
       }
 
-      // 3) Für die Zukunft: rand bei den geladenen Docs nachschreiben, damit Random-Query künftig klappt
+      // 3) Eigenes letztes Feedback (falls existiert)
+      QueryDocumentSnapshot<Map<String, dynamic>>? mine;
+      try {
+        final qMine = await FirebaseFirestore.instance
+            .collection("feedbacks")
+            .where("userKey", isEqualTo: _userKey)
+            .orderBy("timestamp", descending: true)
+            .limit(1)
+            .get();
+        if (qMine.docs.isNotEmpty) mine = qMine.docs.first;
+      } catch (_) {
+        // falls Index fehlt: dann skip (keine Crashes)
+      }
+
+      // 4) rand nachschreiben für Zukunft (nur die geladenen)
       await _ensureRandForDocs(docs);
 
-      docs.shuffle(); // damit es wirklich random wirkt
+      // 5) Zusammenbauen:
+      // - random 10
+      // - eigenes Feedback oben hinzufügen, wenn nicht bereits drin
+      final ids = docs.map((d) => d.id).toSet();
+      final result = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
+      if (mine != null && !ids.contains(mine.id)) {
+        result.add(mine);
+      }
+
+      docs.shuffle();
+      result.addAll(docs.take(10));
+
+      if (!mounted) return;
       setState(() {
-        _feedbackDocs = docs.take(10).toList(); // ✅ exakt max 10
+        _feedbackDocs = result;
         _isLoadingFeedback = false;
       });
     } catch (_) {
+      if (!mounted) return;
       setState(() {
         _feedbackError = true;
         _isLoadingFeedback = false;
@@ -199,32 +266,36 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     }
   }
 
-  // Quota
-  Future<void> _refreshQuota24h() async {
+  // Quota (Reads reduzieren) -> eigenes Doc in feedback_quota/{userKey}
+  Future<void> _refreshQuota24h({bool force = false}) async {
     _ticker?.cancel();
 
-    final name = _nameController.text.trim();
-    if (name.isEmpty) {
-      setState(() {
-        _usedInWindow = 0;
-        _lockUntilLocal = null;
-      });
+    final nowLocal = DateTime.now();
+    if (!force && nowLocal.difference(_lastQuotaFetchLocal) < _quotaMinInterval) {
+      _configureTicker();
+      return;
+    }
+    _lastQuotaFetchLocal = nowLocal;
+
+    if (_userKey.isEmpty) {
+      _usedInWindow = 0;
+      _lockUntilLocal = null;
       _isLockedVN.value = false;
       _remainingVN.value = Duration.zero;
+      if (mounted) setState(() {});
       return;
     }
 
     try {
-      final docRef = FirebaseFirestore.instance
-          .collection("feedbacks")
-          .doc(_docIdForName(name));
+      final docRef = FirebaseFirestore.instance.collection("feedback_quota").doc(_userKey);
       final snap = await docRef.get();
 
       final nowUtc = _nowUtc();
       final windowStartUtc = nowUtc.subtract(kWindow);
 
-      List<DateTime> subsUtc = [];
       final data = snap.data();
+      List<DateTime> subsUtc = [];
+
       if (data != null) {
         final raw = (data['submissions'] as List?) ?? const [];
         for (final v in raw) {
@@ -243,19 +314,17 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         lockUntil = subsUtc.first.add(kWindow).toLocal();
       }
 
-      setState(() {
-        _usedInWindow = subsUtc.length.clamp(0, kWindowLimit);
-        _lockUntilLocal = lockUntil;
-      });
+      _usedInWindow = subsUtc.length.clamp(0, kWindowLimit);
+      _lockUntilLocal = lockUntil;
 
       _configureTicker();
+      if (mounted) setState(() {});
     } catch (_) {
-      setState(() {
-        _usedInWindow = 0;
-        _lockUntilLocal = null;
-      });
+      _usedInWindow = 0;
+      _lockUntilLocal = null;
       _isLockedVN.value = false;
       _remainingVN.value = Duration.zero;
+      if (mounted) setState(() {});
     }
   }
 
@@ -277,7 +346,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         _isLockedVN.value = false;
         _remainingVN.value = Duration.zero;
         _lockUntilLocal = null;
-        _refreshQuota24h();
+        _refreshQuota24h(force: true);
       } else {
         _remainingVN.value = rem;
       }
@@ -288,39 +357,45 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   Future<void> _reloadAll() async {
-    await _refreshQuota24h();
-    await _loadFeedbacks(); // ✅ lädt jetzt 10 random, zuverlässig
+    await Future.wait([
+      _refreshQuota24h(force: true),
+      _loadFeedbacks(),
+    ]);
   }
 
-  // Senden
+  // Senden (jede Nachricht als eigenes Doc + Quota separat)
   Future<void> _sendFeedback() async {
-    final name = _nameController.text.trim();
-    final feedbackText = _feedbackController.text.trim();
+    if (_sendingVN.value) return;
 
+    final feedbackText = _feedbackController.text.trim();
     if (feedbackText.isEmpty) {
       HapticFeedback.heavyImpact();
       return;
     }
-    if (name.isEmpty) {
-      HapticFeedback.heavyImpact();
-      return;
-    }
 
-    await _refreshQuota24h();
+    await _refreshQuota24h(force: false);
     if (_lockUntilLocal != null) {
       HapticFeedback.heavyImpact();
       return;
     }
 
-    final docRef = FirebaseFirestore.instance
-        .collection("feedbacks")
-        .doc(_docIdForName(name));
+    if (_userKey.isEmpty) {
+      HapticFeedback.heavyImpact();
+      return;
+    }
+
+    _sendingVN.value = true;
+
+    final quotaRef = FirebaseFirestore.instance.collection("feedback_quota").doc(_userKey);
+    final feedbackRef = FirebaseFirestore.instance.collection("feedbacks").doc(); // auto-id
 
     try {
       await FirebaseFirestore.instance.runTransaction((tx) async {
         final nowUtc = _nowUtc();
-        final snap = await tx.get(docRef);
-        final data = snap.data() as Map<String, dynamic>?;
+
+        // Quota lesen
+        final quotaSnap = await tx.get(quotaRef);
+        final data = quotaSnap.data() as Map<String, dynamic>?;
 
         List<DateTime> subsUtc = [];
         if (data != null) {
@@ -338,35 +413,42 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         subsUtc = subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
 
         if (subsUtc.length >= kWindowLimit) {
-          throw FirebaseException(
-            plugin: 'cloud_firestore',
-            code: 'resource-exhausted',
-          );
+          throw FirebaseException(plugin: 'cloud_firestore', code: 'resource-exhausted');
         }
 
         final newSubs = [...subsUtc, nowUtc];
 
+        // Quota schreiben
         tx.set(
-          docRef,
+          quotaRef,
           {
-            "userName": name,
-            "message": feedbackText,
-            "timestamp": FieldValue.serverTimestamp(),
             "submissions": newSubs.map((d) => Timestamp.fromDate(d)).toList(),
-
-            // ✅ rand immer setzen (für Random-Query)
-            "rand": Random().nextDouble(),
+            "updatedAt": FieldValue.serverTimestamp(),
           },
           SetOptions(merge: true),
+        );
+
+        // Feedback schreiben (eigenes Doc)
+        tx.set(
+          feedbackRef,
+          {
+            "userKey": _userKey,
+            "userName": _displayName(),
+            "message": feedbackText,
+            "timestamp": FieldValue.serverTimestamp(),
+            "rand": Random().nextDouble(),
+          },
         );
       });
 
       _feedbackController.clear();
       HapticFeedback.lightImpact();
-      await _refreshQuota24h();
-      await _loadFeedbacks(); // ✅ lädt jetzt 10 random
 
-      // kurzer grüner Flash
+      await Future.wait([
+        _refreshQuota24h(force: true),
+        _loadFeedbacks(),
+      ]);
+
       if (mounted) {
         setState(() => _sentFlash = true);
         Future.delayed(const Duration(milliseconds: 900), () {
@@ -375,6 +457,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       }
     } catch (_) {
       HapticFeedback.heavyImpact();
+      await _refreshQuota24h(force: true);
+    } finally {
+      _sendingVN.value = false;
     }
   }
 
@@ -385,13 +470,17 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       elevation: 0,
       centerTitle: true,
       toolbarHeight: 64,
-      leading: IconButton(
+      leading: widget.openedFromMenu
+          ? IconButton(
         tooltip: "Zurück",
         icon: const Icon(Icons.arrow_back, color: _accent),
         onPressed: () {
-          Navigator.pop(context);
+          HapticFeedback.selectionClick();
+          Navigator.of(context).maybePop();
         },
-      ),
+      )
+          : null,
+      automaticallyImplyLeading: false,
       title: const Text(
         "Feedback",
         style: TextStyle(color: _text, fontWeight: FontWeight.w800, fontSize: 22),
@@ -458,26 +547,27 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     required String message,
     required String user,
     required String date,
+    required bool isMine,
   }) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _panelBorder, width: 1),
+        border: Border.all(color: isMine ? _ok : _panelBorder, width: isMine ? 1.2 : 1),
       ),
       child: ListTile(
-        leading: const CircleAvatar(
+        leading: CircleAvatar(
           radius: 18,
           backgroundColor: Colors.white12,
-          child: Icon(Icons.feedback, color: _accent, size: 18),
+          child: Icon(isMine ? Icons.person : Icons.feedback, color: isMine ? _ok : _accent, size: 18),
         ),
         title: Text(
           message,
           style: const TextStyle(color: _text, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         subtitle: Text(
-          "Von: $user",
+          isMine ? "Von: $user (du)" : "Von: $user",
           style: const TextStyle(color: _muted),
         ),
         trailing: Text(
@@ -523,7 +613,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     ),
                   ),
                   textInputAction: TextInputAction.newline,
-                  onChanged: (_) => setState(() {}),
                 ),
               ),
             ),
@@ -533,22 +622,39 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               builder: (_, locked, __) {
                 return ValueListenableBuilder<Duration>(
                   valueListenable: _remainingVN,
-                  builder: (_, rem, __) => ElevatedButton(
-                    onPressed: (locked || _feedbackController.text.trim().isEmpty)
-                        ? null
-                        : _sendFeedback,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: sendColor,
-                      disabledBackgroundColor: Colors.white12,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: Text(
-                      locked ? _fmtDur(rem) : "Senden",
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
+                  builder: (_, rem, __) {
+                    return ValueListenableBuilder<bool>(
+                      valueListenable: _sendingVN,
+                      builder: (_, sending, __) {
+                        return ValueListenableBuilder<bool>(
+                          valueListenable: _canSendVN,
+                          builder: (_, canSend, __) {
+                            final disabled = locked || sending || !canSend;
+                            return ElevatedButton(
+                              onPressed: disabled ? null : _sendFeedback,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: sendColor,
+                                disabledBackgroundColor: Colors.white12,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: sending
+                                  ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                                  : Text(
+                                locked ? _fmtDur(rem) : "Senden",
+                                style: const TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
                 );
               },
             ),
@@ -560,38 +666,32 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   Widget _buildFeedbackList() {
     if (_isLoadingFeedback) {
-      return const Center(
-        child: CircularProgressIndicator(color: _accent),
-      );
+      return const Center(child: CircularProgressIndicator(color: _accent));
     }
     if (_feedbackError) {
       return const Center(
-        child: Text(
-          "Fehler beim Laden",
-          style: TextStyle(color: _accent),
-        ),
+        child: Text("Fehler beim Laden", style: TextStyle(color: _accent)),
       );
     }
     if (_feedbackDocs.isEmpty) {
       return const Center(
-        child: Text(
-          "Noch kein Feedback vorhanden",
-          style: TextStyle(color: _muted),
-        ),
+        child: Text("Noch kein Feedback vorhanden", style: TextStyle(color: _muted)),
       );
     }
 
     return ListView.builder(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 100, top: 8),
-      itemCount: _feedbackDocs.length, // ✅ max 10
+      itemCount: _feedbackDocs.length,
       itemBuilder: (context, i) {
-        final raw = _feedbackDocs[i].data() as Map<String, dynamic>;
+        final raw = _feedbackDocs[i].data();
         final msg = (raw["message"] as String?) ?? "";
         final user = (raw["userName"] as String?) ?? "Unbekannt";
+        final key = (raw["userKey"] as String?) ?? "";
         final ts = raw["timestamp"] as Timestamp?;
         final date = ts == null ? "—" : _fmt(ts.toDate());
-        return _messageTile(message: msg, user: user, date: date);
+        final isMine = key.isNotEmpty && key == _userKey;
+        return _messageTile(message: msg, user: user, date: date, isMine: isMine);
       },
     );
   }
@@ -599,7 +699,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      extendBodyBehindAppBar: false,
       backgroundColor: _bgTop,
       appBar: _appBar(),
       body: Stack(
@@ -618,9 +717,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           Column(
             children: [
               _quotaBanner(),
-              Expanded(
-                child: _buildFeedbackList(),
-              ),
+              Expanded(child: _buildFeedbackList()),
               _inputBar(),
             ],
           ),

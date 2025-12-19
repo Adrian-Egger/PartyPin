@@ -3,10 +3,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../Services/age_services.dart';
 import 'birthday_screen.dart';
-import 'party_map_screen.dart';
 import 'create_account_screen.dart';
 import 'selection_screen.dart';
 import 'nutzungsbedinungen.dart';
+import 'home_shell.dart'; // ✅ NEU
 
 class AppStartGate extends StatefulWidget {
   const AppStartGate({super.key});
@@ -69,7 +69,7 @@ class _AppStartGateState extends State<AppStartGate>
       }
 
       // 3) Age Sync + Birthday (darf NIE blockieren)
-      final username = prefs.getString('currentUsername') ?? '';
+      final username = (prefs.getString('currentUsername') ?? '').trim();
       if (username.isNotEmpty) {
         try {
           final result = await AgeService.syncAgeAndCheckBirthday(docId: username)
@@ -89,7 +89,7 @@ class _AppStartGateState extends State<AppStartGate>
             }
           }
         } catch (_) {
-          // Firestore/Network/DocId falsch → wir ignorieren und machen normal weiter
+          // Firestore/Network/DocId falsch → ignorieren
         }
       }
 
@@ -107,10 +107,9 @@ class _AppStartGateState extends State<AppStartGate>
         return;
       }
 
-      // 5) Alles erfüllt → Karte
-      _go(const PartyMapScreen());
+      // 5) Alles erfüllt → ✅ HomeShell (BottomNav bleibt permanent)
+      _go(const HomeShell());
     } catch (_) {
-      // Notfall-Fallback: nie im Loader hängen
       if (!mounted) return;
       _go(const SelectionScreen());
     }

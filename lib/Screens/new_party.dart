@@ -1,6 +1,5 @@
 // lib/Screens/new_party.dart
 import 'dart:async';
-import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +11,11 @@ import '../Services/geocoding_services.dart';
 import 'map_picker_screen.dart';
 import '../Social/friends_model.dart';
 import '../Screens/exclude_friends.dart';
+
+// ✅ NEU: BottomNav Targets
+import '../Screens/party_map_screen.dart';
+import '../Screens/feedback_screen.dart';
+import '../Social/friends_view.dart';
 
 class NewPartyScreen extends StatefulWidget {
   final Map<String, dynamic>? existingData;
@@ -30,7 +34,8 @@ class NewPartyScreen extends StatefulWidget {
   State<NewPartyScreen> createState() => _NewPartyScreenState();
 }
 
-class _NewPartyScreenState extends State<NewPartyScreen> {
+class _NewPartyScreenState extends State<NewPartyScreen>
+    with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _scrollCtrl = ScrollController();
 
@@ -63,8 +68,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   double? _pickedLat;
   double? _pickedLng;
 
-  Timer? _draftTimer;
-
   // ===========================
   // Friends-only + Excludes (Only4Friends steuert das)
   // ===========================
@@ -83,6 +86,11 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
   static const _accent = Color(0xFFFF3B30);
   static const _secondary = _accent; // alles rot
 
+  // ✅ NEU: BottomNav Index (0=Feedback, 1=Map, 2=Freunde, 3=Neue Party)
+  int _currentIndex = 3;
+
+  // ✅ FIX: Legal-Consent nur hier (NewPartyScreen) anzeigen
+  bool _legalGateHandled = false;
 
   void _unfocus() => FocusManager.instance.primaryFocus?.unfocus();
 
@@ -92,13 +100,34 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     _loadHostData();
     _preloadExisting();
     _wireListeners();
-    _maybeOfferDraftRestore();
-    _startAutosave();
+
+    // ✅ Draft/Entwurf komplett deaktiviert:
+    // - keine Autosave-Timer
+    // - kein SnackBar "Entwurf gefunden"
+    // - keine SharedPreferences draft_newparty Nutzung
+    _deleteDraftSilently();
+
+    // ✅ FIX: Legal-Consent (Popup) nur im NewPartyScreen, nicht im PartyMapScreen
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+
+      final isEditing = widget.existingData != null;
+      if (isEditing) return;
+
+      if (_legalGateHandled) return;
+      _legalGateHandled = true;
+
+      final ok = await _ensureLegalConsentBeforeCreating();
+      if (!ok) {
+        if (!mounted) return;
+        _goToMapAndPop(updated: false);
+        return;
+      }
+    });
   }
 
   @override
   void dispose() {
-    _draftTimer?.cancel();
     _scrollCtrl.dispose();
 
     _nameNode.dispose();
@@ -118,6 +147,14 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     super.dispose();
   }
 
+  // ✅ Draft/Entwurf endgültig weg: auch alte Reste löschen
+  Future<void> _deleteDraftSilently() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove('draft_newparty');
+    } catch (_) {}
+  }
+
   void _preloadExisting() {
     if (widget.existingData == null) return;
     final data = widget.existingData!;
@@ -134,7 +171,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     _isFreeEntry = (data['price'] ?? 0) == 0;
     _addressController.text = data['address'] ?? '';
 
-    // --- NEU: bevorzugt startTime verwenden ---
+    // --- bevorzugt startTime verwenden ---
     if (data['startTime'] is Timestamp) {
       final dt = (data['startTime'] as Timestamp).toDate();
       _selectedDate = DateTime(dt.year, dt.month, dt.day);
@@ -158,7 +195,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     }
 
     _partyType = data['type'] ?? 'Open';
-    _minAgeController.text = (data['minAge'] != null) ? data['minAge'].toString() : '';
+    _minAgeController.text =
+    (data['minAge'] != null) ? data['minAge'].toString() : '';
     _pickedLat = (data['lat'] as num?)?.toDouble();
     _pickedLng = (data['lng'] as num?)?.toDouble();
 
@@ -210,74 +248,107 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     });
   }
 
-  void _startAutosave() {
-    _draftTimer = Timer.periodic(const Duration(seconds: 2), (_) => _saveDraft());
+  // ✅ FIX: Consent nur hier, einmalig gespeichert
+  Future<bool> _ensureLegalConsentBeforeCreating() async {
+    final prefs = await SharedPreferences.getInstance();
+    final alreadyAccepted = prefs.getBool('legal_consent_create_v1') ?? false;
+    if (alreadyAccepted) return true;
+
+    final acceptedNow = await _showLegalGateDialog();
+    if (acceptedNow) {
+      await prefs.setBool('legal_consent_create_v1', true);
+      await prefs.setString(
+          'legal_consent_create_v1_date', DateTime.now().toIso8601String());
+    }
+    return acceptedNow;
   }
 
-  Future<void> _saveDraft() async {
-    final p = await SharedPreferences.getInstance();
-    final data = {
-      'name': _nameController.text,
-      'desc': _descriptionController.text,
-      'addr': _addressController.text,
-      'guest': _guestLimitController.text,
-      'free': _isFreeEntry,
-      'unl': _isUnlimitedGuests,
-      'price': _priceController.text,
-      'age': _minAgeController.text,
-      'date': _selectedDate?.toIso8601String(),
-      'time': _timeController.text,
-      'type': _partyType,
-      'plat': _pickedLat,
-      'plng': _pickedLng,
-      'friendsOnly': _friendsOnly,
-      'excludedFriends': _excludedFriends,
-    };
-    p.setString('draft_newparty', jsonEncode(data));
-  }
+  Future<bool> _showLegalGateDialog() async {
+    bool checkbox = false;
+    bool accepted = false;
 
-  Future<void> _maybeOfferDraftRestore() async {
-    final p = await SharedPreferences.getInstance();
-    final raw = p.getString('draft_newparty');
-    if (raw == null || raw.isEmpty) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Entwurf gefunden. Wiederherstellen?'),
-          action: SnackBarAction(
-            label: 'LADEN',
-            onPressed: () {
-              final d = jsonDecode(raw) as Map<String, dynamic>;
-              _nameController.text = d['name'] ?? '';
-              _descriptionController.text = d['desc'] ?? '';
-              _addressController.text = d['addr'] ?? '';
-              _guestLimitController.text = d['guest'] ?? '';
-              _isFreeEntry = d['free'] == true;
-              _isUnlimitedGuests = d['unl'] == true;
-              _priceController.text = d['price'] ?? '';
-              _minAgeController.text = d['age'] ?? '';
-              final ds = d['date'] as String?;
-              if (ds != null) _selectedDate = DateTime.tryParse(ds);
-              _timeController.text = d['time'] ?? '';
-              if ((_timeController.text).contains(':')) {
-                final parts = _timeController.text.split(':');
-                _selectedTime = TimeOfDay(
-                  hour: int.tryParse(parts[0]) ?? 0,
-                  minute: int.tryParse(parts[1]) ?? 0,
-                );
-              }
-              _partyType = d['type'] ?? 'Open';
-              _pickedLat = (d['plat'] as num?)?.toDouble();
-              _pickedLng = (d['plng'] as num?)?.toDouble();
-              _friendsOnly = d['friendsOnly'] == true;
-              final ex = d['excludedFriends'];
-              if (ex is List) _excludedFriends = ex.cast<String>();
-              setState(() {});
-            },
-          ),
-        ),
-      );
-    });
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSB) {
+            return AlertDialog(
+              backgroundColor: Colors.grey[900],
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              title: Row(
+                children: const [
+                  Icon(Icons.gavel_outlined, color: Colors.redAccent),
+                  SizedBox(width: 8),
+                  Text("Rechtlicher Hinweis", style: TextStyle(color: Colors.white)),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      "Das Erstellen von Fake-Partys ist VERBOTEN. Du bestätigst, dass alle Angaben wahrheitsgemäß sind und die Veranstaltung wirklich stattfindet.",
+                      style: TextStyle(
+                        color: Colors.white70,
+                        height: 1.35,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    CheckboxListTile(
+                      value: checkbox,
+                      onChanged: (v) => setSB(() => checkbox = v ?? false),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      activeColor: Colors.redAccent,
+                      title: const Text(
+                        "Ich habe den Hinweis gelesen und stimme zu.",
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ],
+                ),
+              ),
+              actionsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              actions: [
+                OutlinedButton.icon(
+                  onPressed: () {
+                    accepted = false;
+                    Navigator.of(ctx).pop();
+                  },
+                  icon: const Icon(Icons.close, color: Colors.redAccent),
+                  label: const Text("Abbrechen",
+                      style: TextStyle(color: Colors.redAccent)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.redAccent),
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                if (checkbox)
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      accepted = true;
+                      Navigator.of(ctx).pop();
+                    },
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: const Text("Fertig", style: TextStyle(color: Colors.white)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 18),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    return accepted;
   }
 
   String? _validateRequired(String? v, {String label = "Pflichtfeld"}) {
@@ -298,7 +369,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       labelStyle: const TextStyle(color: _textSecondary),
       hintText: hint,
       hintStyle: const TextStyle(color: _textSecondary),
-      // Icons farblich: Inputs in _secondary
       prefixIcon: icon != null ? Icon(icon, color: _secondary) : null,
       suffixIcon: suffix,
       filled: true,
@@ -342,7 +412,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: _panelBorder),
                 ),
-                // Section-Icons farblich: _accent
                 child: Icon(icon, color: _accent, size: 16),
               ),
               const SizedBox(width: 8),
@@ -402,9 +471,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     );
   }
 
-  // ===========================
-  // Party-Type Chip (Only4Friends steuert FriendsOnly)
-  // ===========================
   Widget _typeChip({
     required String value,
     required String label,
@@ -578,7 +644,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     final lower = name.toLowerCase().trim();
     final spaceToUnderscore = lower.replaceAll(RegExp(r'\s+'), '_');
     final cleaned = spaceToUnderscore.replaceAll(RegExp(r'[^a-z0-9_\-]'), '_');
-    final trimmed = cleaned.replaceAll(RegExp(r'^_+'), '').replaceAll(RegExp(r'_+$'), '');
+    final trimmed =
+    cleaned.replaceAll(RegExp(r'^_+'), '').replaceAll(RegExp(r'_+$'), '');
     return trimmed.isEmpty ? 'party' : trimmed;
   }
 
@@ -662,12 +729,14 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     final timeOfDay = _selectedTime!;
     String time = _timeController.text.trim();
     if (time.isEmpty) {
-      time = "${timeOfDay.hour.toString().padLeft(2, '0')}:${timeOfDay.minute.toString().padLeft(2, '0')}";
+      time =
+      "${timeOfDay.hour.toString().padLeft(2, '0')}:${timeOfDay.minute.toString().padLeft(2, '0')}";
     }
     final minAge = int.tryParse(_minAgeController.text.trim());
     final type = _partyType;
 
-    final startDateTime = DateTime(date.year, date.month, date.day, timeOfDay.hour, timeOfDay.minute);
+    final startDateTime =
+    DateTime(date.year, date.month, date.day, timeOfDay.hour, timeOfDay.minute);
 
     double? lat = _pickedLat;
     double? lng = _pickedLng;
@@ -754,6 +823,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
         await ref.set({'docId': savedDocId}, SetOptions(merge: true));
       }
 
+      // ✅ Draft-Reste beim erfolgreichen Speichern auch weg
+      await _deleteDraftSilently();
+
       HapticFeedback.mediumImpact();
       _goToMapAndPop(updated: true, payload: {
         'data': {...baseData, 'docId': savedDocId},
@@ -762,7 +834,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
         'docId': savedDocId,
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Fehler beim Speichern: $e")));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text("Fehler beim Speichern: $e")));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -774,10 +847,45 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
     setState(() => _isLoading = true);
     try {
       await FirebaseFirestore.instance.collection('Party').doc(widget.docId).delete();
+      await _deleteDraftSilently();
       _goToMapAndPop(updated: true, payload: {'deleted': true, 'docId': widget.docId});
     } catch (_) {
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _onBottomNavTapped(int index) async {
+    if (index == _currentIndex) return;
+
+    setState(() => _currentIndex = index);
+
+    if (index == 3) return;
+
+    if (index == 1) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const PartyMapScreen()),
+      );
+      return;
+    }
+
+    if (index == 0) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const FeedbackScreen()),
+      );
+      return;
+    }
+
+    if (index == 2) {
+      final prefs = await SharedPreferences.getInstance();
+      final me = (prefs.getString('username') ?? 'unknown_user').trim();
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => FriendsScreen(currentUsername: me)),
+      );
+      return;
     }
   }
 
@@ -830,7 +938,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
             Expanded(
               child: ElevatedButton.icon(
                 onPressed: _isLoading ? null : _saveParty,
-                // Icon farblich + Text unten NICHT blau, sondern weiß
                 icon: const Icon(Icons.add_location_alt_outlined, color: Colors.white),
                 label: Text(
                   isEditing ? "Aktualisieren" : "Speichern",
@@ -908,7 +1015,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                   ),
               ],
             ),
-            // ====== Tastatur: überall wegklickbar + beim Scrollen weg ======
+            bottomSheet: stickyBar,
             body: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTap: _unfocus,
@@ -923,7 +1030,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                 child: SingleChildScrollView(
                   controller: _scrollCtrl,
                   keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 220),
                   child: Form(
                     key: _formKey,
                     autovalidateMode: AutovalidateMode.onUserInteraction,
@@ -941,8 +1048,10 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                 onFieldSubmitted: (_) => _descNode.requestFocus(),
                                 maxLength: 40,
                                 style: const TextStyle(color: _textPrimary),
-                                decoration: _dec("Party Name", icon: Icons.title, maxLength: 40),
-                                validator: (v) => _validateRequired(v, label: "Party Name"),
+                                decoration: _dec("Party Name",
+                                    icon: Icons.title, maxLength: 40),
+                                validator: (v) =>
+                                    _validateRequired(v, label: "Party Name"),
                               ),
                               const SizedBox(height: 12),
                               TextFormField(
@@ -954,8 +1063,10 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                 maxLines: null,
                                 maxLength: 500,
                                 style: const TextStyle(color: _textPrimary),
-                                decoration: _dec("Beschreibung", icon: Icons.notes, maxLength: 500),
-                                validator: (v) => _validateRequired(v, label: "Beschreibung"),
+                                decoration: _dec("Beschreibung",
+                                    icon: Icons.notes, maxLength: 500),
+                                validator: (v) =>
+                                    _validateRequired(v, label: "Beschreibung"),
                               ),
                             ],
                           ),
@@ -975,7 +1086,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                       textInputAction: TextInputAction.next,
                                       onFieldSubmitted: (_) => _priceNode.requestFocus(),
                                       keyboardType: TextInputType.number,
-                                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                      inputFormatters: [
+                                        FilteringTextInputFormatter.digitsOnly
+                                      ],
                                       enabled: !_isUnlimitedGuests,
                                       style: const TextStyle(color: _textPrimary),
                                       decoration: _dec(
@@ -984,7 +1097,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                         icon: Icons.groups,
                                         errorText: (!_isUnlimitedGuests &&
                                             _triedSubmit &&
-                                            (int.tryParse(_guestLimitController.text.trim()) ==
+                                            (int.tryParse(_guestLimitController.text
+                                                .trim()) ==
                                                 null))
                                             ? "Gästelimit muss eine Zahl sein."
                                             : null,
@@ -1017,8 +1131,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                       focusNode: _priceNode,
                                       textInputAction: TextInputAction.next,
                                       onFieldSubmitted: (_) => _ageNode.requestFocus(),
-                                      keyboardType:
-                                      const TextInputType.numberWithOptions(decimal: true),
+                                      keyboardType: const TextInputType.numberWithOptions(
+                                          decimal: true),
                                       inputFormatters: [
                                         FilteringTextInputFormatter.allow(
                                           RegExp(r'^\d*[,]?\d{0,2}$|^\d*[.]?\d{0,2}$'),
@@ -1065,7 +1179,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                 textInputAction: TextInputAction.next,
                                 onFieldSubmitted: (_) => _addrNode.requestFocus(),
                                 keyboardType: TextInputType.number,
-                                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly
+                                ],
                                 style: const TextStyle(color: _textPrimary),
                                 decoration: _dec(
                                   "Mindestalter",
@@ -1128,18 +1244,22 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                         backgroundColor: _card,
                                         foregroundColor: _textPrimary,
                                         elevation: 0,
-                                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 14, horizontal: 14),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(14)),
                                       ),
                                       onPressed: _pickDate,
-                                      icon: const Icon(Icons.calendar_today, color: _secondary),
+                                      icon: const Icon(Icons.calendar_today,
+                                          color: _secondary),
                                       label: AnimatedSwitcher(
                                         duration: const Duration(milliseconds: 150),
                                         child: Text(
                                           _selectedDate == null
                                               ? "Datum wählen"
                                               : "${_selectedDate!.day.toString().padLeft(2, '0')}.${_selectedDate!.month.toString().padLeft(2, '0')}.${_selectedDate!.year}",
-                                          key: ValueKey(_selectedDate?.toIso8601String() ?? 'none'),
+                                          key: ValueKey(
+                                              _selectedDate?.toIso8601String() ?? 'none'),
                                         ),
                                       ),
                                     ),
@@ -1151,16 +1271,23 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                         backgroundColor: _card,
                                         foregroundColor: _textPrimary,
                                         elevation: 0,
-                                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 14, horizontal: 14),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(14)),
                                       ),
                                       onPressed: _pickTime,
-                                      icon: const Icon(Icons.access_time, color: _secondary),
+                                      icon: const Icon(Icons.access_time,
+                                          color: _secondary),
                                       label: AnimatedSwitcher(
                                         duration: const Duration(milliseconds: 150),
                                         child: Text(
-                                          (_selectedTime == null) ? "Uhrzeit wählen" : _timeController.text,
-                                          key: ValueKey(_timeController.text.isEmpty ? 'none' : _timeController.text),
+                                          (_selectedTime == null)
+                                              ? "Uhrzeit wählen"
+                                              : _timeController.text,
+                                          key: ValueKey(_timeController.text.isEmpty
+                                              ? 'none'
+                                              : _timeController.text),
                                         ),
                                       ),
                                     ),
@@ -1174,16 +1301,21 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                   _quickTimeChip("Heute 22:00", () {
                                     _unfocus();
                                     final now = DateTime.now();
-                                    _selectedDate = DateTime(now.year, now.month, now.day);
-                                    _selectedTime = const TimeOfDay(hour: 22, minute: 0);
+                                    _selectedDate =
+                                        DateTime(now.year, now.month, now.day);
+                                    _selectedTime =
+                                    const TimeOfDay(hour: 22, minute: 0);
                                     _timeController.text = "22:00";
                                     setState(() {});
                                   }),
                                   _quickTimeChip("Morgen 21:00", () {
                                     _unfocus();
-                                    final now = DateTime.now().add(const Duration(days: 1));
-                                    _selectedDate = DateTime(now.year, now.month, now.day);
-                                    _selectedTime = const TimeOfDay(hour: 21, minute: 0);
+                                    final now =
+                                    DateTime.now().add(const Duration(days: 1));
+                                    _selectedDate =
+                                        DateTime(now.year, now.month, now.day);
+                                    _selectedTime =
+                                    const TimeOfDay(hour: 21, minute: 0);
                                     _timeController.text = "21:00";
                                     setState(() {});
                                   }),
@@ -1193,7 +1325,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                     final diff = (5 - now.weekday + 7) % 7;
                                     final d = now.add(Duration(days: diff == 0 ? 7 : diff));
                                     _selectedDate = DateTime(d.year, d.month, d.day);
-                                    _selectedTime = const TimeOfDay(hour: 22, minute: 0);
+                                    _selectedTime =
+                                    const TimeOfDay(hour: 22, minute: 0);
                                     _timeController.text = "22:00";
                                     setState(() {});
                                   }),
@@ -1202,12 +1335,14 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                               if (_triedSubmit && _selectedDate == null)
                                 const Padding(
                                   padding: EdgeInsets.only(top: 8),
-                                  child: Text("Bitte ein Datum wählen.", style: TextStyle(color: Colors.orangeAccent)),
+                                  child: Text("Bitte ein Datum wählen.",
+                                      style: TextStyle(color: Colors.orangeAccent)),
                                 ),
                               if (_triedSubmit && _selectedTime == null)
                                 const Padding(
                                   padding: EdgeInsets.only(top: 4),
-                                  child: Text("Bitte eine Uhrzeit wählen.", style: TextStyle(color: Colors.orangeAccent)),
+                                  child: Text("Bitte eine Uhrzeit wählen.",
+                                      style: TextStyle(color: Colors.orangeAccent)),
                                 ),
                             ],
                           ),
@@ -1223,16 +1358,26 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                 spacing: 10,
                                 runSpacing: 8,
                                 children: [
-                                  _typeChip(value: "Open", label: "Open", icon: Icons.lock_open_rounded),
-                                  _typeChip(value: "Closed", label: "Closed", icon: Icons.lock_rounded),
-                                  _typeChip(value: "Only4Friends", label: "Only4Friends", icon: Icons.people_alt),
+                                  _typeChip(
+                                      value: "Open",
+                                      label: "Open",
+                                      icon: Icons.lock_open_rounded),
+                                  _typeChip(
+                                      value: "Closed",
+                                      label: "Closed",
+                                      icon: Icons.lock_rounded),
+                                  _typeChip(
+                                      value: "Only4Friends",
+                                      label: "Only4Friends",
+                                      icon: Icons.people_alt),
                                 ],
                               ),
                               if (_partyType == "Only4Friends") ...[
                                 const SizedBox(height: 10),
                                 OutlinedButton.icon(
                                   onPressed: _openExcludeFriendsDialog,
-                                  icon: const Icon(Icons.person_off, size: 18, color: _secondary),
+                                  icon: const Icon(Icons.person_off,
+                                      size: 18, color: _secondary),
                                   label: Text(
                                     _excludedFriends.isEmpty
                                         ? "Freunde ausschließen"
@@ -1242,14 +1387,16 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                                   style: OutlinedButton.styleFrom(
                                     side: const BorderSide(color: _panelBorder),
                                     padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14)),
                                   ),
                                 ),
                                 if (_excludedFriends.isNotEmpty) ...[
                                   const SizedBox(height: 6),
                                   Text(
                                     "Ausgeschlossen: ${_excludedFriends.join(', ')}",
-                                    style: const TextStyle(color: _textSecondary, fontSize: 12),
+                                    style: const TextStyle(
+                                        color: _textSecondary, fontSize: 12),
                                   ),
                                 ],
                               ],
@@ -1262,7 +1409,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                 ),
               ),
             ),
-            bottomNavigationBar: stickyBar,
           ),
           if (_isLoading)
             Positioned.fill(
@@ -1271,7 +1417,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   color: Colors.black.withOpacity(0.35),
-                  child: const Center(child: CircularProgressIndicator(strokeWidth: 3)),
+                  child:
+                  const Center(child: CircularProgressIndicator(strokeWidth: 3)),
                 ),
               ),
             ),
@@ -1286,7 +1433,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> {
       onPressed: onPressed,
       backgroundColor: _card,
       shape: StadiumBorder(side: BorderSide(color: _panelBorder)),
-      labelStyle: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
+      labelStyle:
+      const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
     );
   }

@@ -1,7 +1,14 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'friends_model.dart';
+
+// ✅ NEU: BottomNav Targets
+import '../Screens/party_map_screen.dart';
+import '../Screens/feedback_screen.dart';
+import '../Screens/new_party.dart';
 
 class FriendsScreen extends StatefulWidget {
   final String currentUsername;
@@ -43,6 +50,9 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   // ✅ Cache: damit „Freunde durchsuchen“ auch nach Vorname/Nachname/Voller Name/Username geht
   final Map<String, _FriendVM> _friendVmCache = {};
+
+  // ✅ NEU: BottomNav Index (0=Feedback, 1=Map, 2=Freunde, 3=Neue Party)
+  int _currentIndex = 2;
 
   @override
   void initState() {
@@ -127,7 +137,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
     if (n.isEmpty) return null;
     final nLower = n.toLowerCase();
     try {
-      final qsLower = await _model.users.where('username_lower', isEqualTo: nLower).limit(1).get();
+      final qsLower =
+      await _model.users.where('username_lower', isEqualTo: nLower).limit(1).get();
       if (qsLower.docs.isNotEmpty) {
         final d = qsLower.docs.first;
         final data = d.data();
@@ -323,9 +334,43 @@ class _FriendsScreenState extends State<FriendsScreen> {
     for (int i = 0; i < others.length; i++) {
       order[others[i].toLowerCase()] = i;
     }
-    vms.sort((a, b) => (order[a.username.toLowerCase()] ?? 0).compareTo(order[b.username.toLowerCase()] ?? 0));
+    vms.sort((a, b) => (order[a.username.toLowerCase()] ?? 0)
+        .compareTo(order[b.username.toLowerCase()] ?? 0));
 
     return vms;
+  }
+
+  // ✅ NEU: BottomNav Navigation
+  Future<void> _onBottomNavTapped(int index) async {
+    if (index == _currentIndex) return;
+
+    setState(() => _currentIndex = index);
+
+    if (index == 2) return;
+
+    if (index == 1) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const PartyMapScreen()),
+      );
+      return;
+    }
+
+    if (index == 0) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const FeedbackScreen()),
+      );
+      return;
+    }
+
+    if (index == 3) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const NewPartyScreen()),
+      );
+      return;
+    }
   }
 
   @override
@@ -550,9 +595,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             final all = fSnap.data!;
             final q = filter.trim().toLowerCase();
 
-            final filtered = q.isEmpty
-                ? all
-                : all.where((vm) => vm.searchBlob.contains(q)).toList();
+            final filtered = q.isEmpty ? all : all.where((vm) => vm.searchBlob.contains(q)).toList();
 
             if (filtered.isEmpty) {
               return const _EmptyHint(text: 'Kein Freund gefunden', emoji: '😶');
@@ -703,10 +746,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: _ok,
                                   foregroundColor: Colors.white,
-                                  padding:
-                                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(10)),
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                                 ),
                                 child: const Text(
                                   'AKZEPTIEREN',
@@ -717,8 +758,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                               IconButton(
                                 tooltip: 'Ablehnen',
                                 onPressed: () => _decline(uname, me),
-                                icon: const Icon(Icons.close_rounded,
-                                    color: _err, size: 26),
+                                icon: const Icon(Icons.close_rounded, color: _err, size: 26),
                               ),
                             ],
                           ),
