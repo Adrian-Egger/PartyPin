@@ -154,10 +154,6 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.add),
             label: "Neu",
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person),
-            label: "Profil",
-          ),
         ],
       ),
     );

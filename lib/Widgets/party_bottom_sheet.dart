@@ -76,6 +76,120 @@ class PartyBottomSheet extends StatelessWidget {
 
   final bool isBarAccount;
 
+  // ------------------ TICKETS: TicketDoc + Stream + Preis + Button ------------------
+  String _ticketDocId() {
+    final u = (currentUsername ?? '').trim();
+    if (u.isEmpty) return '';
+    return safeDocId(u);
+  }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _ticketStream() {
+    final id = _ticketDocId();
+    if (id.isEmpty) return const Stream.empty();
+    return FirebaseFirestore.instance
+        .collection('Party')
+        .doc(partyId)
+        .collection('tickets')
+        .doc(id)
+        .snapshots();
+  }
+
+  double _ticketPrice() {
+    final raw = data['price'];
+    if (raw is num) return raw.toDouble();
+    if (raw is String) return double.tryParse(raw.replaceAll(',', '.')) ?? 0.0;
+    return 0.0;
+  }
+
+  Widget _ticketBuyButton(BuildContext context, {required bool show}) {
+    if (!show) return const SizedBox.shrink();
+    if (isHost) return const SizedBox.shrink();
+    if (isBarAccount) return const SizedBox.shrink();
+    if (!isActive) return const SizedBox.shrink();
+
+    final price = _ticketPrice();
+    if (price <= 0) return const SizedBox.shrink();
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _ticketStream(),
+      builder: (context, snap) {
+        final m = snap.data?.data();
+        final status = (m?['status'] ?? 'unpaid').toString(); // unpaid|pending|paid|failed
+        final approvalUrl = (m?['approvalUrl'] ?? '').toString();
+
+        String label;
+        IconData icon;
+        bool enabled = true;
+
+        if (status == 'paid') {
+          label = "✅ Ticket bezahlt";
+          icon = Icons.verified;
+          enabled = false;
+        } else if (status == 'pending') {
+          label = "Weiter zu PayPal";
+          icon = Icons.open_in_new;
+          enabled = approvalUrl.isNotEmpty;
+        } else if (status == 'failed') {
+          label = "Erneut versuchen";
+          icon = Icons.refresh;
+        } else {
+          label = "Ticket mit PayPal kaufen";
+          icon = Icons.payment;
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(52),
+                      backgroundColor: status == 'paid' ? Colors.green : Colors.blueAccent,
+                      foregroundColor: Colors.white,
+                    ),
+                    icon: Icon(icon),
+                    label: Text(label),
+                    onPressed: !enabled
+                        ? null
+                        : () async {
+                      // TODO: Firebase Function call
+                      // - unpaid/failed: createPayPalOrder(partyId) -> schreibt approvalUrl + status=pending
+                      // - pending: öffne approvalUrl
+                      // - nach Rückkehr: capturePayPalOrder(partyId, orderId)
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text("PayPal Flow TODO (status=$status)")),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[850],
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey[700]!),
+                  ),
+                  child: Text(
+                    "${price.toStringAsFixed(2)}€",
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   // ------------------ RATING: sichere Transaction (nur Party + party_hosts) ------------------
   String _hostAggId() {
     final hostUid = ((data['hostUid'] ?? data['hostId']) ?? '').toString().trim();
@@ -103,8 +217,7 @@ class PartyBottomSheet extends StatelessWidget {
     final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
     final raterId = safeDocId(meRaw);
     final ratingRef = partyRef.collection('ratings').doc(raterId);
-    final hostAggRef =
-    FirebaseFirestore.instance.collection('party_hosts').doc(_hostAggId());
+    final hostAggRef = FirebaseFirestore.instance.collection('party_hosts').doc(_hostAggId());
 
     try {
       await FirebaseFirestore.instance.runTransaction((tx) async {
@@ -197,7 +310,6 @@ class PartyBottomSheet extends StatelessWidget {
       );
     }
   }
-
 
   // -------- User ausladen (alle Typen) --------
   Future<void> _confirmKickUser(BuildContext context, String username) async {
@@ -340,7 +452,7 @@ class PartyBottomSheet extends StatelessWidget {
   // ✅ Rating nur erlauben wenn:
   // - Open/Only4Friends: user hat going/maybe
   // - Closed (nicht Only4Friends): user ist approved
-  // - Host: darf NICHT bewerten (sonst fälschbar) -> wenn du willst: ändere auf return _ratingButtons(...)
+  // - Host: darf NICHT bewerten
   Widget _ratingGate(BuildContext context) {
     if (currentUsername == null) return const SizedBox.shrink();
     if (!inRatingWindow) {
@@ -404,8 +516,7 @@ class PartyBottomSheet extends StatelessWidget {
         : (isClosed ? Colors.blueGrey[800]! : Colors.green[800]!);
     final IconData badgeIcon =
     isFriendsOnly ? Icons.group_rounded : (isClosed ? Icons.lock : Icons.public);
-    final String badgeLabel =
-    isFriendsOnly ? "Only4Friends" : (isClosed ? "Closed" : "Open");
+    final String badgeLabel = isFriendsOnly ? "Only4Friends" : (isClosed ? "Closed" : "Open");
 
     Future<void> _confirmAndDeleteParty() async {
       final confirm = await showDialog<bool>(
@@ -618,15 +729,12 @@ class PartyBottomSheet extends StatelessWidget {
             const SizedBox(height: 20),
             const Divider(color: Color(0x33FFFFFF)),
             const SizedBox(height: 12),
-
             if (isHost) ...[
               if (isClosed && !isFriendsOnly)
                 _hostClosedLists(context)
               else
                 _hostOpenLists(context),
-
               const SizedBox(height: 16),
-
               Center(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -668,10 +776,7 @@ class PartyBottomSheet extends StatelessWidget {
                 ),
               ),
             ] else ...[
-              if (!isClosed || isFriendsOnly)
-                _guestOpenActions(context)
-              else
-                _guestClosedActions(context),
+              if (!isClosed || isFriendsOnly) _guestOpenActions(context) else _guestClosedActions(context),
 
               // ✅ Rating (berechtigt + safe transaction)
               if (!isFriendsOnly) ...[
@@ -692,7 +797,6 @@ class PartyBottomSheet extends StatelessWidget {
                 ),
               ],
             ],
-
             const SizedBox(height: 12),
             _buildExpiryInfo(),
           ],
@@ -701,8 +805,11 @@ class PartyBottomSheet extends StatelessWidget {
     );
   }
 
-  // ---------- Guest Open ----------
+  // ---------- Guest Open (Open + Only4Friends) ----------
   Widget _guestOpenActions(BuildContext context) {
+    final typeStr = (data['type'] ?? (isClosed ? 'Closed' : 'Open')).toString();
+    final isFriendsOnly = typeStr == 'Only4Friends';
+
     if (isBarAccount && !isHost) {
       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: comingStream(),
@@ -722,6 +829,7 @@ class PartyBottomSheet extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   _counter("🔔 $cCount kommen · $mCount vielleicht"),
+                  _ticketBuyButton(context, show: isFriendsOnly),
                 ],
               );
             },
@@ -737,103 +845,131 @@ class PartyBottomSheet extends StatelessWidget {
       );
     }
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: rsvpStream(),
-      builder: (context, snap) {
-        final map = snap.data?.data();
-        final status = map == null ? null : map['status'] as String?;
-        final isGoing = status == 'going';
-        final isMaybe = status == 'maybe';
+    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+    final rawId = currentUsername!;
+    final safeId = safeDocId(currentUsername!);
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                backgroundColor: isGoing ? Colors.green : Colors.redAccent,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () async {
-                if (currentUsername == null) return;
-                try {
-                  if (isGoing) {
-                    await onClearRsvp();
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Zusage zurückgezogen.")),
-                    );
-                    recolorOpenMarker(null);
-                  } else {
-                    await onSetRsvp('going');
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Status: Ich komme ✅")),
-                    );
-                    recolorOpenMarker('going');
-                  }
-                } catch (e) {
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("Fehler: $e")),
-                  );
-                }
-              },
-              icon: const Icon(Icons.check_circle),
-              label: const Text("Ich komme"),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                backgroundColor: isMaybe ? Colors.green : Colors.redAccent,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () async {
-                if (currentUsername == null) return;
-                try {
-                  if (isMaybe) {
-                    await onClearRsvp();
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("„Vielleicht“ zurückgezogen.")),
-                    );
-                    recolorOpenMarker(null);
-                  } else {
-                    await onSetRsvp('maybe');
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Status: Ich komme eventuell 👍")),
-                    );
-                    recolorOpenMarker('maybe');
-                  }
-                } catch (e) {
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("Fehler: $e")),
-                  );
-                }
-              },
-              icon: const Icon(Icons.help_outline),
-              label: const Text("Ich komme eventuell"),
-            ),
-            const SizedBox(height: 16),
-            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: comingStream(),
-              builder: (context, cs) {
-                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: maybeStream(),
-                  builder: (context, ms) {
-                    final cCount = (cs.data?.docs ?? []).length;
-                    final mCount = (ms.data?.docs ?? []).length;
-                    return _counter("🔔 $cCount kommen · $mCount vielleicht");
-                  },
-                );
-              },
-            ),
-          ],
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: partyRef.collection('rsvps').doc(rawId).snapshots(),
+      builder: (context, snapRaw) {
+        final rawExists = snapRaw.data?.exists == true;
+        if (rawExists) {
+          final map = snapRaw.data?.data();
+          final status = map == null ? null : map['status'] as String?;
+          return _buildOpenActionsWithStatus(context, status);
+        }
+
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: partyRef.collection('rsvps').doc(safeId).snapshots(),
+          builder: (context, snapSafe) {
+            final map = snapSafe.data?.data();
+            final status = map == null ? null : map['status'] as String?;
+            return _buildOpenActionsWithStatus(context, status);
+          },
         );
       },
+    );
+  }
+
+  Widget _buildOpenActionsWithStatus(BuildContext context, String? status) {
+    final typeStr = (data['type'] ?? (isClosed ? 'Closed' : 'Open')).toString();
+    final isFriendsOnly = typeStr == 'Only4Friends';
+
+    final isGoing = status == 'going';
+    final isMaybe = status == 'maybe';
+
+    final showPay = isFriendsOnly || isGoing;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
+            backgroundColor: isGoing ? Colors.green : Colors.redAccent,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () async {
+            if (currentUsername == null) return;
+            try {
+              if (isGoing) {
+                await onClearRsvp();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Zusage zurückgezogen.")),
+                );
+                recolorOpenMarker(null);
+              } else {
+                await onSetRsvp('going');
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Status: Ich komme ✅")),
+                );
+                recolorOpenMarker('going');
+              }
+            } catch (e) {
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text("Fehler: $e")),
+              );
+            }
+          },
+          icon: const Icon(Icons.check_circle),
+          label: const Text("Ich komme"),
+        ),
+        const SizedBox(height: 10),
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
+            backgroundColor: isMaybe ? Colors.green : Colors.redAccent,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () async {
+            if (currentUsername == null) return;
+            try {
+              if (isMaybe) {
+                await onClearRsvp();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("„Vielleicht“ zurückgezogen.")),
+                );
+                recolorOpenMarker(null);
+              } else {
+                await onSetRsvp('maybe');
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Status: Ich komme eventuell 👍")),
+                );
+                recolorOpenMarker('maybe');
+              }
+            } catch (e) {
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text("Fehler: $e")),
+              );
+            }
+          },
+          icon: const Icon(Icons.help_outline),
+          label: const Text("Ich komme eventuell"),
+        ),
+
+        _ticketBuyButton(context, show: showPay),
+
+        const SizedBox(height: 16),
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: comingStream(),
+          builder: (context, cs) {
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: maybeStream(),
+              builder: (context, ms) {
+                final cCount = (cs.data?.docs ?? []).length;
+                final mCount = (ms.data?.docs ?? []).length;
+                return _counter("🔔 $cCount kommen · $mCount vielleicht");
+              },
+            );
+          },
+        ),
+      ],
     );
   }
 
@@ -907,6 +1043,7 @@ class PartyBottomSheet extends StatelessWidget {
                 subtitle: Text("Du kannst jetzt alle Infos sehen.",
                     style: TextStyle(color: Colors.white70)),
               ),
+              _ticketBuyButton(context, show: true),
               StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                 stream: FirebaseFirestore.instance
                     .collection('Party')
@@ -978,7 +1115,8 @@ class PartyBottomSheet extends StatelessWidget {
                     Icon(Icons.pending_actions, color: Colors.orangeAccent, size: 20),
                     SizedBox(width: 8),
                     Text("🛎️ Zugangs-Anfragen",
-                        style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                        style: TextStyle(
+                            color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
                   ]),
                   const SizedBox(height: 10),
                   ...docs.map((d) {
@@ -1007,7 +1145,9 @@ class PartyBottomSheet extends StatelessWidget {
                               children: [
                                 Text(user,
                                     style: const TextStyle(
-                                        color: Colors.white, fontWeight: FontWeight.w700, fontSize: 18)),
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 18)),
                                 const SizedBox(height: 4),
                                 Text("Status: $status", style: TextStyle(color: statusColor)),
                               ],
@@ -1023,7 +1163,8 @@ class PartyBottomSheet extends StatelessWidget {
                             const SizedBox(width: 8),
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+                                  backgroundColor: Colors.redAccent,
+                                  foregroundColor: Colors.white),
                               onPressed: () => onUpdateRequestStatus(user, 'declined'),
                               child: const Text("Ablehnen"),
                             ),
@@ -1037,7 +1178,8 @@ class PartyBottomSheet extends StatelessWidget {
                           ] else ...[
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+                                  backgroundColor: Colors.redAccent,
+                                  foregroundColor: Colors.white),
                               onPressed: () => onUpdateRequestStatus(user, 'declined'),
                               child: const Text("Ablehnen"),
                             ),
