@@ -3,10 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'party_map_screen.dart';
 import 'selection_screen.dart';
 import 'create_account_screen.dart';
 import 'nutzungsbedinungen.dart';
+import 'home_shell.dart';
 import 'package:party_pin/Upgrade/phone_upgrade_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -36,10 +36,9 @@ class _LoginScreenState extends State<LoginScreen> {
   static const _textSecondary = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30);
 
-  bool get _isFormValid {
-    return _usernameController.text.trim().isNotEmpty &&
-        _passwordController.text.trim().isNotEmpty;
-  }
+  bool get _isFormValid =>
+      _usernameController.text.trim().isNotEmpty &&
+          _passwordController.text.trim().isNotEmpty;
 
   @override
   void dispose() {
@@ -48,6 +47,10 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  /// Entscheidet nach Login wohin:
+  /// - TermsScreen wenn nicht akzeptiert
+  /// - SelectionScreen wenn Location fehlt
+  /// - sonst IMMER HomeShell (BottomNav bleibt)
   Future<void> _checkNavigation() async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -56,6 +59,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final savedCity = prefs.getString('city');
     final savedLat = prefs.getDouble('selectedLat');
     final savedLng = prefs.getDouble('selectedLng');
+
     final termsAccepted = prefs.getBool("termsAccepted") ?? false;
 
     final hasLocationData =
@@ -65,31 +69,33 @@ class _LoginScreenState extends State<LoginScreen> {
             savedLng != null &&
             savedLanguage != null;
 
+    if (!mounted) return;
+
     // 1) AGB / Nutzungsbedingungen
     if (!termsAccepted) {
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
+      Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const TermsScreen()),
+            (route) => false,
       );
       return;
     }
 
     // 2) Standort-Auswahl
     if (!hasLocationData) {
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
+      Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const SelectionScreen()),
+            (route) => false,
       );
       return;
     }
 
-    // 3) Alles vorhanden → Map
-    if (!mounted) return;
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => const PartyMapScreen()),
+    // 3) Alles vorhanden -> IMMER HomeShell (Tab Map)
+    final isBar = prefs.getBool('isBarAccount') ?? false;
+    final mapTab = isBar ? 1 : 2; // Bar: Event/Map/Feedback -> Map=1, Normal -> Map=2
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => HomeShell(initialIndex: mapTab)),
+          (route) => false,
     );
   }
 
@@ -108,8 +114,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       Map<String, dynamic>? userData;
-      String? userType;   // "user" (Privat) oder "bar" (Unternehmen)
-      String? barDocId;   // tatsächliche Bar/Unternehmen-Dokument-ID
+      String? userType; // "user" oder "bar"
+      String? barDocId;
 
       // 1) Privatkonten in "users" suchen (Feld username)
       final userQuery = await FirebaseFirestore.instance
@@ -165,9 +171,7 @@ class _LoginScreenState extends State<LoginScreen> {
       // Typ-Kontrolle: Auswahl muss zum Account-Typ passen
       if (_loginAsCompany && userType != "bar") {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Dieser Account ist kein Unternehmens-Account."),
-          ),
+          const SnackBar(content: Text("Dieser Account ist kein Unternehmens-Account.")),
         );
         return;
       }
@@ -194,10 +198,8 @@ class _LoginScreenState extends State<LoginScreen> {
       final firestoreCity = (userData["city"] ?? "") as String;
       final latRaw = userData["selectedLat"];
       final lngRaw = userData["selectedLng"];
-      final double? firestoreLat =
-      latRaw is num ? latRaw.toDouble() : null;
-      final double? firestoreLng =
-      lngRaw is num ? lngRaw.toDouble() : null;
+      final double? firestoreLat = latRaw is num ? latRaw.toDouble() : null;
+      final double? firestoreLng = lngRaw is num ? lngRaw.toDouble() : null;
 
       final prefs = await SharedPreferences.getInstance();
 
@@ -209,6 +211,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       await prefs.setInt("authVersion", authVersion);
       await prefs.setBool("phoneVerified", phoneVerified);
+
       if (phoneNumber != null && phoneNumber.isNotEmpty) {
         await prefs.setString("phoneNumber", phoneNumber);
       } else {
@@ -242,40 +245,32 @@ class _LoginScreenState extends State<LoginScreen> {
 
       // Privat vs Unternehmen
       if (userType == "user") {
-        // Privatkonto
-        await prefs.setBool("isBar", false);         // altes Flag
-        await prefs.setBool("isBarAccount", false);  // von PartyMapScreen genutzt
+        await prefs.setBool("isBar", false); // legacy
+        await prefs.setBool("isBarAccount", false);
         await prefs.remove("barId");
 
-        await prefs.setString(
-            "vorname", (userData["vorname"] ?? "").toString());
-        await prefs.setString(
-            "nachname", (userData["nachname"] ?? "").toString());
+        await prefs.setString("vorname", (userData["vorname"] ?? "").toString());
+        await prefs.setString("nachname", (userData["nachname"] ?? "").toString());
       } else {
-        // Unternehmens-Account
-        await prefs.setBool("isBar", true);          // altes Flag
+        await prefs.setBool("isBar", true); // legacy
         await prefs.setBool("isBarAccount", true);
 
-        if (barDocId != null) {
+        if (barDocId != null && barDocId.isNotEmpty) {
           await prefs.setString("barId", barDocId);
         } else {
           await prefs.remove("barId");
         }
 
-        await prefs.setString(
-            "barName", (userData["barName"] ?? "").toString());
+        await prefs.setString("barName", (userData["barName"] ?? "").toString());
       }
 
-      // Phone-Upgrade ggf. wieder aktivierbar
-      // final mustUpgradePhone =
-      //     phoneNumber == null || phoneNumber.trim().isEmpty;
+      // Optional Phone-Upgrade (derzeit auskommentiert im Original)
+      // final mustUpgradePhone = phoneNumber == null || phoneNumber.trim().isEmpty;
       // if (mustUpgradePhone) {
       //   if (!mounted) return;
-      //   Navigator.pushReplacement(
-      //     context,
-      //     MaterialPageRoute(
-      //       builder: (_) => const PhoneUpgradeScreen(),
-      //     ),
+      //   Navigator.of(context).pushAndRemoveUntil(
+      //     MaterialPageRoute(builder: (_) => const PhoneUpgradeScreen()),
+      //     (route) => false,
       //   );
       //   return;
       // }
@@ -286,9 +281,7 @@ class _LoginScreenState extends State<LoginScreen> {
         SnackBar(content: Text("Fehler beim Login: $e")),
       );
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -336,9 +329,7 @@ class _LoginScreenState extends State<LoginScreen> {
         const SizedBox(height: 8),
         GestureDetector(
           onHorizontalDragEnd: (_) {
-            setState(() {
-              _loginAsCompany = !_loginAsCompany;
-            });
+            setState(() => _loginAsCompany = !_loginAsCompany);
           },
           child: Container(
             decoration: BoxDecoration(
@@ -351,20 +342,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 _buildToggleSegment(
                   label: "Privat",
                   selected: isPrivat,
-                  onTap: () {
-                    setState(() {
-                      _loginAsCompany = false;
-                    });
-                  },
+                  onTap: () => setState(() => _loginAsCompany = false),
                 ),
                 _buildToggleSegment(
                   label: "Unternehmen",
                   selected: isUnternehmen,
-                  onTap: () {
-                    setState(() {
-                      _loginAsCompany = true;
-                    });
-                  },
+                  onTap: () => setState(() => _loginAsCompany = true),
                 ),
               ],
             ),
@@ -375,10 +358,7 @@ class _LoginScreenState extends State<LoginScreen> {
           _loginAsCompany
               ? "Du meldest dich als Unternehmen an."
               : "Du meldest dich als Privatperson an.",
-          style: const TextStyle(
-            color: _textSecondary,
-            fontSize: 12,
-          ),
+          style: const TextStyle(color: _textSecondary, fontSize: 12),
         ),
       ],
     );
@@ -422,10 +402,7 @@ class _LoginScreenState extends State<LoginScreen> {
       appBar: AppBar(
         backgroundColor: Colors.black.withOpacity(0.4),
         elevation: 0,
-        title: const Text(
-          'Login',
-          style: TextStyle(color: _textPrimary),
-        ),
+        title: const Text('Login', style: TextStyle(color: _textPrimary)),
         centerTitle: true,
       ),
       body: Container(
@@ -504,12 +481,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed:
-                          (_isFormValid && !_isLoading) ? _login : null,
+                          onPressed: (_isFormValid && !_isLoading) ? _login : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: _accent,
-                            disabledBackgroundColor:
-                            _accent.withOpacity(0.4),
+                            disabledBackgroundColor: _accent.withOpacity(0.4),
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
@@ -539,11 +514,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         onPressed: _isLoading
                             ? null
                             : () {
-                          Navigator.pushReplacement(
-                            context,
+                          Navigator.of(context).pushReplacement(
                             MaterialPageRoute(
-                              builder: (_) =>
-                              const CreateAccountScreen(),
+                              builder: (_) => const CreateAccountScreen(),
                             ),
                           );
                         },

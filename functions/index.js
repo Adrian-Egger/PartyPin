@@ -3,12 +3,16 @@
 // =======================
 // functions/index.js
 // =======================
-const { onRequest } = require("firebase-functions/v2/https");
+const { onRequest, onCall } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
 // ✅ NEU: Cleanup import
 const eventsCleanup = require("./eventsCleanup");
+
+// ✅ NEU: Ticket PayPal Functions (Callable) import
+const createTicketOrder = require("./TicketOrderPayPal/createTicketOrder");
+const captureTicketOrder = require("./TicketOrderPayPal/captureTicketOrder");
 
 if (!admin.apps.length) admin.initializeApp();
 
@@ -400,6 +404,10 @@ exports.paypalWebhook = onRequest(
         }
     }
 );
+
+// ✅ NEU: Ticket PayPal Exports (Callable)
+exports.createTicketOrder = createTicketOrder;
+exports.captureTicketOrder = captureTicketOrder;
 
 // ✅ NEU: Scheduler Export (Event + Bilder nach Ende löschen)
 exports.cleanupExpiredEvents = eventsCleanup.cleanupExpiredEvents;

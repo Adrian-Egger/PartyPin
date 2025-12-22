@@ -62,6 +62,19 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
+	<!-- 🔥 PAYPAL DEEP LINK (HINZUGEFÜGT) -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>partypin</string>
+			</array>
+		</dict>
+	</array>
+
 	<!-- BERECHTIGUNGEN FÜR PROFILBILDER / PHOTO PICKER / KAMERA / STANDORT -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Die App benötigt Zugriff auf deine Fotogalerie, um ein Profilbild hochzuladen.</string>

@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:app_links/app_links.dart';
+import 'package:http/http.dart' as http;
+
 
 import '../Services/language_services.dart';
 import '../Screens/party_map_screen.dart';
@@ -573,17 +579,114 @@ class _PremiumScreenState extends State<PremiumScreen> {
   bool _isLoading = false;
   String? _currentUsername;
 
+  // ✅ App Links (Deep Links)
+  late final AppLinks _appLinks;
+  StreamSubscription<Uri>? _paypalLinkSub;
+
   @override
   void initState() {
     super.initState();
+
+    _appLinks = AppLinks(); // ✅ genau hier initialisieren
+
     _loadUsername();
+    _listenForPaypalReturn();
+    _handleInitialPaypalReturn(); // ✅ wichtig falls App neu gestartet wurde
+  }
+
+  @override
+  void dispose() {
+    _paypalLinkSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadUsername() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     setState(() {
       _currentUsername = prefs.getString('currentUsername');
     });
+  }
+
+  // ✅ Listener für Links während die App läuft
+  void _listenForPaypalReturn() {
+    _paypalLinkSub = _appLinks.uriLinkStream.listen((Uri uri) async {
+      await _handlePaypalUri(uri);
+    });
+  }
+
+  // ✅ Falls App durch den Link gestartet wurde (Cold start)
+  Future<void> _handleInitialPaypalReturn() async {
+    try {
+      final Uri? initialUri = await _appLinks.getInitialLink();
+      if (initialUri != null) {
+        await _handlePaypalUri(initialUri);
+      }
+    } catch (_) {
+      // absichtlich still: initial link kann je nach platform failen
+    }
+  }
+
+  // ✅ Zentrale Verarbeitung
+  Future<void> _handlePaypalUri(Uri uri) async {
+    if (!mounted) return;
+
+    if (uri.scheme != 'partypin') return;
+    if (uri.host != 'paypal-return') return;
+
+    final subscriptionId = uri.queryParameters['subscription_id'];
+    final planId = uri.queryParameters['planId'];
+
+    if (subscriptionId == null || subscriptionId.isEmpty) return;
+    if (planId == null || planId.isEmpty) return;
+    if (_currentUsername == null || _currentUsername!.trim().isEmpty) return;
+
+    await _activatePremium(subscriptionId, planId);
+  }
+
+  // 🔥 Backend informieren
+  Future<void> _activatePremium(String subscriptionId, String planId) async {
+    try {
+      if (mounted) setState(() => _isLoading = true);
+
+      final res = await http.post(
+        Uri.parse(
+          'https://us-central1-DEIN-PROJEKT.cloudfunctions.net/activatePayPalSubscription',
+        ),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'subscriptionId': subscriptionId,
+          'username': _currentUsername,
+          'planId': planId,
+        }),
+      );
+
+      if (!mounted) return;
+
+      if (res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: _panel,
+            content: Text(
+              'Premium wird aktiviert ✅',
+              style: TextStyle(color: _textPrimary),
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: _panel,
+            content: Text(
+              'Premium-Aktivierung fehlgeschlagen: ${res.body}',
+              style: const TextStyle(color: _textPrimary),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   String _planTitle(PayPalPlan plan) =>
@@ -620,7 +723,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     try {
       final uri = PayPalCheckout.buildCheckoutUri(
         username: u,
-        plan: _selectedPlan, // ✅ Enum (monthly/yearly)
+        plan: _selectedPlan,
       );
 
       final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -666,14 +769,11 @@ class _PremiumScreenState extends State<PremiumScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
-
-        // ✅ kleiner Zurückpfeil
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Colors.white),
           onPressed: () => Navigator.pop(context),
           tooltip: 'Zurück',
         ),
-
         title: const Text(
           'Premium ⭐',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
@@ -691,7 +791,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ✅ Header-Karte kundenfreundlicher (wie bei dir)
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -717,7 +816,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
                     style: TextStyle(color: Colors.white70, height: 1.4),
                   ),
                   const SizedBox(height: 14),
-
                   _benefitRow(Icons.people_alt, 'Freunde-Status in Echtzeit'),
                   const SizedBox(height: 8),
                   _benefitRow(Icons.bolt, 'Früher Zugriff auf neue Features'),
@@ -726,7 +824,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
                 ],
               ),
             ),
-
             const SizedBox(height: 16),
 
             const Text(
@@ -739,7 +836,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
             ),
             const SizedBox(height: 10),
 
-            // ✅ Plans (wie bei dir)
             _planCard(
               title: 'Monatlich',
               subtitle: 'Flexibel kündbar – ideal zum Testen.',
@@ -760,7 +856,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
             const SizedBox(height: 18),
 
-            // ✅ klarerer Checkout-Button (wie bei dir)
             ElevatedButton(
               onPressed: _isLoading ? null : _openSubscriptionCheckout,
               style: ElevatedButton.styleFrom(
@@ -798,7 +893,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
             const SizedBox(height: 10),
 
-            // ✅ Hinweis-Box (wie bei dir)
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -844,8 +938,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
     required VoidCallback onTap,
     String? highlight,
   }) {
-    // ✅ Wenn du NICHT willst, dass "selected" rot ist:
-    // ersetze unten accentRed durch Colors.amber (oder was du willst).
     const accentRed = Color(0xFFFF3B30);
 
     return InkWell(

@@ -18,7 +18,6 @@
         android:label="party_pin"
         android:icon="@mipmap/ic_launcher">
 
-        <!-- DEIN ANDROID API KEY -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyD87LYkHyCjLJbh5dH3Mc6yeiXF9zH_ly8"/>
@@ -36,10 +35,22 @@
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme"/>
 
+            <!-- NORMALER APP-START -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <!-- 🔥 PAYPAL DEEP LINK -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data
+                    android:scheme="partypin"
+                    android:host="paypal-return"/>
+            </intent-filter>
+
         </activity>
 
         <meta-data
@@ -53,4 +64,5 @@
             <data android:mimeType="text/plain"/>
         </intent>
     </queries>
+
 </manifest>
