@@ -168,9 +168,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     setState(() {
       _startPos = CameraPosition(
         target: LatLng(_currentLat, _currentLng),
-        zoom: 13,
+        zoom: 12,
       );
-      _currentZoom = 13;
+      _currentZoom = 12;
     });
   }
 

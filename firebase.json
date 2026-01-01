@@ -35,23 +35,11 @@
         "firebase-debug.*.log",
         "*.local"
       ]
-    },
-    {
-      "codebase": "paypal",
-      "source": "functions/paypal",
-      "disallowLegacyRuntimeConfig": true,
-      "ignore": [
-        "node_modules",
-        ".git",
-        "firebase-debug.log",
-        "firebase-debug.*.log",
-        "*.local"
-      ]
     }
   ],
 
   "hosting": {
-    "public": "y",
+    "public": "public",
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -59,8 +47,12 @@
     ],
     "rewrites": [
       {
-        "source": "**",
-        "destination": "/index.html"
+        "source": "/paypal-return",
+        "destination": "/paypal-return/index.html"
+      },
+      {
+        "source": "/paypal-cancel",
+        "destination": "/paypal-cancel/index.html"
       }
     ]
   }

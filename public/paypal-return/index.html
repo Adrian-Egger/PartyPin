@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>PayPal Zahlung</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }
+    .box {
+      background: #020617;
+      padding: 24px;
+      border-radius: 12px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+    }
+    .ok { color: #22c55e; }
+    .err { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>PayPal Zahlung wird bestätigt…</h2>
+    <p id="status">Bitte warten</p>
+  </div>
+
+  <!-- Firebase SDK (v9 modular) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+    import { getAuth } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-functions.js";
+
+    const statusEl = document.getElementById("status");
+
+    function fail(msg) {
+      statusEl.innerHTML = `<span class="err">${msg}</span>`;
+    }
+
+    function ok(msg) {
+      statusEl.innerHTML = `<span class="ok">${msg}</span>`;
+    }
+
+    // 🔹 1) URL Parameter lesen
+    const url = new URL(window.location.href);
+    const orderId = url.searchParams.get("token") || url.searchParams.get("orderId");
+
+    if (!orderId) {
+      fail("Keine PayPal Order-ID gefunden.");
+      throw new Error("missing orderId");
+    }
+
+    // 🔹 2) Firebase initialisieren (DEINE CONFIG EINTRAGEN!)
+    const firebaseConfig = {
+      apiKey: "AIzaSyBfIJDHRjDlEmPWpdO8bVhaMnVzBCkFYXI",
+      authDomain: "partypin-5dc3f.firebaseapp.com",
+      projectId: "partypin-5dc3f",
+      appId: "1:777410329158:web:5b8ca9dd8358b97a012847"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const functions = getFunctions(app, "europe-west1");
+
+    // 🔹 3) Warten bis User eingeloggt ist
+    auth.onAuthStateChanged(async (user) => {
+      if (!user) {
+        fail("Bitte App öffnen und einloggen.");
+        return;
+      }
+
+      try {
+        ok("Zahlung wird finalisiert…");
+
+        // 🔹 4) captureTicketOrder aufrufen
+        const capture = httpsCallable(functions, "captureTicketOrder");
+        const res = await capture({
+          orderId: orderId,
+          // partyId wird NICHT benötigt → kommt aus Firestore Validierung
+        });
+
+        if (res?.data?.status === "paid") {
+          ok("✅ Zahlung erfolgreich! Ticket aktiviert.");
+
+          // 🔹 Optional: Deep Link zurück in App
+          setTimeout(() => {
+            window.location.href =
+              `partypin://ticket/success?orderId=${encodeURIComponent(orderId)}`;
+          }, 1200);
+        } else {
+          fail("Zahlung nicht abgeschlossen.");
+        }
+      } catch (e) {
+        console.error(e);
+        fail(e?.message || "Fehler bei Zahlungsbestätigung.");
+      }
+    });
+  </script>
+</body>
+</html>

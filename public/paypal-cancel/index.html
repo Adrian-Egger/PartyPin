@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Zahlung abgebrochen</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Optional: leichtes Styling -->
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      text-align: center;
+    }
+    .box {
+      max-width: 420px;
+      padding: 24px;
+    }
+    h1 {
+      color: #f87171;
+      margin-bottom: 12px;
+    }
+    p {
+      opacity: 0.9;
+      line-height: 1.5;
+    }
+    small {
+      display: block;
+      margin-top: 20px;
+      opacity: 0.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Zahlung abgebrochen</h1>
+    <p>
+      Du hast den Bezahlvorgang bei PayPal abgebrochen.<br />
+      Es wurde <strong>kein Geld</strong> abgebucht.
+    </p>
+    <p>
+      Du kannst dieses Fenster jetzt schließen und zur App zurückkehren.
+    </p>
+    <small>PartyPin</small>
+  </div>
+
+  <!-- Optional: automatische Rückkehr (z. B. nach 3 Sekunden) -->
+  <!--
+  <script>
+    setTimeout(() => {
+      window.location.href = "/";
+    }, 3000);
+  </script>
+  -->
+</body>
+</html>

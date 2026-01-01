@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:party_pin/Screens/paypal_login_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
@@ -6,27 +7,39 @@ import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:http/http.dart' as http;
-
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../Services/language_services.dart';
 import '../Screens/party_map_screen.dart';
 import '../Screens/selection_screen.dart';
 import '../Screens/feedback_screen.dart';
 import '../Screens/AdminCreatesBarScreen.dart';
-import '../Services/paypal.dart'; // PayPal-Service
 
-// --- Zentrales Farb-Theme ---
+// =======================
+// THEME
+// =======================
 const _gradTop = Color(0xFF0E0F12);
 const _gradBottom = Color(0xFF141A22);
 const _panel = Color(0xFF15171C);
 const _panelBorder = Color(0xFF2A2F38);
-const _card = Color(0xFF1C1F26);
 const _textPrimary = Colors.white;
 const _textSecondary = Color(0xFFB6BDC8);
 const _accent = Color(0xFFFF3B30);
-const _secondary = Color(0xFF00C2A8);
 
-// ------------------- Menu Screen -------------------
+// =======================
+// PAYPAL PLANS (MUSS zu deiner Function-Whitelist passen!)
+// =======================
+enum PayPalPlan { monthly, yearly }
+
+const String _paypalPlanMonthly = "P-55588718AV729883XNE6MJ5Y";
+const String _paypalPlanYearly = "P-0WL99384633096336NE6WUSA";
+
+// ✅ Deine echte Functions Base (kein Platzhalter!)
+const String _functionsBase = "https://us-central1-partypin-5dc3f.cloudfunctions.net";
+
+// =======================
+// MENU SCREEN
+// =======================
 class MenuScreen extends StatelessWidget {
   const MenuScreen({super.key});
 
@@ -39,11 +52,7 @@ class MenuScreen extends StatelessWidget {
     final lng = prefs.getDouble('selectedLng');
 
     if (city != null && lat != null && lng != null) {
-      return {
-        'city': city,
-        'latitude': lat,
-        'longitude': lng,
-      };
+      return {'city': city, 'latitude': lat, 'longitude': lng};
     }
     return null;
   }
@@ -120,6 +129,7 @@ class MenuScreen extends StatelessWidget {
               icon: Icons.map,
               title: LanguageService.getText('party_map', lang),
               onTap: () async {
+                // wenn Menü über Drawer/Overlay geöffnet wurde → einfach schließen
                 if (Navigator.of(context).canPop()) {
                   Navigator.of(context).pop();
                   return;
@@ -129,16 +139,12 @@ class MenuScreen extends StatelessWidget {
                 if (location != null) {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(
-                      builder: (context) => const PartyMapScreen(),
-                    ),
+                    MaterialPageRoute(builder: (context) => const PartyMapScreen()),
                   );
                 } else {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(
-                      builder: (context) => const SelectionScreen(),
-                    ),
+                    MaterialPageRoute(builder: (context) => const SelectionScreen()),
                   );
                 }
               },
@@ -149,9 +155,17 @@ class MenuScreen extends StatelessWidget {
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => const PremiumScreen(),
-                  ),
+                  MaterialPageRoute(builder: (context) => const PremiumScreen()),
+                );
+              },
+            ),
+            _menuTile(
+              icon: Icons.account_balance_wallet,
+              title: "PayPal verbinden",
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const PayPalLoginScreen()),
                 );
               },
             ),
@@ -161,9 +175,7 @@ class MenuScreen extends StatelessWidget {
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => const SelectionScreen(),
-                  ),
+                  MaterialPageRoute(builder: (context) => const SelectionScreen()),
                 );
               },
             ),
@@ -226,16 +238,13 @@ class MenuScreen extends StatelessWidget {
                 );
               },
             ),
-
             _menuTile(
               icon: Icons.info,
               title: "Rechtliches",
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => const LegalScreen(),
-                  ),
+                  MaterialPageRoute(builder: (context) => const LegalScreen()),
                 );
               },
             ),
@@ -245,27 +254,21 @@ class MenuScreen extends StatelessWidget {
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => const SupportScreen(),
-                  ),
+                  MaterialPageRoute(builder: (context) => const SupportScreen()),
                 );
               },
             ),
             FutureBuilder<bool>(
               future: _isCurrentUserAdmin(),
               builder: (context, snapshot) {
-                if (!snapshot.hasData || snapshot.data != true) {
-                  return const SizedBox.shrink();
-                }
+                if (snapshot.data != true) return const SizedBox.shrink();
                 return _menuTile(
                   icon: Icons.admin_panel_settings,
                   title: "Admin Bereich💻",
                   onTap: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (context) => const AdminCreateBarScreen(),
-                      ),
+                      MaterialPageRoute(builder: (context) => const AdminCreateBarScreen()),
                     );
                   },
                 );
@@ -278,7 +281,9 @@ class MenuScreen extends StatelessWidget {
   }
 }
 
-// ------------------- Legal Screen -------------------
+// =======================
+// LEGAL SCREEN
+// =======================
 class LegalScreen extends StatelessWidget {
   const LegalScreen({super.key});
 
@@ -430,20 +435,14 @@ class LegalScreen extends StatelessWidget {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _accent,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 30,
-                        vertical: 12,
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
                     child: const Text(
                       "Zurück",
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
                   ),
                 ),
@@ -456,7 +455,9 @@ class LegalScreen extends StatelessWidget {
   }
 }
 
-// ------------------- Support Screen -------------------
+// =======================
+// SUPPORT SCREEN
+// =======================
 class SupportScreen extends StatelessWidget {
   const SupportScreen({super.key});
 
@@ -541,17 +542,12 @@ class SupportScreen extends StatelessWidget {
                   icon: const Icon(Icons.email),
                   label: const Text(
                     "Support per E-Mail schreiben",
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _accent,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 12,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -566,7 +562,12 @@ class SupportScreen extends StatelessWidget {
   }
 }
 
-// ------------------- Premium Screen -------------------
+// =======================
+// PREMIUM SCREEN (NO AUTH FLOW)
+// - checkout via createPayPalCheckout
+// - webhook sets premium true/false and auto expiry
+// - UI listens to Firestore users/{username}
+// =======================
 class PremiumScreen extends StatefulWidget {
   const PremiumScreen({super.key});
 
@@ -575,23 +576,21 @@ class PremiumScreen extends StatefulWidget {
 }
 
 class _PremiumScreenState extends State<PremiumScreen> {
-  PayPalPlan _selectedPlan = PayPalPlan.monthly; // ✅ Enum statt String
+  PayPalPlan _selectedPlan = PayPalPlan.monthly;
   bool _isLoading = false;
   String? _currentUsername;
 
-  // ✅ App Links (Deep Links)
   late final AppLinks _appLinks;
   StreamSubscription<Uri>? _paypalLinkSub;
 
   @override
   void initState() {
     super.initState();
-
-    _appLinks = AppLinks(); // ✅ genau hier initialisieren
+    _appLinks = AppLinks();
 
     _loadUsername();
     _listenForPaypalReturn();
-    _handleInitialPaypalReturn(); // ✅ wichtig falls App neu gestartet wurde
+    _handleInitialPaypalReturn();
   }
 
   @override
@@ -608,98 +607,48 @@ class _PremiumScreenState extends State<PremiumScreen> {
     });
   }
 
-  // ✅ Listener für Links während die App läuft
   void _listenForPaypalReturn() {
     _paypalLinkSub = _appLinks.uriLinkStream.listen((Uri uri) async {
       await _handlePaypalUri(uri);
     });
   }
 
-  // ✅ Falls App durch den Link gestartet wurde (Cold start)
   Future<void> _handleInitialPaypalReturn() async {
     try {
       final Uri? initialUri = await _appLinks.getInitialLink();
       if (initialUri != null) {
         await _handlePaypalUri(initialUri);
       }
-    } catch (_) {
-      // absichtlich still: initial link kann je nach platform failen
-    }
+    } catch (_) {}
   }
 
-  // ✅ Zentrale Verarbeitung
   Future<void> _handlePaypalUri(Uri uri) async {
     if (!mounted) return;
-
     if (uri.scheme != 'partypin') return;
-    if (uri.host != 'paypal-return') return;
 
-    final subscriptionId = uri.queryParameters['subscription_id'];
-    final planId = uri.queryParameters['planId'];
-
-    if (subscriptionId == null || subscriptionId.isEmpty) return;
-    if (planId == null || planId.isEmpty) return;
-    if (_currentUsername == null || _currentUsername!.trim().isEmpty) return;
-
-    await _activatePremium(subscriptionId, planId);
-  }
-
-  // 🔥 Backend informieren
-  Future<void> _activatePremium(String subscriptionId, String planId) async {
-    try {
-      if (mounted) setState(() => _isLoading = true);
-
-      final res = await http.post(
-        Uri.parse(
-          'https://us-central1-DEIN-PROJEKT.cloudfunctions.net/activatePayPalSubscription',
-        ),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'subscriptionId': subscriptionId,
-          'username': _currentUsername,
-          'planId': planId,
-        }),
+    if (uri.host == 'paypal-return') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Zahlung abgeschlossen. Premium wird gleich aktiviert…')),
       );
-
-      if (!mounted) return;
-
-      if (res.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            backgroundColor: _panel,
-            content: Text(
-              'Premium wird aktiviert ✅',
-              style: TextStyle(color: _textPrimary),
-            ),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: _panel,
-            content: Text(
-              'Premium-Aktivierung fehlgeschlagen: ${res.body}',
-              style: const TextStyle(color: _textPrimary),
-            ),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+    } else if (uri.host == 'paypal-cancel') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Zahlung abgebrochen.')),
+      );
     }
   }
 
-  String _planTitle(PayPalPlan plan) =>
-      plan == PayPalPlan.monthly ? 'Monatlich' : 'Jährlich';
+  String _planIdFor(PayPalPlan plan) =>
+      plan == PayPalPlan.monthly ? _paypalPlanMonthly : _paypalPlanYearly;
 
   String _planPriceText(PayPalPlan plan) =>
       plan == PayPalPlan.monthly ? '1,49 € / Monat' : '14,99 € / Jahr';
 
-  String _payButtonLabel(PayPalPlan plan) => 'Mit PayPal zahlen';
+  String _payButtonLabel() => 'Mit PayPal zahlen';
 
-  String _savingsText() {
-    // 12 * 1,49 = 17,88 ; 17,88 - 14,99 = 2,89 Ersparnis
-    return 'Spare ca. 2,89 € pro Jahr';
+  String _savingsText() => 'Spare ca. 2,89 € pro Jahr';
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _userStream(String username) {
+    return FirebaseFirestore.instance.doc('users/$username').snapshots();
   }
 
   Future<void> _openSubscriptionCheckout() async {
@@ -721,33 +670,30 @@ class _PremiumScreenState extends State<PremiumScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final uri = PayPalCheckout.buildCheckoutUri(
-        username: u,
-        plan: _selectedPlan,
+      final planId = _planIdFor(_selectedPlan);
+
+      final res = await http.post(
+        Uri.parse('$_functionsBase/createPayPalCheckout'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'username': u, 'planId': planId}),
       );
 
-      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (res.statusCode != 200) {
+        throw Exception(res.body);
+      }
+
+      final json = jsonDecode(res.body) as Map<String, dynamic>;
+      final approveLink = (json['approveLink'] ?? '').toString();
+      if (approveLink.isEmpty) throw Exception('approveLink fehlt');
+
+      final ok = await launchUrl(Uri.parse(approveLink), mode: LaunchMode.externalApplication);
       if (!ok) throw Exception('Konnte PayPal-Seite nicht öffnen.');
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: _panel,
-          content: Text(
-            'PayPal geöffnet (${_planTitle(_selectedPlan)}). Nach Abschluss wird Premium automatisch aktiviert.',
-            style: const TextStyle(color: _textPrimary),
-          ),
-        ),
-      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: _panel,
-          content: Text(
-            'Fehler beim Öffnen von PayPal: $e',
-            style: const TextStyle(color: _textPrimary),
-          ),
+          content: Text('Fehler beim Öffnen von PayPal: $e', style: const TextStyle(color: _textPrimary)),
         ),
       );
     } finally {
@@ -761,172 +707,198 @@ class _PremiumScreenState extends State<PremiumScreen> {
     const panel = Color(0xFF141A22);
     const accentRed = Color(0xFFFF3B30);
 
+    final username = (_currentUsername ?? '').trim();
+
+    if (username.isEmpty) {
+      return Scaffold(
+        backgroundColor: bg,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          centerTitle: true,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Colors.white),
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: const Text('Premium ⭐', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+        ),
+        body: const Center(
+          child: Text('Kein Benutzer gefunden. Bitte neu einloggen.', style: TextStyle(color: Colors.white70)),
+        ),
+      );
+    }
+
     final yearlySelected = _selectedPlan == PayPalPlan.yearly;
 
-    return Scaffold(
-      backgroundColor: bg,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-          tooltip: 'Zurück',
-        ),
-        title: const Text(
-          'Premium ⭐',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
-        ),
-      ),
-      body: _currentUsername == null
-          ? const Center(
-        child: Text(
-          'Kein Benutzer gefunden. Bitte neu einloggen.',
-          style: TextStyle(color: Colors.white70),
-        ),
-      )
-          : SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: panel,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: Colors.white12),
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _userStream(username),
+      builder: (context, snap) {
+        if (snap.hasError) {
+          return Scaffold(
+            backgroundColor: bg,
+            appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              centerTitle: true,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Colors.white),
+                onPressed: () => Navigator.pop(context),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Mehr Überblick. Mehr Spaß.',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 18,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Mit PartyPin Premium siehst du live, auf welche Partys deine Freunde gehen '
-                        '(„Ich komme“ / „Vielleicht“). Außerdem bekommst du früher Zugriff auf neue Features.',
-                    style: TextStyle(color: Colors.white70, height: 1.4),
-                  ),
-                  const SizedBox(height: 14),
-                  _benefitRow(Icons.people_alt, 'Freunde-Status in Echtzeit'),
-                  const SizedBox(height: 8),
-                  _benefitRow(Icons.bolt, 'Früher Zugriff auf neue Features'),
-                  const SizedBox(height: 8),
-                  _benefitRow(Icons.shield, 'Premium ist accountgebunden'),
-                ],
+              title: const Text('Premium ⭐', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+            ),
+            body: Center(
+              child: Text(
+                'Fehler: ${snap.error}',
+                style: const TextStyle(color: Colors.white70),
+                textAlign: TextAlign.center,
               ),
             ),
-            const SizedBox(height: 16),
+          );
+        }
 
-            const Text(
-              'Wähle dein Abo',
-              style: TextStyle(
-                color: Colors.white70,
-                fontWeight: FontWeight.w800,
-                fontSize: 14,
-              ),
+        final data = snap.data?.data() ?? {};
+        final isPremium = data['premium'] == true;
+        final pending = data['premiumPendingWebhook'] == true;
+
+        return Scaffold(
+          backgroundColor: bg,
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            centerTitle: true,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_ios_new, size: 18, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+              tooltip: 'Zurück',
             ),
-            const SizedBox(height: 10),
-
-            _planCard(
-              title: 'Monatlich',
-              subtitle: 'Flexibel kündbar – ideal zum Testen.',
-              price: _planPriceText(PayPalPlan.monthly),
-              selected: _selectedPlan == PayPalPlan.monthly,
-              highlight: null,
-              onTap: () => setState(() => _selectedPlan = PayPalPlan.monthly),
-            ),
-            const SizedBox(height: 10),
-            _planCard(
-              title: 'Jährlich',
-              subtitle: 'Bestes Angebot – weniger Aufwand.',
-              price: _planPriceText(PayPalPlan.yearly),
-              selected: yearlySelected,
-              highlight: _savingsText(),
-              onTap: () => setState(() => _selectedPlan = PayPalPlan.yearly),
-            ),
-
-            const SizedBox(height: 18),
-
-            ElevatedButton(
-              onPressed: _isLoading ? null : _openSubscriptionCheckout,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: accentRed,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.payment, size: 18),
-                  const SizedBox(width: 10),
-                  Text(
-                    _payButtonLabel(_selectedPlan),
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    '• ${_planPriceText(_selectedPlan)}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0F121A),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: const Text(
-                'Hinweis: Abos werden über PayPal abgewickelt. Premium wird nach erfolgreicher Bestätigung automatisch aktiviert. '
-                    'Kündigung jederzeit in PayPal möglich.',
-                style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.3),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _benefitRow(IconData icon, String text) {
-    return Row(
-      children: [
-        Icon(icon, color: Colors.white70, size: 18),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontWeight: FontWeight.w600,
+            title: const Text(
+              'Premium ⭐',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
             ),
           ),
-        ),
-      ],
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: panel,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isPremium ? 'Premium aktiv ✅' : 'Free',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        pending
+                            ? 'Warte auf PayPal Bestätigung (Webhook)…'
+                            : (isPremium
+                            ? 'Kündigung in PayPal deaktiviert Premium automatisch.'
+                            : 'Schalte Premium frei für Live-Freunde-Status etc.'),
+                        style: const TextStyle(color: Colors.white70, height: 1.4),
+                      ),
+                      if (snap.connectionState == ConnectionState.waiting) ...[
+                        const SizedBox(height: 10),
+                        const Text(
+                          'Lade Premium-Status…',
+                          style: TextStyle(color: Colors.white54),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Wähle dein Abo',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _planCard(
+                  title: 'Monatlich',
+                  subtitle: 'Flexibel kündbar – ideal zum Testen.',
+                  price: _planPriceText(PayPalPlan.monthly),
+                  selected: _selectedPlan == PayPalPlan.monthly,
+                  highlight: null,
+                  onTap: () => setState(() => _selectedPlan = PayPalPlan.monthly),
+                ),
+                const SizedBox(height: 10),
+                _planCard(
+                  title: 'Jährlich',
+                  subtitle: 'Bestes Angebot – weniger Aufwand.',
+                  price: _planPriceText(PayPalPlan.yearly),
+                  selected: yearlySelected,
+                  highlight: _savingsText(),
+                  onTap: () => setState(() => _selectedPlan = PayPalPlan.yearly),
+                ),
+                const SizedBox(height: 18),
+                ElevatedButton(
+                  onPressed: _isLoading ? null : _openSubscriptionCheckout,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: accentRed,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.payment, size: 18),
+                      const SizedBox(width: 10),
+                      Text(
+                        _isLoading ? 'Lädt…' : _payButtonLabel(),
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        '• ${_planPriceText(_selectedPlan)}',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F121A),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white10),
+                  ),
+                  child: const Text(
+                    'Hinweis: Abos werden über PayPal abgewickelt. Premium wird nach erfolgreicher Bestätigung automatisch aktiviert. '
+                        'Kündigung in PayPal deaktiviert Premium automatisch.',
+                    style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.3),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 

@@ -1,466 +1,472 @@
-// functions/paypal/index.js
-// LIVE-only PayPal Subscriptions (produktionstauglich):
-// - Keine Sandbox-Logik
-// - Whitelist für LIVE Plan-IDs
-// - Premium wird zuverlässig über PayPal WEBHOOK gesetzt/entzogen
-// - Activate-Endpoint verknüpft subscriptionId <-> user und macht eine PayPal-Verify
+/* eslint-disable */
+
+/**
+ * functions/paypal/index.js
+ * LIVE Subscriptions (username-based, NO Firebase Auth)
+ * - createPayPalCheckout: erstellt Subscription + approveLink
+ * - paypalWebhook: verifiziert Signatur + setzt premium true/false
+ * - syncPayPalPremiumDaily: Safety Net
+ */
 
 const admin = require("firebase-admin");
-admin.initializeApp();
+if (!admin.apps.length) admin.initializeApp();
 
 const { onRequest } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 
+const db = admin.firestore();
+const FieldValue = admin.firestore.FieldValue;
+
 const REGION = "us-central1";
+const PAYPAL_BASE_URL = "https://api-m.paypal.com";
 
-// ---------- Secrets (in Firebase/Google Cloud setzen, NICHT .env) ----------
-const PAYPAL_CLIENT_ID = defineSecret("Ab9P_0GJy0ZeHXkOLDfcbFmpCF_XYXIdSdSSjhF5yYVmflssYX7w90SGZmZv4ZFalIalWa4W1GScG1jQ"); // LIVE Client ID
-const PAYPAL_SECRET = defineSecret("EAsN3_kZFN75S3uFg_B3tXPy35jzoIDbLuSZajZobRmcVHX9_Zq0gojcc1rTZqMjA4BB4z1mUoaSUg2m"); // LIVE Secret
-const PAYPAL_WEBHOOK_ID = defineSecret("4CC86758J3461010H"); // Webhook-ID aus PayPal Dashboard (Live)
+// Secrets (nur Namen)
+const PAYPAL_CLIENT_ID = defineSecret("PAYPAL_CLIENT_ID");
+const PAYPAL_SECRET = defineSecret("PAYPAL_SECRET");
+const PAYPAL_WEBHOOK_ID = defineSecret("PAYPAL_WEBHOOK_ID");
 
-// ---------- LIVE CONFIG ----------
-const PAYPAL_BASE = "https://api-m.paypal.com";
-
-// Deine LIVE Plan IDs (nur diese dürfen Premium aktivieren)
+// LIVE Plan IDs (Whitelist)
 const ALLOWED_PLANS_LIVE = new Set([
-  "P-55588718AV729883XNE6MJ5Y", // PartyPin Premium – Monatlich
-  "P-0WL99384633096336NE6WUSA", // PartyPin Jährlich
+    "P-55588718AV729883XNE6MJ5Y",
+    "P-0WL99384633096336NE6WUSA",
 ]);
 
+// Deep Links
+const RETURN_URL = "partypin://paypal-return";
+const CANCEL_URL = "partypin://paypal-cancel";
+
+// CORS
 const ALLOWED_ORIGINS = [
-  "https://partypin-5dc3f.web.app",
-  "https://partypin-5dc3f.firebaseapp.com",
+    "https://partypin-5dc3f.web.app",
+    "https://partypin-5dc3f.firebaseapp.com",
+    "http://localhost:5173",
+    "http://localhost:3000",
 ];
 
-// ---------- Helpers ----------
-function sendJson(res, code, obj) {
-  res.status(code).set("content-type", "application/json").send(JSON.stringify(obj));
+function setCors(req, res) {
+    const origin = req.headers?.origin;
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+        res.set("Access-Control-Allow-Origin", origin);
+        res.set("Vary", "Origin");
+    }
+    res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
 }
 
-function corsHeaders(req, res) {
-  const origin = req.headers.origin;
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.set("access-control-allow-origin", origin);
-    res.set("vary", "Origin");
-  }
-  res.set("access-control-allow-methods", "POST, OPTIONS");
-  res.set("access-control-allow-headers", "content-type");
+function sendJson(res, code, obj) {
+    res.status(code).set("content-type", "application/json").send(JSON.stringify(obj));
 }
 
 function normalizeStatus(status) {
-  return String(status || "UNKNOWN").trim().toUpperCase();
+    return String(status || "UNKNOWN").trim().toUpperCase();
 }
 
 function parseIsoDate(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
+    if (!iso) return null;
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? null : d;
 }
 
-async function findUserDocRefByUsername(username) {
-  const db = admin.firestore();
-  const u = String(username || "").trim();
-  const ul = u.toLowerCase();
-
-  let snap = await db.collection("users").where("username_lower", "==", ul).limit(1).get();
-  if (!snap.empty) return snap.docs[0].ref;
-
-  snap = await db.collection("users").where("username", "==", u).limit(1).get();
-  if (!snap.empty) return snap.docs[0].ref;
-
-  return null;
+function getHeaderCI(headers, name) {
+    if (!headers) return undefined;
+    const lower = name.toLowerCase();
+    return headers[lower] || headers[name];
 }
 
 // ---------- PayPal API ----------
-async function getPayPalAccessToken(clientId, secret) {
-  const basicAuth = Buffer.from(`${clientId}:${secret}`).toString("base64");
+async function getPayPalAccessToken() {
+    const clientId = (PAYPAL_CLIENT_ID.value() || "").trim();
+    const secret = (PAYPAL_SECRET.value() || "").trim();
+    if (!clientId || !secret) throw new Error("PayPal-Credentials nicht gesetzt (Secrets)");
 
-  const resp = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${basicAuth}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: "grant_type=client_credentials",
-  });
+    const basicAuth = Buffer.from(`${clientId}:${secret}`).toString("base64");
 
-  if (!resp.ok) {
+    const resp = await fetch(`${PAYPAL_BASE_URL}/v1/oauth2/token`, {
+        method: "POST",
+        headers: {
+            Authorization: `Basic ${basicAuth}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: "grant_type=client_credentials",
+    });
+
     const txt = await resp.text().catch(() => "");
-    throw new Error(`PayPal token error: ${resp.status} ${txt}`);
-  }
+    if (!resp.ok) throw new Error(`PayPal token error: ${resp.status} ${txt}`.slice(0, 900));
 
-  const json = await resp.json();
-  const token = String(json.access_token || "");
-  if (!token) throw new Error("PayPal token missing");
-  return token;
+    const json = JSON.parse(txt);
+    const token = String(json.access_token || "");
+    if (!token) throw new Error("PayPal token missing");
+    return token;
+}
+
+async function createPayPalSubscription({ token, planId, username }) {
+    const body = {
+        plan_id: planId,
+        custom_id: username,
+        application_context: {
+            brand_name: "PartyPin",
+            locale: "de-DE",
+            user_action: "SUBSCRIBE_NOW",
+            return_url: RETURN_URL,
+            cancel_url: CANCEL_URL,
+        },
+    };
+
+    const resp = await fetch(`${PAYPAL_BASE_URL}/v1/billing/subscriptions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    });
+
+    const txt = await resp.text().catch(() => "");
+    if (!resp.ok) throw new Error(`PayPal create subscription error: ${resp.status} ${txt}`.slice(0, 900));
+    return JSON.parse(txt);
 }
 
 async function getPayPalSubscription(subscriptionId, token) {
-  const resp = await fetch(
-      `${PAYPAL_BASE}/v1/billing/subscriptions/${encodeURIComponent(subscriptionId)}`,
-      {
+    const resp = await fetch(`${PAYPAL_BASE_URL}/v1/billing/subscriptions/${encodeURIComponent(subscriptionId)}`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      }
-  );
+    });
 
-  if (!resp.ok) {
     const txt = await resp.text().catch(() => "");
-    throw new Error(`PayPal subscription error: ${resp.status} ${txt}`);
-  }
-
-  return resp.json();
+    if (!resp.ok) throw new Error(`PayPal subscription error: ${resp.status} ${txt}`.slice(0, 900));
+    return JSON.parse(txt);
 }
 
-// PayPal Webhook Signatur verifizieren (wichtig in Produktion)
-async function verifyPayPalWebhookSignature({ token, webhookId, headers, rawBody, event }) {
-  const payload = {
-    auth_algo: headers["paypal-auth-algo"],
-    cert_url: headers["paypal-cert-url"],
-    transmission_id: headers["paypal-transmission-id"],
-    transmission_sig: headers["paypal-transmission-sig"],
-    transmission_time: headers["paypal-transmission-time"],
-    webhook_id: webhookId,
-    webhook_event: event,
-  };
+// ---------- Webhook Signature Verify ----------
+async function verifyPayPalWebhookSignature({ token, webhookId, headers, event }) {
+    const payload = {
+        auth_algo: getHeaderCI(headers, "paypal-auth-algo"),
+        cert_url: getHeaderCI(headers, "paypal-cert-url"),
+        transmission_id: getHeaderCI(headers, "paypal-transmission-id"),
+        transmission_sig: getHeaderCI(headers, "paypal-transmission-sig"),
+        transmission_time: getHeaderCI(headers, "paypal-transmission-time"),
+        webhook_id: webhookId,
+        webhook_event: event,
+    };
 
-  // PayPal will rawBody als string (genau wie empfangen)
-  // Wenn rawBody Buffer ist, in utf8 umwandeln:
-  const _raw = Buffer.isBuffer(rawBody) ? rawBody.toString("utf8") : String(rawBody || "");
-  // Wichtig: webhook_event muss dem JSON entsprechen, nicht dem string. Wir senden event-objekt.
-  // rawBody wird hier nicht direkt als field geschickt; PayPal verifiziert mit webhook_event.
+    const resp = await fetch(`${PAYPAL_BASE_URL}/v1/notifications/verify-webhook-signature`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
 
-  const resp = await fetch(`${PAYPAL_BASE}/v1/notifications/verify-webhook-signature`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!resp.ok) {
     const txt = await resp.text().catch(() => "");
-    throw new Error(`PayPal webhook verify error: ${resp.status} ${txt} rawBodyLen=${_raw.length}`);
-  }
+    if (!resp.ok) throw new Error(`PayPal webhook verify error: ${resp.status} ${txt}`.slice(0, 900));
 
-  const json = await resp.json();
-  const status = normalizeStatus(json?.verification_status);
-  return status === "SUCCESS";
+    const json = JSON.parse(txt);
+    return normalizeStatus(json?.verification_status) === "SUCCESS";
 }
 
-// ---------- Firestore update helpers ----------
-async function setPremiumBySubscriptionId(subscriptionId, fields) {
-  const db = admin.firestore();
-
-  // Du speicherst subscriptionId im Userdoc unter paypalSubscriptionId
-  const snap = await db
-      .collection("users")
-      .where("paypalSubscriptionId", "==", subscriptionId)
-      .limit(1)
-      .get();
-
-  if (snap.empty) return null;
-
-  const ref = snap.docs[0].ref;
-  await ref.set(
-      {
-        ...fields,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-  );
-  return ref.id;
-}
-
+// ---------- Firestore Premium Fields ----------
 function premiumFieldsActive({ planId, status, nextBilling }) {
-  const payload = {
-    premium: true,
-    premiumPlan: planId || null,
-    paypalStatus: status || null,
-    premiumSince: admin.firestore.FieldValue.serverTimestamp(),
-  };
-  if (nextBilling) payload.premiumUntil = admin.firestore.Timestamp.fromDate(nextBilling);
-  return payload;
+    const payload = {
+        premium: true,
+        premiumPlan: planId || null,
+        paypalStatus: status || null,
+        premiumSince: FieldValue.serverTimestamp(),
+    };
+    if (nextBilling) payload.premiumUntil = admin.firestore.Timestamp.fromDate(nextBilling);
+    return payload;
 }
 
 function premiumFieldsInactive({ status }) {
-  return {
-    premium: false,
-    paypalStatus: status || null,
-    premiumRevokedAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
+    return {
+        premium: false,
+        paypalStatus: status || null,
+        premiumRevokedAt: FieldValue.serverTimestamp(),
+        premiumUntil: FieldValue.delete(),
+    };
 }
 
-// ---------- 1) Activate endpoint (client ruft das nach approve auf) ----------
-exports.activatePayPalSubscription = onRequest(
-    { region: REGION, secrets: [PAYPAL_CLIENT_ID, PAYPAL_SECRET] },
+// =======================
+// 1) createPayPalCheckout
+// =======================
+exports.createPayPalCheckout = onRequest(
+    { region: REGION, invoker: "public", secrets: [PAYPAL_CLIENT_ID, PAYPAL_SECRET] },
     async (req, res) => {
-      try {
-        corsHeaders(req, res);
+        setCors(req, res);
         if (req.method === "OPTIONS") return sendJson(res, 204, {});
-        if (req.method !== "POST") return sendJson(res, 405, { status: "error", message: "method not allowed" });
+        if (req.method !== "POST") return sendJson(res, 405, { status: "error", message: "Nur POST erlaubt" });
 
-        const body = req.body || {};
-        const subscriptionId = String(body.subscriptionId || "").trim();
-        const username = String(body.username || "").trim();
-        const planIdSent = String(body.planId || "").trim();
+        try {
+            const body = req.body || {};
+            const username = String(body.username || "").trim();
+            const planId = String(body.planId || "").trim();
 
-        if (!subscriptionId || !username || !planIdSent) {
-          return sendJson(res, 400, { status: "error", message: "missing data" });
+            if (!username) return sendJson(res, 400, { status: "error", message: "username fehlt" });
+            if (!planId) return sendJson(res, 400, { status: "error", message: "planId fehlt" });
+            if (!ALLOWED_PLANS_LIVE.has(planId)) {
+                return sendJson(res, 400, { status: "error", message: "plan not allowed", planId });
+            }
+
+            const userRef = db.doc(`users/${username}`);
+
+            await userRef.set(
+                {
+                    premiumPendingWebhook: true,
+                    premiumPlan: planId,
+                    updatedAt: FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+            );
+
+            const token = await getPayPalAccessToken();
+            const sub = await createPayPalSubscription({ token, planId, username });
+
+            const subscriptionId = String(sub?.id || "").trim();
+            const approveLink = (sub.links || []).find((l) => l.rel === "approve")?.href || "";
+
+            if (!subscriptionId || !approveLink) {
+                return sendJson(res, 500, { status: "error", message: "paypal missing approve link/id" });
+            }
+
+            await db.doc(`paypalSubscriptions/${subscriptionId}`).set(
+                {
+                    username,
+                    planId,
+                    status: normalizeStatus(sub.status),
+                    createdAt: FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+            );
+
+            await userRef.set(
+                {
+                    paypalSubscriptionId: subscriptionId,
+                    paypalStatus: normalizeStatus(sub.status),
+                    updatedAt: FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+            );
+
+            return sendJson(res, 200, { status: "ok", approveLink, subscriptionId });
+        } catch (e) {
+            console.error("[createPayPalCheckout] error:", e);
+            return sendJson(res, 500, { status: "error", message: String(e?.message || e) });
         }
-
-        // Plan-Whitelist (Production-Schutz)
-        if (!ALLOWED_PLANS_LIVE.has(planIdSent)) {
-          return sendJson(res, 400, { status: "error", message: "plan not allowed", planId: planIdSent });
-        }
-
-        const clientId = PAYPAL_CLIENT_ID.value();
-        const secret = PAYPAL_SECRET.value();
-        if (!clientId || !secret) {
-          return sendJson(res, 500, { status: "error", message: "missing paypal secrets" });
-        }
-
-        // User finden
-        const userRef = await findUserDocRefByUsername(username);
-        if (!userRef) return sendJson(res, 404, { status: "error", message: "user not found" });
-
-        // PayPal verify (damit niemand fake subscriptionId/planId posten kann)
-        const token = await getPayPalAccessToken(clientId, secret);
-        const sub = await getPayPalSubscription(subscriptionId, token);
-
-        const paypalStatus = normalizeStatus(sub.status);
-        const paypalPlanId = String(sub.plan_id || "").trim();
-
-        if (!paypalPlanId) return sendJson(res, 400, { status: "error", message: "paypal missing plan_id" });
-        if (paypalPlanId !== planIdSent) {
-          return sendJson(res, 400, {
-            status: "error",
-            message: "plan mismatch",
-            planIdSent,
-            planIdPaypal: paypalPlanId,
-          });
-        }
-
-        // In der Praxis kann es kurz APPROVED sein; Premium wird final über Webhook gesetzt.
-        // Hier: verknüpfen + Status speichern (und Premium nur setzen wenn schon ACTIVE).
-        const nextBilling = parseIsoDate(sub?.billing_info?.next_billing_time);
-        const isActive = paypalStatus === "ACTIVE";
-
-        await userRef.set(
-            {
-              paypalSubscriptionId: subscriptionId,
-              paypalStatus,
-              premiumPlan: paypalPlanId,
-              premiumActivationRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
-              // Nur wenn wirklich ACTIVE ist, sofort premium=true setzen
-              ...(isActive ? premiumFieldsActive({ planId: paypalPlanId, status: paypalStatus, nextBilling }) : {}),
-              // Webhook wird es sicher finalisieren
-              premiumPendingWebhook: !isActive,
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-        );
-
-        return sendJson(res, 200, {
-          status: "ok",
-          paypalStatus,
-          premiumSetNow: isActive,
-          premiumUntil: nextBilling ? nextBilling.toISOString() : null,
-        });
-      } catch (e) {
-        console.error("[activatePayPalSubscription] error:", e);
-        return sendJson(res, 500, { status: "error", message: String(e?.message || e) });
-      }
     }
 );
 
-// ---------- 2) PayPal Webhook (setzt/entzieht Premium zuverlässig) ----------
+// =======================
+// 2) paypalWebhook
+// =======================
 exports.paypalWebhook = onRequest(
-    { region: REGION, secrets: [PAYPAL_CLIENT_ID, PAYPAL_SECRET, PAYPAL_WEBHOOK_ID] },
+    { region: REGION, invoker: "public", secrets: [PAYPAL_CLIENT_ID, PAYPAL_SECRET, PAYPAL_WEBHOOK_ID] },
     async (req, res) => {
-      try {
-        // PayPal sendet POST
+        setCors(req, res);
         if (req.method === "OPTIONS") return sendJson(res, 204, {});
-        if (req.method !== "POST") return sendJson(res, 405, { status: "error", message: "method not allowed" });
+        if (req.method !== "POST") return sendJson(res, 405, { status: "error", message: "Only POST" });
 
-        const clientId = PAYPAL_CLIENT_ID.value();
-        const secret = PAYPAL_SECRET.value();
-        const webhookId = PAYPAL_WEBHOOK_ID.value();
-        if (!clientId || !secret || !webhookId) {
-          return sendJson(res, 500, { status: "error", message: "missing paypal secrets/webhook id" });
-        }
-
+        const h = req.headers || {};
         const event = req.body || {};
         const eventType = String(event?.event_type || "").trim();
+        const eventId = String(event?.id || "").trim();
 
-        // 1) Signatur verifizieren
-        const token = await getPayPalAccessToken(clientId, secret);
-        const ok = await verifyPayPalWebhookSignature({
-          token,
-          webhookId,
-          headers: req.headers || {},
-          rawBody: req.rawBody, // Firebase liefert rawBody
-          event,
-        });
+        // Debug
+        console.log("[paypalWebhook] HIT", { eventType, eventId, headers: h });
 
-        if (!ok) {
-          console.error("[paypalWebhook] signature verify failed, eventType=", eventType);
-          return sendJson(res, 400, { status: "error", message: "invalid signature" });
+        // PayPal signature headers
+        const authAlgo = getHeaderCI(h, "paypal-auth-algo");
+        const certUrl = getHeaderCI(h, "paypal-cert-url");
+        const transmissionId = getHeaderCI(h, "paypal-transmission-id");
+        const transmissionSig = getHeaderCI(h, "paypal-transmission-sig");
+        const transmissionTime = getHeaderCI(h, "paypal-transmission-time");
+
+        // HARD GUARD: bei manuellen Tests NIE verify callen
+        const missing = [];
+        if (!authAlgo) missing.push("paypal-auth-algo");
+        if (!certUrl) missing.push("paypal-cert-url");
+        if (!transmissionId) missing.push("paypal-transmission-id");
+        if (!transmissionSig) missing.push("paypal-transmission-sig");
+        if (!transmissionTime) missing.push("paypal-transmission-time");
+
+        if (missing.length) {
+            console.log("[paypalWebhook] Missing PayPal headers -> ignored", { missing });
+            return sendJson(res, 200, { status: "ok", ignored: true, reason: "missing_paypal_headers", missing });
         }
 
-        // 2) SubscriptionId extrahieren
-        // Bei Billing Subscription Events ist es meist resource.id
-        const subscriptionId = String(event?.resource?.id || "").trim();
-        const planId = String(event?.resource?.plan_id || "").trim();
-        const status = normalizeStatus(event?.resource?.status);
+        try {
+            const webhookId = (PAYPAL_WEBHOOK_ID.value() || "").trim();
+            if (!webhookId) return sendJson(res, 500, { status: "error", message: "PAYPAL_WEBHOOK_ID fehlt" });
 
-        if (!subscriptionId) {
-          // PayPal sendet manchmal Events ohne resource.id, dann ignorieren
-          return sendJson(res, 200, { status: "ok", ignored: true, reason: "missing subscriptionId" });
-        }
+            const token = await getPayPalAccessToken();
 
-        // 3) Plan-Schutz (nur unsere Plans dürfen Premium togglen)
-        if (planId && !ALLOWED_PLANS_LIVE.has(planId)) {
-          return sendJson(res, 200, { status: "ok", ignored: true, reason: "plan not allowed", planId });
-        }
-
-        // 4) Status-Handling (Praxis)
-        // Wichtige Events:
-        // - BILLING.SUBSCRIPTION.ACTIVATED => premium true
-        // - BILLING.SUBSCRIPTION.CANCELLED / SUSPENDED / EXPIRED => premium false
-        // - BILLING.SUBSCRIPTION.UPDATED => je nach status
-        const dbUpdate = async (fields) => {
-          const userId = await setPremiumBySubscriptionId(subscriptionId, fields);
-          return userId;
-        };
-
-        let userId = null;
-
-        if (eventType === "BILLING.SUBSCRIPTION.ACTIVATED") {
-          // Optional: next billing time aus PayPal holen (sicherer)
-          const sub = await getPayPalSubscription(subscriptionId, token).catch(() => null);
-          const nextBilling = parseIsoDate(sub?.billing_info?.next_billing_time);
-
-          userId = await dbUpdate({
-            ...premiumFieldsActive({ planId: planId || sub?.plan_id, status: "ACTIVE", nextBilling }),
-            premiumPendingWebhook: false,
-          });
-        } else if (
-            eventType === "BILLING.SUBSCRIPTION.CANCELLED" ||
-            eventType === "BILLING.SUBSCRIPTION.SUSPENDED" ||
-            eventType === "BILLING.SUBSCRIPTION.EXPIRED"
-        ) {
-          userId = await dbUpdate({
-            ...premiumFieldsInactive({ status: status || eventType }),
-            premiumPendingWebhook: false,
-          });
-        } else if (eventType === "BILLING.SUBSCRIPTION.UPDATED") {
-          // Wenn updated und status ACTIVE => premium true, sonst false
-          const isActive = status === "ACTIVE";
-          if (isActive) {
-            const sub = await getPayPalSubscription(subscriptionId, token).catch(() => null);
-            const nextBilling = parseIsoDate(sub?.billing_info?.next_billing_time);
-
-            userId = await dbUpdate({
-              ...premiumFieldsActive({ planId: planId || sub?.plan_id, status: "ACTIVE", nextBilling }),
-              premiumPendingWebhook: false,
+            // 1) Verify signature
+            const verified = await verifyPayPalWebhookSignature({
+                token,
+                webhookId,
+                headers: h,
+                event,
             });
-          } else {
-            userId = await dbUpdate({
-              ...premiumFieldsInactive({ status: status || "UPDATED" }),
-              premiumPendingWebhook: false,
-            });
-          }
-        } else {
-          // Andere Events akzeptieren aber ignorieren
-          return sendJson(res, 200, { status: "ok", ignored: true, eventType });
-        }
 
-        return sendJson(res, 200, { status: "ok", eventType, subscriptionId, userId });
-      } catch (e) {
-        console.error("[paypalWebhook] error:", e);
-        // PayPal will oft 200 sehen, aber bei echten Fehlern besser 500:
-        return sendJson(res, 500, { status: "error", message: String(e?.message || e) });
-      }
+            if (!verified) {
+                console.log("[paypalWebhook] invalid signature", { eventType, eventId });
+                return sendJson(res, 400, { status: "error", message: "invalid signature" });
+            }
+
+            // 2) Idempotenz
+            if (eventId) {
+                const ref = db.doc(`paypalWebhookEvents/${eventId}`);
+                try {
+                    await ref.create({ eventType, receivedAt: FieldValue.serverTimestamp() });
+                } catch (_) {
+                    return sendJson(res, 200, { status: "ok", alreadyProcessed: true, eventType });
+                }
+            }
+
+            const r = event?.resource || {};
+            const subscriptionId = String(r.id || r.billing_agreement_id || "").trim();
+            const planId = String(r.plan_id || "").trim();
+            const status = normalizeStatus(r.status);
+            const username = String(r.custom_id || "").trim();
+
+            if (planId && !ALLOWED_PLANS_LIVE.has(planId)) {
+                return sendJson(res, 200, { status: "ok", ignored: true, reason: "plan not allowed", planId });
+            }
+            if (!username) {
+                return sendJson(res, 200, { status: "ok", ignored: true, reason: "missing custom_id(username)" });
+            }
+
+            const userRef = db.doc(`users/${username}`);
+
+            const applyActive = async () => {
+                const sub = subscriptionId ? await getPayPalSubscription(subscriptionId, token).catch(() => null) : null;
+                const nextBilling = parseIsoDate(sub?.billing_info?.next_billing_time);
+                const realPlan = planId || String(sub?.plan_id || "").trim();
+
+                if (realPlan && !ALLOWED_PLANS_LIVE.has(realPlan)) {
+                    await userRef.set(
+                        {
+                            paypalSubscriptionId: subscriptionId || null,
+                            ...premiumFieldsInactive({ status: "PLAN_NOT_ALLOWED" }),
+                            premiumPendingWebhook: false,
+                            updatedAt: FieldValue.serverTimestamp(),
+                        },
+                        { merge: true }
+                    );
+                    return;
+                }
+
+                await userRef.set(
+                    {
+                        paypalSubscriptionId: subscriptionId || null,
+                        ...premiumFieldsActive({ planId: realPlan, status: "ACTIVE", nextBilling }),
+                        premiumPendingWebhook: false,
+                        updatedAt: FieldValue.serverTimestamp(),
+                    },
+                    { merge: true }
+                );
+
+                if (subscriptionId) {
+                    await db.doc(`paypalSubscriptions/${subscriptionId}`).set(
+                        { username, planId: realPlan || null, status: "ACTIVE", updatedAt: FieldValue.serverTimestamp() },
+                        { merge: true }
+                    );
+                }
+            };
+
+            const applyInactive = async (why) => {
+                await userRef.set(
+                    {
+                        paypalSubscriptionId: subscriptionId || null,
+                        ...premiumFieldsInactive({ status: why }),
+                        premiumPendingWebhook: false,
+                        updatedAt: FieldValue.serverTimestamp(),
+                    },
+                    { merge: true }
+                );
+
+                if (subscriptionId) {
+                    await db.doc(`paypalSubscriptions/${subscriptionId}`).set(
+                        { status: why, updatedAt: FieldValue.serverTimestamp() },
+                        { merge: true }
+                    );
+                }
+            };
+
+            if (eventType === "BILLING.SUBSCRIPTION.ACTIVATED" || eventType === "BILLING.SUBSCRIPTION.RE-ACTIVATED") {
+                await applyActive();
+            } else if (
+                eventType === "BILLING.SUBSCRIPTION.CANCELLED" ||
+                eventType === "BILLING.SUBSCRIPTION.SUSPENDED" ||
+                eventType === "BILLING.SUBSCRIPTION.EXPIRED"
+            ) {
+                await applyInactive(status || eventType);
+            } else if (eventType === "BILLING.SUBSCRIPTION.UPDATED") {
+                if (status === "ACTIVE") await applyActive();
+                else await applyInactive(status || "UPDATED");
+            } else {
+                return sendJson(res, 200, { status: "ok", ignored: true, eventType });
+            }
+
+            return sendJson(res, 200, { status: "ok", eventType, username, subscriptionId });
+        } catch (e) {
+            console.error("[paypalWebhook] error:", e);
+            return sendJson(res, 500, { status: "error", message: String(e?.message || e) });
+        }
     }
 );
 
-// ---------- 3) Safety Net: täglicher Sync (falls Webhook mal ausfällt) ----------
+// =======================
+// 3) daily sync
+// =======================
 exports.syncPayPalPremiumDaily = onSchedule(
     { region: REGION, schedule: "every day 03:00", secrets: [PAYPAL_CLIENT_ID, PAYPAL_SECRET] },
     async () => {
-      const db = admin.firestore();
+        const token = await getPayPalAccessToken();
 
-      const clientId = PAYPAL_CLIENT_ID.value();
-      const secret = PAYPAL_SECRET.value();
-      if (!clientId || !secret) {
-        console.error("[syncPayPalPremiumDaily] missing paypal secrets");
-        return;
-      }
+        const snap = await db
+            .collection("users")
+            .where("premium", "==", true)
+            .where("paypalSubscriptionId", "!=", null)
+            .limit(300)
+            .get();
 
-      const token = await getPayPalAccessToken(clientId, secret);
+        if (snap.empty) return;
 
-      // Nutzer mit premium=true und subscriptionId prüfen
-      const snap = await db
-          .collection("users")
-          .where("premium", "==", true)
-          .where("paypalSubscriptionId", "!=", null)
-          .limit(200)
-          .get();
+        const batch = db.batch();
 
-      if (snap.empty) return;
+        for (const doc of snap.docs) {
+            const data = doc.data() || {};
+            const subId = String(data.paypalSubscriptionId || "").trim();
+            if (!subId) continue;
 
-      const batch = db.batch();
+            try {
+                const sub = await getPayPalSubscription(subId, token);
+                const st = normalizeStatus(sub.status);
+                const plan = String(sub.plan_id || "").trim();
+                const nextBilling = parseIsoDate(sub?.billing_info?.next_billing_time);
 
-      for (const doc of snap.docs) {
-        const data = doc.data() || {};
-        const subId = String(data.paypalSubscriptionId || "").trim();
-        if (!subId) continue;
+                if (plan && !ALLOWED_PLANS_LIVE.has(plan)) {
+                    batch.set(
+                        doc.ref,
+                        { ...premiumFieldsInactive({ status: "PLAN_NOT_ALLOWED" }), premiumPendingWebhook: false, updatedAt: FieldValue.serverTimestamp() },
+                        { merge: true }
+                    );
+                    continue;
+                }
 
-        try {
-          const sub = await getPayPalSubscription(subId, token);
-          const status = normalizeStatus(sub.status);
-          const planId = String(sub.plan_id || "").trim();
-          const nextBilling = parseIsoDate(sub?.billing_info?.next_billing_time);
-
-          // Nur unsere Plans
-          if (planId && !ALLOWED_PLANS_LIVE.has(planId)) {
-            batch.set(
-                doc.ref,
-                {
-                  ...premiumFieldsInactive({ status: "PLAN_NOT_ALLOWED" }),
-                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                },
-                { merge: true }
-            );
-            continue;
-          }
-
-          if (status === "ACTIVE") {
-            batch.set(
-                doc.ref,
-                {
-                  ...premiumFieldsActive({ planId, status, nextBilling }),
-                  premiumPendingWebhook: false,
-                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                },
-                { merge: true }
-            );
-          } else {
-            batch.set(
-                doc.ref,
-                {
-                  ...premiumFieldsInactive({ status }),
-                  premiumPendingWebhook: false,
-                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                },
-                { merge: true }
-            );
-          }
-        } catch (err) {
-          console.error("[syncPayPalPremiumDaily] user", doc.id, "error:", err);
+                if (st === "ACTIVE") {
+                    batch.set(
+                        doc.ref,
+                        { ...premiumFieldsActive({ planId: plan, status: st, nextBilling }), premiumPendingWebhook: false, updatedAt: FieldValue.serverTimestamp() },
+                        { merge: true }
+                    );
+                } else {
+                    batch.set(
+                        doc.ref,
+                        { ...premiumFieldsInactive({ status: st }), premiumPendingWebhook: false, updatedAt: FieldValue.serverTimestamp() },
+                        { merge: true }
+                    );
+                }
+            } catch (err) {
+                console.error("[syncPayPalPremiumDaily] user", doc.id, "error:", err);
+            }
         }
-      }
 
-      await batch.commit();
+        await batch.commit();
     }
 );
