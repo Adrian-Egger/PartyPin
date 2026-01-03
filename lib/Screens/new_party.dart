@@ -20,8 +20,7 @@ import '../Social/friends_view.dart';
 class NewPartyScreen extends StatefulWidget {
   final Map<String, dynamic>? existingData;
   final String? docId;
-  final void Function({bool updated, Map<String, dynamic>? payload})?
-  onGoToMapAndRefresh;
+  final void Function({bool updated, Map<String, dynamic>? payload})? onGoToMapAndRefresh;
 
   const NewPartyScreen({
     Key? key,
@@ -84,7 +83,11 @@ class _NewPartyScreenState extends State<NewPartyScreen>
   static const _textPrimary = Colors.white;
   static const _textSecondary = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30);
-  static const _secondary = _accent; // alles rot
+  static const _secondary = _accent;
+
+  // ✅ wie Feedback/Friends Header
+  static const _accentSoft = Color(0x26FF3B30); // ~15% rot
+  static const _accentLine = Color(0x66FF3B30); // ~40% rot
 
   // ✅ NEU: BottomNav Index (0=Feedback, 1=Map, 2=Freunde, 3=Neue Party)
   int _currentIndex = 3;
@@ -102,12 +105,8 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     _wireListeners();
 
     // ✅ Draft/Entwurf komplett deaktiviert:
-    // - keine Autosave-Timer
-    // - kein SnackBar "Entwurf gefunden"
-    // - keine SharedPreferences draft_newparty Nutzung
     _deleteDraftSilently();
 
-    // ✅ FIX: Legal-Consent (Popup) nur im NewPartyScreen, nicht im PartyMapScreen
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
 
@@ -120,7 +119,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       final ok = await _ensureLegalConsentBeforeCreating();
       if (!ok) {
         if (!mounted) return;
-        _goToMapAndPop(updated: false);
+        Navigator.of(context).pop({'updated': false});
         return;
       }
     });
@@ -147,7 +146,6 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     super.dispose();
   }
 
-  // ✅ Draft/Entwurf endgültig weg: auch alte Reste löschen
   Future<void> _deleteDraftSilently() async {
     try {
       final p = await SharedPreferences.getInstance();
@@ -171,7 +169,6 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     _isFreeEntry = (data['price'] ?? 0) == 0;
     _addressController.text = data['address'] ?? '';
 
-    // --- bevorzugt startTime verwenden ---
     if (data['startTime'] is Timestamp) {
       final dt = (data['startTime'] as Timestamp).toDate();
       _selectedDate = DateTime(dt.year, dt.month, dt.day);
@@ -179,7 +176,6 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       _timeController.text =
       "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
     } else {
-      // Fallback: alte Struktur (date + time)
       if (data['date'] is Timestamp) {
         final d = (data['date'] as Timestamp).toDate();
         _selectedDate = DateTime(d.year, d.month, d.day);
@@ -187,20 +183,17 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       if (data['time'] != null) {
         final parts = (data['time'] as String).split(':');
         if (parts.length == 2) {
-          _selectedTime =
-              TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+          _selectedTime = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
           _timeController.text = data['time'];
         }
       }
     }
 
     _partyType = data['type'] ?? 'Open';
-    _minAgeController.text =
-    (data['minAge'] != null) ? data['minAge'].toString() : '';
+    _minAgeController.text = (data['minAge'] != null) ? data['minAge'].toString() : '';
     _pickedLat = (data['lat'] as num?)?.toDouble();
     _pickedLng = (data['lng'] as num?)?.toDouble();
 
-    // Sichtbarkeit + Excludes beim Edit
     final vis = data['visibility'];
     _friendsOnly = (vis == 'friends');
 
@@ -226,11 +219,13 @@ class _NewPartyScreenState extends State<NewPartyScreen>
         if (c == _addressController) _addressCountryError = null;
       });
     }
+
     _guestLimitController.addListener(() {
       if (_guestLimitController.text.isNotEmpty) _isUnlimitedGuests = false;
       if (_triedSubmit) _formKey.currentState?.validate();
       setState(() {});
     });
+
     _priceController.addListener(() {
       if (_priceController.text.isNotEmpty) _isFreeEntry = false;
       if (_triedSubmit) _formKey.currentState?.validate();
@@ -248,7 +243,6 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     });
   }
 
-  // ✅ FIX: Consent nur hier, einmalig gespeichert
   Future<bool> _ensureLegalConsentBeforeCreating() async {
     final prefs = await SharedPreferences.getInstance();
     final alreadyAccepted = prefs.getBool('legal_consent_create_v1') ?? false;
@@ -257,8 +251,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     final acceptedNow = await _showLegalGateDialog();
     if (acceptedNow) {
       await prefs.setBool('legal_consent_create_v1', true);
-      await prefs.setString(
-          'legal_consent_create_v1_date', DateTime.now().toIso8601String());
+      await prefs.setString('legal_consent_create_v1_date', DateTime.now().toIso8601String());
     }
     return acceptedNow;
   }
@@ -318,8 +311,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                     Navigator.of(ctx).pop();
                   },
                   icon: const Icon(Icons.close, color: Colors.redAccent),
-                  label: const Text("Abbrechen",
-                      style: TextStyle(color: Colors.redAccent)),
+                  label: const Text("Abbrechen", style: TextStyle(color: Colors.redAccent)),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.redAccent),
                     padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
@@ -621,8 +613,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       } catch (_) {}
 
       HapticFeedback.lightImpact();
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text("Standort übernommen")));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Standort übernommen")));
     }
   }
 
@@ -644,8 +635,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     final lower = name.toLowerCase().trim();
     final spaceToUnderscore = lower.replaceAll(RegExp(r'\s+'), '_');
     final cleaned = spaceToUnderscore.replaceAll(RegExp(r'[^a-z0-9_\-]'), '_');
-    final trimmed =
-    cleaned.replaceAll(RegExp(r'^_+'), '').replaceAll(RegExp(r'_+$'), '');
+    final trimmed = cleaned.replaceAll(RegExp(r'^_+'), '').replaceAll(RegExp(r'_+$'), '');
     return trimmed.isEmpty ? 'party' : trimmed;
   }
 
@@ -665,11 +655,14 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     return candidate;
   }
 
-  void _goToMapAndPop({required bool updated, Map<String, dynamic>? payload}) {
+  void _closeWithResult({required bool updated, Map<String, dynamic>? payload}) {
     _unfocus();
     HapticFeedback.lightImpact();
     widget.onGoToMapAndRefresh?.call(updated: updated, payload: payload);
-    final result = {'targetTab': 'map', 'updated': updated, if (payload != null) ...payload};
+    final result = {
+      'updated': updated,
+      if (payload != null) ...payload,
+    };
     if (mounted) Navigator.of(context).pop(result);
   }
 
@@ -729,14 +722,12 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     final timeOfDay = _selectedTime!;
     String time = _timeController.text.trim();
     if (time.isEmpty) {
-      time =
-      "${timeOfDay.hour.toString().padLeft(2, '0')}:${timeOfDay.minute.toString().padLeft(2, '0')}";
+      time = "${timeOfDay.hour.toString().padLeft(2, '0')}:${timeOfDay.minute.toString().padLeft(2, '0')}";
     }
     final minAge = int.tryParse(_minAgeController.text.trim());
     final type = _partyType;
 
-    final startDateTime =
-    DateTime(date.year, date.month, date.day, timeOfDay.hour, timeOfDay.minute);
+    final startDateTime = DateTime(date.year, date.month, date.day, timeOfDay.hour, timeOfDay.minute);
 
     double? lat = _pickedLat;
     double? lng = _pickedLng;
@@ -823,19 +814,17 @@ class _NewPartyScreenState extends State<NewPartyScreen>
         await ref.set({'docId': savedDocId}, SetOptions(merge: true));
       }
 
-      // ✅ Draft-Reste beim erfolgreichen Speichern auch weg
       await _deleteDraftSilently();
 
       HapticFeedback.mediumImpact();
-      _goToMapAndPop(updated: true, payload: {
+      _closeWithResult(updated: true, payload: {
         'data': {...baseData, 'docId': savedDocId},
         'lat': lat,
         'lng': lng,
         'docId': savedDocId,
       });
     } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Fehler beim Speichern: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Fehler beim Speichern: $e")));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -848,8 +837,9 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     try {
       await FirebaseFirestore.instance.collection('Party').doc(widget.docId).delete();
       await _deleteDraftSilently();
-      _goToMapAndPop(updated: true, payload: {'deleted': true, 'docId': widget.docId});
+      _closeWithResult(updated: true, payload: {'deleted': true, 'docId': widget.docId});
     } catch (_) {
+      // ignore
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -893,75 +883,9 @@ class _NewPartyScreenState extends State<NewPartyScreen>
   Widget build(BuildContext context) {
     final isEditing = widget.existingData != null;
 
-    final stickyBar = SafeArea(
-      top: false,
-      child: Container(
-        decoration: const BoxDecoration(
-          color: _bg,
-          border: Border(top: BorderSide(color: _panelBorder)),
-        ),
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _isLoading ? null : () => _goToMapAndPop(updated: false),
-                icon: const Icon(Icons.map_outlined, color: _secondary),
-                label: const Text(
-                  "Zur Karte",
-                  style: TextStyle(color: Colors.white),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: _panelBorder),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ),
-            if (isEditing) ...[
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _isLoading ? null : _deleteParty,
-                  icon: const Icon(Icons.delete_outline, color: _accent),
-                  label: const Text("Löschen", style: TextStyle(color: _accent)),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: _accent),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                  ),
-                ),
-              ),
-            ],
-            const SizedBox(width: 10),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: _isLoading ? null : _saveParty,
-                icon: const Icon(Icons.add_location_alt_outlined, color: Colors.white),
-                label: Text(
-                  isEditing ? "Aktualisieren" : "Speichern",
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _accent,
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor: Colors.grey[700],
-                  disabledForegroundColor: Colors.white70,
-                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                  elevation: 2,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-
     return WillPopScope(
       onWillPop: () async {
-        _goToMapAndPop(updated: false);
+        _closeWithResult(updated: false);
         return false;
       },
       child: Stack(
@@ -969,27 +893,31 @@ class _NewPartyScreenState extends State<NewPartyScreen>
           Scaffold(
             backgroundColor: _bg,
             appBar: AppBar(
-              backgroundColor: _panel,
-              elevation: 0.5,
-              title: Text(
-                isEditing ? "✏️ Party bearbeiten" : "🎉 Neue Party",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              surfaceTintColor: Colors.transparent,
+              shadowColor: Colors.transparent,
+              automaticallyImplyLeading: false,
+              centerTitle: true,
+              title: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _accentSoft,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: _accentLine, width: 1),
                 ),
-              ),
-              leading: IconButton(
-                icon: const Icon(Icons.map_outlined, color: _accent),
-                onPressed: () => _goToMapAndPop(updated: false),
-                tooltip: "Zur Karte",
+                child: Text(
+                  isEditing ? "✏️ Party bearbeiten 🔥" : "🎉 Neue Party 🔥",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.2,
+                  ),
+                ),
               ),
               actions: [
-                IconButton(
-                  tooltip: "Tastatur schließen",
-                  icon: const Icon(Icons.keyboard_hide, color: _secondary),
-                  onPressed: _unfocus,
-                ),
                 if (_hostName != null)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -1015,7 +943,6 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                   ),
               ],
             ),
-            bottomSheet: stickyBar,
             body: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTap: _unfocus,
@@ -1030,7 +957,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                 child: SingleChildScrollView(
                   controller: _scrollCtrl,
                   keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 220),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
                   child: Form(
                     key: _formKey,
                     autovalidateMode: AutovalidateMode.onUserInteraction,
@@ -1048,10 +975,8 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                 onFieldSubmitted: (_) => _descNode.requestFocus(),
                                 maxLength: 40,
                                 style: const TextStyle(color: _textPrimary),
-                                decoration: _dec("Party Name",
-                                    icon: Icons.title, maxLength: 40),
-                                validator: (v) =>
-                                    _validateRequired(v, label: "Party Name"),
+                                decoration: _dec("Party Name", icon: Icons.title, maxLength: 40),
+                                validator: (v) => _validateRequired(v, label: "Party Name"),
                               ),
                               const SizedBox(height: 12),
                               TextFormField(
@@ -1063,10 +988,8 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                 maxLines: null,
                                 maxLength: 500,
                                 style: const TextStyle(color: _textPrimary),
-                                decoration: _dec("Beschreibung",
-                                    icon: Icons.notes, maxLength: 500),
-                                validator: (v) =>
-                                    _validateRequired(v, label: "Beschreibung"),
+                                decoration: _dec("Beschreibung", icon: Icons.notes, maxLength: 500),
+                                validator: (v) => _validateRequired(v, label: "Beschreibung"),
                               ),
                             ],
                           ),
@@ -1086,9 +1009,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                       textInputAction: TextInputAction.next,
                                       onFieldSubmitted: (_) => _priceNode.requestFocus(),
                                       keyboardType: TextInputType.number,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly
-                                      ],
+                                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                                       enabled: !_isUnlimitedGuests,
                                       style: const TextStyle(color: _textPrimary),
                                       decoration: _dec(
@@ -1097,8 +1018,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                         icon: Icons.groups,
                                         errorText: (!_isUnlimitedGuests &&
                                             _triedSubmit &&
-                                            (int.tryParse(_guestLimitController.text
-                                                .trim()) ==
+                                            (int.tryParse(_guestLimitController.text.trim()) ==
                                                 null))
                                             ? "Gästelimit muss eine Zahl sein."
                                             : null,
@@ -1131,8 +1051,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                       focusNode: _priceNode,
                                       textInputAction: TextInputAction.next,
                                       onFieldSubmitted: (_) => _ageNode.requestFocus(),
-                                      keyboardType: const TextInputType.numberWithOptions(
-                                          decimal: true),
+                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                       inputFormatters: [
                                         FilteringTextInputFormatter.allow(
                                           RegExp(r'^\d*[,]?\d{0,2}$|^\d*[.]?\d{0,2}$'),
@@ -1146,9 +1065,8 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                         icon: Icons.euro,
                                         errorText: (!_isFreeEntry &&
                                             _triedSubmit &&
-                                            (double.tryParse(_priceController.text
-                                                .replaceAll(',', '.')
-                                                .trim()) ==
+                                            (double.tryParse(
+                                                _priceController.text.replaceAll(',', '.').trim()) ==
                                                 null))
                                             ? "Preis muss eine Zahl sein."
                                             : null,
@@ -1179,9 +1097,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                 textInputAction: TextInputAction.next,
                                 onFieldSubmitted: (_) => _addrNode.requestFocus(),
                                 keyboardType: TextInputType.number,
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.digitsOnly
-                                ],
+                                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                                 style: const TextStyle(color: _textPrimary),
                                 decoration: _dec(
                                   "Mindestalter",
@@ -1244,22 +1160,18 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                         backgroundColor: _card,
                                         foregroundColor: _textPrimary,
                                         elevation: 0,
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 14, horizontal: 14),
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(14)),
+                                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                                       ),
                                       onPressed: _pickDate,
-                                      icon: const Icon(Icons.calendar_today,
-                                          color: _secondary),
+                                      icon: const Icon(Icons.calendar_today, color: _secondary),
                                       label: AnimatedSwitcher(
                                         duration: const Duration(milliseconds: 150),
                                         child: Text(
                                           _selectedDate == null
                                               ? "Datum wählen"
                                               : "${_selectedDate!.day.toString().padLeft(2, '0')}.${_selectedDate!.month.toString().padLeft(2, '0')}.${_selectedDate!.year}",
-                                          key: ValueKey(
-                                              _selectedDate?.toIso8601String() ?? 'none'),
+                                          key: ValueKey(_selectedDate?.toIso8601String() ?? 'none'),
                                         ),
                                       ),
                                     ),
@@ -1271,23 +1183,16 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                         backgroundColor: _card,
                                         foregroundColor: _textPrimary,
                                         elevation: 0,
-                                        padding: const EdgeInsets.symmetric(
-                                            vertical: 14, horizontal: 14),
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(14)),
+                                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                                       ),
                                       onPressed: _pickTime,
-                                      icon: const Icon(Icons.access_time,
-                                          color: _secondary),
+                                      icon: const Icon(Icons.access_time, color: _secondary),
                                       label: AnimatedSwitcher(
                                         duration: const Duration(milliseconds: 150),
                                         child: Text(
-                                          (_selectedTime == null)
-                                              ? "Uhrzeit wählen"
-                                              : _timeController.text,
-                                          key: ValueKey(_timeController.text.isEmpty
-                                              ? 'none'
-                                              : _timeController.text),
+                                          (_selectedTime == null) ? "Uhrzeit wählen" : _timeController.text,
+                                          key: ValueKey(_timeController.text.isEmpty ? 'none' : _timeController.text),
                                         ),
                                       ),
                                     ),
@@ -1301,21 +1206,16 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                   _quickTimeChip("Heute 22:00", () {
                                     _unfocus();
                                     final now = DateTime.now();
-                                    _selectedDate =
-                                        DateTime(now.year, now.month, now.day);
-                                    _selectedTime =
-                                    const TimeOfDay(hour: 22, minute: 0);
+                                    _selectedDate = DateTime(now.year, now.month, now.day);
+                                    _selectedTime = const TimeOfDay(hour: 22, minute: 0);
                                     _timeController.text = "22:00";
                                     setState(() {});
                                   }),
                                   _quickTimeChip("Morgen 21:00", () {
                                     _unfocus();
-                                    final now =
-                                    DateTime.now().add(const Duration(days: 1));
-                                    _selectedDate =
-                                        DateTime(now.year, now.month, now.day);
-                                    _selectedTime =
-                                    const TimeOfDay(hour: 21, minute: 0);
+                                    final now = DateTime.now().add(const Duration(days: 1));
+                                    _selectedDate = DateTime(now.year, now.month, now.day);
+                                    _selectedTime = const TimeOfDay(hour: 21, minute: 0);
                                     _timeController.text = "21:00";
                                     setState(() {});
                                   }),
@@ -1325,8 +1225,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                     final diff = (5 - now.weekday + 7) % 7;
                                     final d = now.add(Duration(days: diff == 0 ? 7 : diff));
                                     _selectedDate = DateTime(d.year, d.month, d.day);
-                                    _selectedTime =
-                                    const TimeOfDay(hour: 22, minute: 0);
+                                    _selectedTime = const TimeOfDay(hour: 22, minute: 0);
                                     _timeController.text = "22:00";
                                     setState(() {});
                                   }),
@@ -1335,14 +1234,12 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                               if (_triedSubmit && _selectedDate == null)
                                 const Padding(
                                   padding: EdgeInsets.only(top: 8),
-                                  child: Text("Bitte ein Datum wählen.",
-                                      style: TextStyle(color: Colors.orangeAccent)),
+                                  child: Text("Bitte ein Datum wählen.", style: TextStyle(color: Colors.orangeAccent)),
                                 ),
                               if (_triedSubmit && _selectedTime == null)
                                 const Padding(
                                   padding: EdgeInsets.only(top: 4),
-                                  child: Text("Bitte eine Uhrzeit wählen.",
-                                      style: TextStyle(color: Colors.orangeAccent)),
+                                  child: Text("Bitte eine Uhrzeit wählen.", style: TextStyle(color: Colors.orangeAccent)),
                                 ),
                             ],
                           ),
@@ -1358,26 +1255,16 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                 spacing: 10,
                                 runSpacing: 8,
                                 children: [
-                                  _typeChip(
-                                      value: "Open",
-                                      label: "Open",
-                                      icon: Icons.lock_open_rounded),
-                                  _typeChip(
-                                      value: "Closed",
-                                      label: "Closed",
-                                      icon: Icons.lock_rounded),
-                                  _typeChip(
-                                      value: "Only4Friends",
-                                      label: "Only4Friends",
-                                      icon: Icons.people_alt),
+                                  _typeChip(value: "Open", label: "Open", icon: Icons.lock_open_rounded),
+                                  _typeChip(value: "Closed", label: "Closed", icon: Icons.lock_rounded),
+                                  _typeChip(value: "Only4Friends", label: "Only4Friends", icon: Icons.people_alt),
                                 ],
                               ),
                               if (_partyType == "Only4Friends") ...[
                                 const SizedBox(height: 10),
                                 OutlinedButton.icon(
                                   onPressed: _openExcludeFriendsDialog,
-                                  icon: const Icon(Icons.person_off,
-                                      size: 18, color: _secondary),
+                                  icon: const Icon(Icons.person_off, size: 18, color: _secondary),
                                   label: Text(
                                     _excludedFriends.isEmpty
                                         ? "Freunde ausschließen"
@@ -1387,22 +1274,64 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                   style: OutlinedButton.styleFrom(
                                     side: const BorderSide(color: _panelBorder),
                                     padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(14)),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                                   ),
                                 ),
                                 if (_excludedFriends.isNotEmpty) ...[
                                   const SizedBox(height: 6),
                                   Text(
                                     "Ausgeschlossen: ${_excludedFriends.join(', ')}",
-                                    style: const TextStyle(
-                                        color: _textSecondary, fontSize: 12),
+                                    style: const TextStyle(color: _textSecondary, fontSize: 12),
                                   ),
                                 ],
                               ],
                             ],
                           ),
                         ),
+
+                        // ✅ NEU: großer, mittiger, rot gefüllter Save-Button am Ende
+                        const SizedBox(height: 28),
+                        Center(
+                          child: ElevatedButton.icon(
+                            onPressed: _isLoading ? null : _saveParty,
+                            icon: const Icon(Icons.check_rounded, size: 22),
+                            label: Text(
+                              isEditing ? "Aktualisieren" : "Party speichern",
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _accent,
+                              foregroundColor: Colors.white,
+                              elevation: 8,
+                              shadowColor: _accent,
+                              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (isEditing) ...[
+                          const SizedBox(height: 14),
+                          Center(
+                            child: TextButton.icon(
+                              onPressed: _isLoading ? null : _deleteParty,
+                              icon: const Icon(Icons.delete_outline, color: _accent),
+                              label: const Text(
+                                "Party löschen",
+                                style: TextStyle(
+                                  color: _accent,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 36),
                       ],
                     ),
                   ),
@@ -1417,8 +1346,9 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   color: Colors.black.withOpacity(0.35),
-                  child:
-                  const Center(child: CircularProgressIndicator(strokeWidth: 3)),
+                  child: const Center(
+                    child: CircularProgressIndicator(strokeWidth: 3),
+                  ),
                 ),
               ),
             ),
@@ -1433,8 +1363,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       onPressed: onPressed,
       backgroundColor: _card,
       shape: StadiumBorder(side: BorderSide(color: _panelBorder)),
-      labelStyle:
-      const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
+      labelStyle: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
     );
   }

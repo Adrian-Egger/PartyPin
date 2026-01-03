@@ -30,6 +30,13 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   static const _muted = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30);
   static const _ok = Color(0xFF22C55E);
+  static const _warn = Color(0xFFFFB020);
+  static const _err = Color(0xFFFF3B30);
+  static const _info = Color(0xFF3AA0FF);
+
+  // ✅ mehr rot, aber clean:
+  static const _accentSoft = Color(0x26FF3B30); // ~15% rot
+  static const _accentLine = Color(0x66FF3B30); // ~40% rot
 
   // Limits
   static const int kWindowLimit = 3;
@@ -63,6 +70,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   // Device/User key für Quota + "eigenes Feedback anzeigen"
   String _userKey = "";
 
+  // ✅ damit niemals "Anonym" geschrieben wird:
+  String _usernameFallback = "Unbekannt";
+
   // Hints
   static const List<String> _hints = [
     "Hast du einen Vorschlag?",
@@ -86,7 +96,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   Future<void> _init() async {
-    await _loadUserName();
+    await _loadUserNameAndFallback();
     await _ensureUserKey();
 
     await Future.wait([
@@ -110,6 +120,28 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   // Helpers
   DateTime _nowUtc() => DateTime.now().toUtc();
 
+  void _toast(
+      String msg, {
+        Color color = _info,
+        IconData icon = Icons.info_outline,
+      }) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: color,
+        content: Row(
+          children: [
+            Icon(icon, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(child: Text(msg)),
+          ],
+        ),
+      ),
+    );
+  }
+
   String _fmt(DateTime dt) {
     final l = dt.toLocal();
     final dd = l.day.toString().padLeft(2, '0');
@@ -130,11 +162,17 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         "${s.toString().padLeft(2, '0')}";
   }
 
-  Future<void> _loadUserName() async {
+  Future<void> _loadUserNameAndFallback() async {
     final prefs = await SharedPreferences.getInstance();
     final vorname = (prefs.getString("vorname") ?? "").trim();
     final nachname = (prefs.getString("nachname") ?? "").trim();
-    _nameController.text = ("$vorname $nachname").trim();
+    final username = (prefs.getString("username") ?? "").trim();
+
+    final fullName = ("$vorname $nachname").trim();
+    _nameController.text = fullName;
+
+    // ✅ niemals "Anonym": Fallback ist username -> sonst "Unbekannt"
+    _usernameFallback = username.isNotEmpty ? username : "Unbekannt";
   }
 
   String _randomKey() {
@@ -155,9 +193,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     _userKey = key;
   }
 
+  // ✅ niemals "Anonym"
   String _displayName() {
     final name = _nameController.text.trim();
-    return name.isEmpty ? "Anonym" : name;
+    if (name.isNotEmpty) return name;
+    return _usernameFallback; // "username" oder "Unbekannt"
   }
 
   // ✅ schreibt fehlendes rand bei geladenen docs einmalig nach
@@ -232,22 +272,16 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             .limit(1)
             .get();
         if (qMine.docs.isNotEmpty) mine = qMine.docs.first;
-      } catch (_) {
-        // falls Index fehlt: dann skip (keine Crashes)
-      }
+      } catch (_) {}
 
       // 4) rand nachschreiben für Zukunft (nur die geladenen)
       await _ensureRandForDocs(docs);
 
       // 5) Zusammenbauen:
-      // - random 10
-      // - eigenes Feedback oben hinzufügen, wenn nicht bereits drin
       final ids = docs.map((d) => d.id).toSet();
       final result = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
-      if (mine != null && !ids.contains(mine.id)) {
-        result.add(mine);
-      }
+      if (mine != null && !ids.contains(mine.id)) result.add(mine);
 
       docs.shuffle();
       result.addAll(docs.take(10));
@@ -363,24 +397,27 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     ]);
   }
 
-  // Senden (jede Nachricht als eigenes Doc + Quota separat)
   Future<void> _sendFeedback() async {
     if (_sendingVN.value) return;
 
     final feedbackText = _feedbackController.text.trim();
     if (feedbackText.isEmpty) {
       HapticFeedback.heavyImpact();
+      _toast("Bitte Text eingeben.", color: _warn, icon: Icons.warning_amber_rounded);
       return;
     }
 
     await _refreshQuota24h(force: false);
     if (_lockUntilLocal != null) {
       HapticFeedback.heavyImpact();
+      _toast("Limit erreicht. Warte: ${_fmtDur(_remainingVN.value)}",
+          color: _warn, icon: Icons.lock_clock);
       return;
     }
 
     if (_userKey.isEmpty) {
       HapticFeedback.heavyImpact();
+      _toast("UserKey fehlt (App neu starten).", color: _err, icon: Icons.error_outline);
       return;
     }
 
@@ -428,7 +465,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           SetOptions(merge: true),
         );
 
-        // Feedback schreiben (eigenes Doc)
+        // Feedback schreiben
         tx.set(
           feedbackRef,
           {
@@ -443,6 +480,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       _feedbackController.clear();
       HapticFeedback.lightImpact();
+      _toast("Gesendet ✅", color: _ok, icon: Icons.check_circle_rounded);
 
       await Future.wait([
         _refreshQuota24h(force: true),
@@ -455,8 +493,13 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           if (mounted) setState(() => _sentFlash = false);
         });
       }
-    } catch (_) {
+    } on FirebaseException catch (e) {
       HapticFeedback.heavyImpact();
+      _toast("Firestore Fehler: ${e.code}", color: _err, icon: Icons.error_outline);
+      await _refreshQuota24h(force: true);
+    } catch (e) {
+      HapticFeedback.heavyImpact();
+      _toast("Fehler: $e", color: _err, icon: Icons.error_outline);
       await _refreshQuota24h(force: true);
     } finally {
       _sendingVN.value = false;
@@ -481,9 +524,23 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       )
           : null,
       automaticallyImplyLeading: false,
-      title: const Text(
-        "Feedback",
-        style: TextStyle(color: _text, fontWeight: FontWeight.w800, fontSize: 22),
+      // ✅ Emojis + etwas größer + rot-akzent via Chip
+      title: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: _accentSoft,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: _accentLine, width: 1),
+        ),
+        child: const Text(
+          "💬 Feedback 🔥",
+          style: TextStyle(
+            color: _text,
+            fontWeight: FontWeight.w900,
+            fontSize: 24,
+            letterSpacing: 0.2,
+          ),
+        ),
       ),
       actions: [
         Container(
@@ -492,6 +549,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           decoration: BoxDecoration(
             color: Colors.white12,
             borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: _accentLine, width: 1),
           ),
           child: Text(
             "${_usedInWindow.clamp(0, kWindowLimit)}/$kWindowLimit",
@@ -543,24 +601,34 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     );
   }
 
+  // ✅ nur dünn umranden (kein linker Streifen mehr)
   Widget _messageTile({
     required String message,
     required String user,
     required String date,
     required bool isMine,
   }) {
+    final borderColor = isMine ? _ok : _accentLine;
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: isMine ? _ok : _panelBorder, width: isMine ? 1.2 : 1),
+        border: Border.all(color: borderColor, width: 1), // ✅ dünn, clean
+        boxShadow: const [
+          BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 8)),
+        ],
       ),
       child: ListTile(
         leading: CircleAvatar(
           radius: 18,
           backgroundColor: Colors.white12,
-          child: Icon(isMine ? Icons.person : Icons.feedback, color: isMine ? _ok : _accent, size: 18),
+          child: Icon(
+            isMine ? Icons.person : Icons.feedback,
+            color: isMine ? _ok : _accent,
+            size: 18,
+          ),
         ),
         title: Text(
           message,
@@ -579,7 +647,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   Widget _inputBar() {
-    final borderColor = _sentFlash ? _ok : Colors.transparent;
+    final borderColor = _sentFlash ? _ok : _accentLine; // ✅ immer leichter rot
     final sendColor = _sentFlash ? _ok : _accent;
 
     return SafeArea(
@@ -605,11 +673,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     fillColor: _panel,
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: borderColor, width: _sentFlash ? 1.2 : 0),
+                      borderSide: BorderSide(color: borderColor, width: 1),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: _sentFlash ? _ok : _accent, width: 1),
+                      borderSide: BorderSide(color: _sentFlash ? _ok : _accent, width: 1.2),
                     ),
                   ),
                   textInputAction: TextInputAction.newline,

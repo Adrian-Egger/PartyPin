@@ -1,4 +1,8 @@
 {
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+
   "flutter": {
     "platforms": {
       "android": {

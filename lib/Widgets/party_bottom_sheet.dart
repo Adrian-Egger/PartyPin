@@ -1,6 +1,27 @@
+// party_bottom_sheet.dart  (KOMPLETT, LAUFFÄHIG FÜR RATING + RSVP-GATE MIT UID)
+//
+// ✅ Ziel:
+// - Bewerten nur wenn: inRatingWindow == true UND (RSVP == going/maybe) UND NICHT Host
+// - Rating schreibt NICHT in users direkt (Client darf das nicht)
+// - Client ruft Cloud Function "setPartyRating" auf (CALLABLE)
+// - Cloud Function speichert:
+//    1) Party/{partyId}/ratings/{uid}  (good|bad)
+//    2) users/{hostUid}: partyScoreGood, partyScoreBad, partyScorePct
+//
+// ✅ Wichtig: Diese Datei nutzt auth.uid als DocId für rsvps/coming/maybe/ratings.
+// Wenn deine RSVP-Docs noch username-basiert sind, musst du das anpassen,
+// sonst funktioniert das Gate (Rsvp-Check) nicht.
+//
+// ✅ WICHTIGSTER FIX:
+// Wenn deine Function in europe-west1 deployed ist, MUSS der Client so aufrufen:
+// FirebaseFunctions.instanceFor(region: 'europe-west1');
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+
 import '../Screens/new_party.dart';
 import '../Services/app_draggable_sheet.dart';
 
@@ -30,12 +51,12 @@ class PartyBottomSheet extends StatelessWidget {
     required this.onClearRsvp,
     required this.onSendJoinRequest,
     required this.onUpdateRequestStatus,
-    required this.onSetRating, // bleibt für Kompatibilität, wird NICHT mehr verwendet
+    required this.onSetRating, // bleibt nur für Kompatibilität (nicht genutzt)
     required this.onReport,
-    required this.rsvpStream,
+    required this.rsvpStream, // wird NICHT verwendet (wir nutzen UID-stream fix)
     required this.comingStream,
     required this.maybeStream,
-    required this.ratingsStream,
+    required this.ratingsStream, // Anzeige: Party/{partyId}/ratings listen (Docs enthalten value)
     required this.isUserVerified,
     required this.recolorOpenMarker,
     required this.setClosedLockIcon,
@@ -58,9 +79,7 @@ class PartyBottomSheet extends StatelessWidget {
   final VoidAsync onSendJoinRequest;
   final UserStatusAsync onUpdateRequestStatus;
 
-  // ⚠️ wird nicht mehr genutzt (weil du permission-issues bekommst, wir machen es hier sicher)
   final StringAsync onSetRating;
-
   final VoidAsync onReport;
 
   final DocStream Function() rsvpStream;
@@ -76,7 +95,19 @@ class PartyBottomSheet extends StatelessWidget {
 
   final bool isBarAccount;
 
-  // ------------------ TICKETS: TicketDoc + Stream + Preis + Button ------------------
+  // ------------------ Helpers ------------------
+  String? _uid() => FirebaseAuth.instance.currentUser?.uid;
+
+  DocumentReference<Map<String, dynamic>> _partyRef() =>
+      FirebaseFirestore.instance.collection('Party').doc(partyId);
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _myRsvpUidStream() {
+    final uid = _uid();
+    if (uid == null) return const Stream.empty();
+    return _partyRef().collection('rsvps').doc(uid).snapshots();
+  }
+
+  // ------------------ TICKETS (unverändert / placeholder) ------------------
   String _ticketDocId() {
     final u = (currentUsername ?? '').trim();
     if (u.isEmpty) return '';
@@ -147,7 +178,8 @@ class PartyBottomSheet extends StatelessWidget {
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
                       minimumSize: const Size.fromHeight(52),
-                      backgroundColor: status == 'paid' ? Colors.green : Colors.blueAccent,
+                      backgroundColor:
+                      status == 'paid' ? Colors.green : Colors.blueAccent,
                       foregroundColor: Colors.white,
                     ),
                     icon: Icon(icon),
@@ -155,19 +187,19 @@ class PartyBottomSheet extends StatelessWidget {
                     onPressed: !enabled
                         ? null
                         : () async {
-                      // TODO: Firebase Function call
-                      // - unpaid/failed: createPayPalOrder(partyId) -> schreibt approvalUrl + status=pending
-                      // - pending: öffne approvalUrl
-                      // - nach Rückkehr: capturePayPalOrder(partyId, orderId)
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text("PayPal Flow TODO (status=$status)")),
+                        SnackBar(
+                          content:
+                          Text("PayPal Flow TODO (status=$status)"),
+                        ),
                       );
                     },
                   ),
                 ),
                 const SizedBox(width: 10),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
                   decoration: BoxDecoration(
                     color: Colors.grey[850],
                     borderRadius: BorderRadius.circular(12),
@@ -190,17 +222,19 @@ class PartyBottomSheet extends StatelessWidget {
     );
   }
 
-  // ------------------ RATING: sichere Transaction (nur Party + party_hosts) ------------------
-  String _hostAggId() {
-    final hostUid = ((data['hostUid'] ?? data['hostId']) ?? '').toString().trim();
-    if (hostUid.isNotEmpty) return safeDocId(hostUid);
-    final hostName = (data['hostName'] ?? '').toString().trim();
-    return safeDocId(hostName.isEmpty ? 'unknown_host' : hostName);
-  }
+  // ------------------ RATING (Cloud Function CALLABLE) ------------------
+  Future<void> _setRatingViaFunction(BuildContext context, String value) async {
+    final uid = _uid();
+    final meName = (currentUsername ?? '').trim();
 
-  Future<void> _setRatingSafe(BuildContext context, String value) async {
-    final meRaw = (currentUsername ?? '').trim();
-    if (meRaw.isEmpty) {
+    if (uid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Nicht eingeloggt (auth.uid fehlt).")),
+      );
+      return;
+    }
+
+    if (meName.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Username fehlt.")),
       );
@@ -214,94 +248,48 @@ class PartyBottomSheet extends StatelessWidget {
       return;
     }
 
-    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
-    final raterId = safeDocId(meRaw);
-    final ratingRef = partyRef.collection('ratings').doc(raterId);
-    final hostAggRef = FirebaseFirestore.instance.collection('party_hosts').doc(_hostAggId());
-
     try {
-      await FirebaseFirestore.instance.runTransaction((tx) async {
-        // ✅ 1) READS (alle zuerst!)
-        final partySnap = await tx.get(partyRef);
-        if (!partySnap.exists) {
-          throw StateError("Party existiert nicht mehr.");
-        }
+      // ✅ REGION FIX: falls deine Function in europe-west1 deployed ist
+      final functions = FirebaseFunctions.instanceFor(region: 'europe-west1');
 
-        final prevSnap = await tx.get(ratingRef);
-        final prevVal = prevSnap.data()?['value'] as String?;
+      final fn = functions.httpsCallable(
+        'setPartyRating',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 20)),
+      );
 
-        // deltas bestimmen
-        int deltaGood = 0;
-        int deltaBad = 0;
-
-        if (value == 'good') deltaGood++;
-        if (value == 'bad') deltaBad++;
-
-        if (prevVal == 'good') deltaGood--;
-        if (prevVal == 'bad') deltaBad--;
-
-        final changed = deltaGood != 0 || deltaBad != 0;
-
-        // Host-Aggregat nur lesen, wenn sich wirklich was ändert
-        DocumentSnapshot<Map<String, dynamic>>? hostSnap;
-        if (changed) {
-          hostSnap = await tx.get(hostAggRef);
-        }
-
-        // ✅ 2) WRITES (ab hier keine Reads mehr!)
-        tx.set(
-          ratingRef,
-          {
-            'username': meRaw,
-            'value': value,
-            'ts': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-
-        if (changed) {
-          tx.set(
-            partyRef,
-            {
-              'ratingsGood': FieldValue.increment(deltaGood),
-              'ratingsBad': FieldValue.increment(deltaBad),
-            },
-            SetOptions(merge: true),
-          );
-
-          final curGood = (hostSnap?.data()?['good'] ?? 0) as int;
-          final curBad = (hostSnap?.data()?['bad'] ?? 0) as int;
-
-          final newGood = curGood + deltaGood;
-          final newBad = curBad + deltaBad;
-          final total = newGood + newBad;
-          final pct = total > 0 ? ((newGood / total) * 100).round() : 0;
-
-          tx.set(
-            hostAggRef,
-            {
-              'good': newGood,
-              'bad': newBad,
-              'pct': pct,
-              'updatedAt': FieldValue.serverTimestamp(),
-            },
-            SetOptions(merge: true),
-          );
-        }
+      await fn.call(<String, dynamic>{
+        'partyId': partyId,
+        'value': value, // good|bad
+        // 'username': meName, // optional; uid ist das wichtige
       });
 
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(value == 'good'
-              ? "Danke! Positive Bewertung gespeichert."
-              : "Danke! Negative Bewertung gespeichert."),
+          content: Text(
+            value == 'good'
+                ? "Danke! Positive Bewertung gespeichert."
+                : "Danke! Negative Bewertung gespeichert.",
+          ),
+        ),
+      );
+    } on FirebaseFunctionsException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "Function-Fehler: ${e.code} (${e.message ?? ''})",
+          ),
         ),
       );
     } on FirebaseException catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler: ${e.code} (${e.message ?? ''})")),
+        SnackBar(
+          content: Text(
+            "Firebase-Fehler: ${e.code} (${e.message ?? ''})",
+          ),
+        ),
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -311,7 +299,7 @@ class PartyBottomSheet extends StatelessWidget {
     }
   }
 
-  // -------- User ausladen (alle Typen) --------
+  // -------- User ausladen (ALT: username-docIds; kann scheitern wenn du UID-Docs nutzt) --------
   Future<void> _confirmKickUser(BuildContext context, String username) async {
     final cleanUser = username.trim();
     if (cleanUser.isEmpty || cleanUser == 'Unbekannt') return;
@@ -323,7 +311,8 @@ class PartyBottomSheet extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.grey[900],
-        title: const Text("Person ausladen?", style: TextStyle(color: Colors.white)),
+        title: const Text("Person ausladen?",
+            style: TextStyle(color: Colors.white)),
         content: Text(
           isFriendsOnly
               ? "Möchtest du „$cleanUser“ wirklich ausladen? Die Person wird aus allen Listen entfernt und bei dieser Only4Friends-Party ausgeschlossen."
@@ -333,11 +322,13 @@ class PartyBottomSheet extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text("Abbrechen", style: TextStyle(color: Colors.white70)),
+            child: const Text("Abbrechen",
+                style: TextStyle(color: Colors.white70)),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text("Ausladen", style: TextStyle(color: Colors.redAccent)),
+            child: const Text("Ausladen",
+                style: TextStyle(color: Colors.redAccent)),
           ),
         ],
       ),
@@ -347,7 +338,8 @@ class PartyBottomSheet extends StatelessWidget {
     if (!confirmed) return;
 
     try {
-      final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+      final partyRef =
+      FirebaseFirestore.instance.collection('Party').doc(partyId);
 
       await FirebaseFirestore.instance.runTransaction((tx) async {
         final rsvpRef = partyRef.collection('rsvps').doc(cleanUser);
@@ -390,7 +382,7 @@ class PartyBottomSheet extends StatelessWidget {
     }
   }
 
-  // -------- Party-Start + Ablauf-Timer (24h ab Start) --------
+  // -------- Party-Start + Ablauf-Timer (23h ab Start) --------
   DateTime? _partyStartFromData() {
     final startRaw = data['startTime'];
 
@@ -449,45 +441,20 @@ class PartyBottomSheet extends StatelessWidget {
     );
   }
 
-  // ✅ Rating nur erlauben wenn:
-  // - Open/Only4Friends: user hat going/maybe
-  // - Closed (nicht Only4Friends): user ist approved
-  // - Host: darf NICHT bewerten
+  // ✅ Rating-Gate: nur inRatingWindow + RSVP (going/maybe) + nicht Host
   Widget _ratingGate(BuildContext context) {
     if (currentUsername == null) return const SizedBox.shrink();
-    if (!inRatingWindow) {
-      return _pill("Bewertung ist noch nicht freigeschaltet.", Colors.white70);
-    }
-
-    final typeStr = (data['type'] ?? (isClosed ? 'Closed' : 'Open')).toString();
-    final isFriendsOnly = typeStr == 'Only4Friends';
 
     if (isHost) {
       return _pill("Hosts können ihre eigene Party nicht bewerten.", Colors.white70);
     }
 
-    if (isClosed && !isFriendsOnly) {
-      final reqDocId = safeDocId(currentUsername!);
-      return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('Party')
-            .doc(partyId)
-            .collection('requests')
-            .doc(reqDocId)
-            .snapshots(),
-        builder: (context, snap) {
-          final st = snap.data?.data()?['status'] as String?;
-          final canRate = st == 'approved';
-          if (!canRate) {
-            return _pill("Bewerten erst möglich, wenn du zugelassen bist.", Colors.white70);
-          }
-          return _ratingButtons(context);
-        },
-      );
+    if (!inRatingWindow) {
+      return _pill("Bewertung ist noch nicht freigeschaltet.", Colors.white70);
     }
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: rsvpStream(),
+      stream: _myRsvpUidStream(),
       builder: (context, snap) {
         final status = snap.data?.data()?['status'] as String?;
         final canRate = status == 'going' || status == 'maybe';
@@ -516,7 +483,8 @@ class PartyBottomSheet extends StatelessWidget {
         : (isClosed ? Colors.blueGrey[800]! : Colors.green[800]!);
     final IconData badgeIcon =
     isFriendsOnly ? Icons.group_rounded : (isClosed ? Icons.lock : Icons.public);
-    final String badgeLabel = isFriendsOnly ? "Only4Friends" : (isClosed ? "Closed" : "Open");
+    final String badgeLabel =
+    isFriendsOnly ? "Only4Friends" : (isClosed ? "Closed" : "Open");
 
     Future<void> _confirmAndDeleteParty() async {
       final confirm = await showDialog<bool>(
@@ -545,7 +513,8 @@ class PartyBottomSheet extends StatelessWidget {
       if (!confirm) return;
 
       try {
-        final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+        final partyRef =
+        FirebaseFirestore.instance.collection('Party').doc(partyId);
         final batch = FirebaseFirestore.instance.batch();
 
         const subCollections = [
@@ -585,9 +554,14 @@ class PartyBottomSheet extends StatelessWidget {
       children: [
         Icon(ic, color: Colors.white70, size: 18),
         const SizedBox(width: 8),
-        Text("$label: ",
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        Expanded(child: Text(value, style: const TextStyle(color: Colors.white70))),
+        Text(
+          "$label: ",
+          style: const TextStyle(
+              color: Colors.white, fontWeight: FontWeight.w600),
+        ),
+        Expanded(
+          child: Text(value, style: const TextStyle(color: Colors.white70)),
+        ),
       ],
     );
 
@@ -609,7 +583,9 @@ class PartyBottomSheet extends StatelessWidget {
               infoRow(
                 Icons.cake_outlined,
                 "🔞 Mindestalter",
-                ((data['minAge']?.toString() ?? '').isEmpty ? '—' : data['minAge'].toString()),
+                ((data['minAge']?.toString() ?? '').isEmpty
+                    ? '—'
+                    : data['minAge'].toString()),
               ),
               const SizedBox(height: 8),
               infoRow(Icons.place, "📍 Adresse", (data['address'] ?? '—').toString()),
@@ -636,7 +612,9 @@ class PartyBottomSheet extends StatelessWidget {
           infoRow(
             Icons.cake_outlined,
             "🔞 Mindestalter",
-            ((data['minAge']?.toString() ?? '').isEmpty ? '—' : data['minAge'].toString()),
+            ((data['minAge']?.toString() ?? '').isEmpty
+                ? '—'
+                : data['minAge'].toString()),
           ),
           const SizedBox(height: 12),
           const Text(
@@ -660,7 +638,8 @@ class PartyBottomSheet extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    data['name'] ?? (isClosed ? "Geschlossene Party" : "Party"),
+                    (data['name'] ?? (isClosed ? "Geschlossene Party" : "Party"))
+                        .toString(),
                     style: const TextStyle(
                       fontSize: 26,
                       fontWeight: FontWeight.bold,
@@ -683,7 +662,8 @@ class PartyBottomSheet extends StatelessWidget {
                       const SizedBox(width: 6),
                       Text(
                         badgeLabel,
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w600),
                       ),
                     ],
                   ),
@@ -710,7 +690,8 @@ class PartyBottomSheet extends StatelessWidget {
                       ],
                       Text(
                         "Host: $hostLabel",
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w600),
                       ),
                     ],
                   ),
@@ -721,9 +702,11 @@ class PartyBottomSheet extends StatelessWidget {
             if (isFriendsOnly)
               _pill("👥 Nur für Freunde sichtbar.", Colors.deepPurpleAccent)
             else if (isClosed && !canSeeFull)
-              _pill("🔒 Geschlossene Party – nur Datum & Mindestalter sichtbar.", Colors.redAccent)
+              _pill("🔒 Geschlossene Party – nur Datum & Mindestalter sichtbar.",
+                  Colors.redAccent)
             else if (isClosed && canSeeFull)
-                _pill("✅ Zugriff freigegeben – alle Details sichtbar.", Colors.lightGreenAccent),
+                _pill("✅ Zugriff freigegeben – alle Details sichtbar.",
+                    Colors.lightGreenAccent),
             const SizedBox(height: 16),
             if (canSeeFull) fullDetails else closedPartial,
             const SizedBox(height: 20),
@@ -769,27 +752,27 @@ class PartyBottomSheet extends StatelessWidget {
                       icon: const Icon(Icons.delete_forever, color: Colors.redAccent),
                       label: const Text(
                         "Party löschen",
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                        style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                       ),
                     ),
                   ],
                 ),
               ),
             ] else ...[
-              if (!isClosed || isFriendsOnly) _guestOpenActions(context) else _guestClosedActions(context),
-
-              // ✅ Rating (berechtigt + safe transaction)
-              if (!isFriendsOnly) ...[
-                const SizedBox(height: 12),
-                _ratingGate(context),
-              ],
-
+              if (!isClosed || isFriendsOnly)
+                _guestOpenActions(context)
+              else
+                _guestClosedActions(context),
+              const SizedBox(height: 12),
+              _ratingGate(context),
               if (isActive) ...[
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: onReport,
                   icon: const Icon(Icons.flag, color: Colors.redAccent),
-                  label: const Text("Party melden", style: TextStyle(color: Colors.redAccent)),
+                  label: const Text("Party melden",
+                      style: TextStyle(color: Colors.redAccent)),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.redAccent),
                     minimumSize: const Size.fromHeight(44),
@@ -845,28 +828,11 @@ class PartyBottomSheet extends StatelessWidget {
       );
     }
 
-    final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
-    final rawId = currentUsername!;
-    final safeId = safeDocId(currentUsername!);
-
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: partyRef.collection('rsvps').doc(rawId).snapshots(),
-      builder: (context, snapRaw) {
-        final rawExists = snapRaw.data?.exists == true;
-        if (rawExists) {
-          final map = snapRaw.data?.data();
-          final status = map == null ? null : map['status'] as String?;
-          return _buildOpenActionsWithStatus(context, status);
-        }
-
-        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: partyRef.collection('rsvps').doc(safeId).snapshots(),
-          builder: (context, snapSafe) {
-            final map = snapSafe.data?.data();
-            final status = map == null ? null : map['status'] as String?;
-            return _buildOpenActionsWithStatus(context, status);
-          },
-        );
+      stream: _myRsvpUidStream(),
+      builder: (context, snap) {
+        final status = snap.data?.data()?['status'] as String?;
+        return _buildOpenActionsWithStatus(context, status);
       },
     );
   }
@@ -952,9 +918,7 @@ class PartyBottomSheet extends StatelessWidget {
           icon: const Icon(Icons.help_outline),
           label: const Text("Ich komme eventuell"),
         ),
-
         _ticketBuyButton(context, show: showPay),
-
         const SizedBox(height: 16),
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: comingStream(),
@@ -981,7 +945,9 @@ class PartyBottomSheet extends StatelessWidget {
         style: TextStyle(color: Colors.redAccent),
       );
     }
-    final reqDocId = safeDocId(currentUsername!);
+
+    final uid = _uid();
+    final reqDocId = uid ?? safeDocId(currentUsername!);
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
@@ -992,7 +958,9 @@ class PartyBottomSheet extends StatelessWidget {
           .snapshots(),
       builder: (context, myReqSnap) {
         String? status;
-        if (myReqSnap.hasData && myReqSnap.data != null && myReqSnap.data!.exists) {
+        if (myReqSnap.hasData &&
+            myReqSnap.data != null &&
+            myReqSnap.data!.exists) {
           final map = myReqSnap.data!.data();
           status = map == null ? null : map['status'] as String?;
           if (status == 'approved' || status == 'declined' || status == 'pending') {
@@ -1038,10 +1006,14 @@ class PartyBottomSheet extends StatelessWidget {
             children: [
               const ListTile(
                 leading: Icon(Icons.check_circle, color: Colors.greenAccent),
-                title: Text("Zugang genehmigt – Details freigeschaltet.",
-                    style: TextStyle(color: Colors.white)),
-                subtitle: Text("Du kannst jetzt alle Infos sehen.",
-                    style: TextStyle(color: Colors.white70)),
+                title: Text(
+                  "Zugang genehmigt – Details freigeschaltet.",
+                  style: TextStyle(color: Colors.white),
+                ),
+                subtitle: Text(
+                  "Du kannst jetzt alle Infos sehen.",
+                  style: TextStyle(color: Colors.white70),
+                ),
               ),
               _ticketBuyButton(context, show: true),
               StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -1061,8 +1033,10 @@ class PartyBottomSheet extends StatelessWidget {
           return const ListTile(
             leading: Icon(Icons.cancel, color: Colors.redAccent),
             title: Text("Anfrage abgelehnt", style: TextStyle(color: Colors.white)),
-            subtitle: Text("Du kannst den Host direkt kontaktieren.",
-                style: TextStyle(color: Colors.white70)),
+            subtitle: Text(
+              "Du kannst den Host direkt kontaktieren.",
+              style: TextStyle(color: Colors.white70),
+            ),
           );
         }
       },
@@ -1105,7 +1079,9 @@ class PartyBottomSheet extends StatelessWidget {
           builder: (context, reqsSnap) {
             final docs = reqsSnap.data?.docs ?? [];
             if (docs.isEmpty) {
-              return _boxed(const Text("Keine Anfragen.", style: TextStyle(color: Colors.white70)));
+              return _boxed(
+                const Text("Keine Anfragen.", style: TextStyle(color: Colors.white70)),
+              );
             }
             return _boxed(
               Column(
@@ -1114,20 +1090,27 @@ class PartyBottomSheet extends StatelessWidget {
                   Row(children: const [
                     Icon(Icons.pending_actions, color: Colors.orangeAccent, size: 20),
                     SizedBox(width: 8),
-                    Text("🛎️ Zugangs-Anfragen",
-                        style: TextStyle(
-                            color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+                    Text(
+                      "🛎️ Zugangs-Anfragen",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                   ]),
                   const SizedBox(height: 10),
                   ...docs.map((d) {
                     final m = d.data();
                     final user = m['username']?.toString() ?? 'Unbekannt';
                     final status = (m['status']?.toString() ?? 'pending');
+
                     Color statusColor = status == 'approved'
                         ? Colors.lightGreenAccent
                         : status == 'declined'
                         ? Colors.redAccent
                         : Colors.orangeAccent;
+
                     return Container(
                       padding: const EdgeInsets.all(12),
                       margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
@@ -1143,43 +1126,53 @@ class PartyBottomSheet extends StatelessWidget {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(user,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 18)),
+                                Text(
+                                  user,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 18,
+                                  ),
+                                ),
                                 const SizedBox(height: 4),
-                                Text("Status: $status", style: TextStyle(color: statusColor)),
+                                Text("Status: $status",
+                                    style: TextStyle(color: statusColor)),
                               ],
                             ),
                           ),
                           if (status == 'pending') ...[
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green, foregroundColor: Colors.white),
+                                backgroundColor: Colors.green,
+                                foregroundColor: Colors.white,
+                              ),
                               onPressed: () => onUpdateRequestStatus(user, 'approved'),
                               child: const Text("Zulassen"),
                             ),
                             const SizedBox(width: 8),
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent,
-                                  foregroundColor: Colors.white),
+                                backgroundColor: Colors.redAccent,
+                                foregroundColor: Colors.white,
+                              ),
                               onPressed: () => onUpdateRequestStatus(user, 'declined'),
                               child: const Text("Ablehnen"),
                             ),
                           ] else if (status == 'declined') ...[
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green, foregroundColor: Colors.white),
+                                backgroundColor: Colors.green,
+                                foregroundColor: Colors.white,
+                              ),
                               onPressed: () => onUpdateRequestStatus(user, 'approved'),
                               child: const Text("Zulassen"),
                             ),
                           ] else ...[
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent,
-                                  foregroundColor: Colors.white),
+                                backgroundColor: Colors.redAccent,
+                                foregroundColor: Colors.white,
+                              ),
                               onPressed: () => onUpdateRequestStatus(user, 'declined'),
                               child: const Text("Ablehnen"),
                             ),
@@ -1248,9 +1241,9 @@ class PartyBottomSheet extends StatelessWidget {
     );
   }
 
-  // ---------- Rating ----------
+  // ---------- Rating Buttons ----------
   Widget _ratingButtons(BuildContext context) {
-    final canRate = currentUsername != null;
+    final canRate = currentUsername != null && _uid() != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1271,7 +1264,9 @@ class PartyBottomSheet extends StatelessWidget {
                   foregroundColor: Colors.white,
                   minimumSize: const Size.fromHeight(44),
                 ),
-                onPressed: canRate ? () async => _setRatingSafe(context, 'good') : null,
+                onPressed: canRate
+                    ? () async => _setRatingViaFunction(context, 'good')
+                    : null,
                 icon: const Icon(Icons.thumb_up),
                 label: const Text("Gut"),
               ),
@@ -1284,7 +1279,8 @@ class PartyBottomSheet extends StatelessWidget {
                   foregroundColor: Colors.white,
                   minimumSize: const Size.fromHeight(44),
                 ),
-                onPressed: canRate ? () async => _setRatingSafe(context, 'bad') : null,
+                onPressed:
+                canRate ? () async => _setRatingViaFunction(context, 'bad') : null,
                 icon: const Icon(Icons.thumb_down),
                 label: const Text("Schlecht"),
               ),
@@ -1293,7 +1289,7 @@ class PartyBottomSheet extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: ratingsStream(),
+          stream: ratingsStream(), // Party/{partyId}/ratings
           builder: (context, snap) {
             final docs = snap.data?.docs ?? [];
             final good = docs.where((d) => (d.data()['value'] ?? '') == 'good').length;
@@ -1318,7 +1314,7 @@ class PartyBottomSheet extends StatelessWidget {
     );
   }
 
-  // ---------- kleine UI-Helfer ----------
+  // ---------- UI Helfer ----------
   static Widget _box({required Widget child}) => Container(
     width: double.infinity,
     padding: const EdgeInsets.all(14),
@@ -1354,7 +1350,11 @@ class PartyBottomSheet extends StatelessWidget {
     child: Text(
       text,
       textAlign: TextAlign.center,
-      style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w700),
+      style: const TextStyle(
+        color: Colors.white70,
+        fontSize: 18,
+        fontWeight: FontWeight.w700,
+      ),
     ),
   );
 
@@ -1385,8 +1385,14 @@ class PartyBottomSheet extends StatelessWidget {
           Row(children: [
             Icon(titleIcon, color: titleColor, size: 20),
             const SizedBox(width: 8),
-            Text(title,
-                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800)),
+            Text(
+              title,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
           ]),
           const SizedBox(height: 10),
           if (usernames.isEmpty)
@@ -1396,7 +1402,8 @@ class PartyBottomSheet extends StatelessWidget {
               final u = usernames[i];
               return Column(
                 children: [
-                  if (i > 0) Divider(color: Colors.grey[800], height: 16, thickness: 1),
+                  if (i > 0)
+                    Divider(color: Colors.grey[800], height: 16, thickness: 1),
                   Row(
                     children: [
                       Icon(rowIcon, color: rowIconColor, size: 22),
@@ -1405,7 +1412,10 @@ class PartyBottomSheet extends StatelessWidget {
                         child: Text(
                           u,
                           style: const TextStyle(
-                              color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                       IconButton(

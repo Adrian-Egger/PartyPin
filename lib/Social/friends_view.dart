@@ -23,13 +23,17 @@ class FriendsScreen extends StatefulWidget {
 }
 
 class _FriendsScreenState extends State<FriendsScreen> {
-  // Farbschema (Party Pin App)
+  // ✅ Farbschema: wie PartyMapScreen
   static const _bgTop = Color(0xFF0E0F12);
   static const _bgBottom = Color(0xFF141A22);
   static const _panel = Color(0xFF1C1F26);
   static const _text = Colors.white;
   static const _muted = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30);
+
+  // ✅ wie Feedback: clean rot im Header
+  static const _accentSoft = Color(0x26FF3B30); // ~15% rot
+  static const _accentLine = Color(0x66FF3B30); // ~40% rot
 
   // passend dazu
   static const _border = Color(0xFF2A2F3A);
@@ -171,18 +175,21 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final toUsername = target.username;
 
     if (toUsername.toLowerCase() == me.toLowerCase()) {
-      _showSnack('Du kannst dich nicht selbst adden.', color: _warn, icon: Icons.warning_amber);
+      _showSnack('Du kannst dich nicht selbst adden.',
+          color: _warn, icon: Icons.warning_amber);
       return;
     }
     if (await _model.areFriends(me, toUsername)) {
-      _showSnack('Ihr seid bereits Freunde.', color: _warn, icon: Icons.check_circle_outline);
+      _showSnack('Ihr seid bereits Freunde.',
+          color: _warn, icon: Icons.check_circle_outline);
       return;
     }
     final ex =
         await _model.requestStatus(me, toUsername) ?? await _model.requestStatus(toUsername, me);
     if (ex != null) {
       if (ex == 'pending') {
-        _showSnack('Anfrage existiert bereits.', color: _warn, icon: Icons.hourglass_top_rounded);
+        _showSnack('Anfrage existiert bereits.',
+            color: _warn, icon: Icons.hourglass_top_rounded);
       } else {
         _showSnack('Anfrage ist $ex.', color: _info, icon: Icons.info_outline);
       }
@@ -273,13 +280,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final f = first.trim();
     final l = last.trim();
     final full = ('$f $l').trim();
-    return [
-      u,
-      '@$u',
-      f,
-      l,
-      full,
-    ].where((s) => s.trim().isNotEmpty).join(' ').toLowerCase();
+    return [u, '@$u', f, l, full].where((s) => s.trim().isNotEmpty).join(' ').toLowerCase();
   }
 
   Future<List<_FriendVM>> _getFriendVMs(List<String> others) async {
@@ -334,8 +335,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
     for (int i = 0; i < others.length; i++) {
       order[others[i].toLowerCase()] = i;
     }
-    vms.sort((a, b) => (order[a.username.toLowerCase()] ?? 0)
-        .compareTo(order[b.username.toLowerCase()] ?? 0));
+    vms.sort((a, b) =>
+        (order[a.username.toLowerCase()] ?? 0).compareTo(order[b.username.toLowerCase()] ?? 0));
 
     return vms;
   }
@@ -390,24 +391,29 @@ class _FriendsScreenState extends State<FriendsScreen> {
         child: SafeArea(
           child: Column(
             children: [
-              // Custom Header (damit Gradient bleibt)
+              // ✅ Header: wie Feedback (Chip + Emojis + rot umrandet) + ✅ Zurückbutton entfernt
               Padding(
                 padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
                 child: Row(
                   children: [
-                    IconButton(
-                      tooltip: 'Zurück zur Karte',
-                      icon: const Icon(Icons.arrow_back, color: _text),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                    const Expanded(
+                    const SizedBox(width: 48), // Platzhalter statt Back-Button
+                    Expanded(
                       child: Center(
-                        child: Text(
-                          'Freunde',
-                          style: TextStyle(
-                            color: _text,
-                            fontWeight: FontWeight.w900,
-                            fontSize: 18,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: _accentSoft,
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: _accentLine, width: 1),
+                          ),
+                          child: const Text(
+                            "👥 Freunde 🔥",
+                            style: TextStyle(
+                              color: _text,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 24,
+                              letterSpacing: 0.2,
+                            ),
                           ),
                         ),
                       ),
@@ -422,7 +428,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
                             final m = d.data();
                             final toU = (m['to'] ?? m['toUsername'] ?? '').toString().trim();
                             final toD = (m['toDocId'] ?? '').toString().trim();
-                            return toU == me || (_model.myDocId != null && toD == _model.myDocId);
+                            return toU == me ||
+                                (_model.myDocId != null && toD == _model.myDocId);
                           }).length;
                         }
                         final label = count == 0 ? null : (count > 9 ? '9+' : '$count');
@@ -441,7 +448,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                 right: 6,
                                 top: 10,
                                 child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  padding:
+                                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                   decoration: BoxDecoration(
                                     color: _accent,
                                     borderRadius: BorderRadius.circular(10),
@@ -654,7 +662,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   color: _panel,
                   elevation: 6,
                   shadowColor: Colors.black54,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    side: BorderSide(color: _accent.withOpacity(0.22), width: 1),
+                  ),
                   child: child,
                 );
 
@@ -746,8 +757,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: _ok,
                                   foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  padding:
+                                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
                                 ),
                                 child: const Text(
                                   'AKZEPTIEREN',
@@ -998,9 +1011,15 @@ class _FriendCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       color: _FriendsScreenState._panel,
-      elevation: 8,
+      elevation: 6,
       shadowColor: Colors.black54,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: _FriendsScreenState._accent.withOpacity(0.35), // ✅ minimal rot
+          width: 1,
+        ),
+      ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Row(
@@ -1073,7 +1092,13 @@ class _RequestCard extends StatelessWidget {
       color: _FriendsScreenState._panel,
       elevation: 8,
       shadowColor: Colors.black54,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: _FriendsScreenState._accent.withOpacity(0.35), // ✅ minimal rot
+          width: 1,
+        ),
+      ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Row(

@@ -593,12 +593,13 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   bool _isActive(Map<String, dynamic> d) => !_isExpiredWithGrace(d);
 
+  // ✅ FIX: echtes 24h Fenster ab Startzeit
   bool _isInRatingWindow(Map<String, dynamic> d) {
     final start = _partyStart(d);
     if (start == null) return false;
-    final nextDayMidnight =
-    DateTime(start.year, start.month, start.day).add(const Duration(days: 1));
-    return DateTime.now().isAfter(nextDayMidnight);
+    final now = DateTime.now();
+    final end = start.add(const Duration(hours: 24));
+    return now.isAfter(start) && now.isBefore(end);
   }
 
   bool _isHostForPartyData(Map<String, dynamic> data) {
@@ -973,79 +974,67 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
   }
 
+  // ✅ FIX: Speichern bei users/{ICH}/partyRatings/{partyId}
+  // Optional weiterhin Party/{partyId}/ratings/{username} für ratingsStream im Sheet.
   Future<void> _setRating(String partyId, String username, String value) async {
     final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
-    final ratingRef = partyRef.collection('ratings').doc(username);
+    final partySnap = await partyRef.get();
+    final partyData = partySnap.data() ?? {};
+
+    if (!_isInRatingWindow(partyData)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Bewertung nur innerhalb von 24h ab Start möglich.")),
+      );
+      return;
+    }
+
+    final myDocId = _safeDocId(username);
+    final userRef = FirebaseFirestore.instance.collection('users').doc(myDocId);
+
+    final userRatingRef = userRef.collection('partyRatings').doc(partyId);
+    final partyRatingRef = partyRef.collection('ratings').doc(username);
 
     try {
       await FirebaseFirestore.instance.runTransaction((tx) async {
-        final partySnap = await tx.get(partyRef);
-        final partyData = partySnap.data() ?? {};
-        final ratingSnap = await tx.get(ratingRef);
+        final prevUserRating = await tx.get(userRatingRef);
+        final prevVal = prevUserRating.data()?['value'] as String?;
 
-        final hostUid = ((partyData['hostUid'] ?? partyData['hostId']) ?? '').toString().trim();
-        final hostName = (partyData['hostName'] ?? '').toString().trim();
-        final hostDocId = hostUid.isNotEmpty ? hostUid : _safeDocId(hostName);
-        if (hostDocId.isEmpty) throw StateError("Kein Host für Aggregation vorhanden.");
-
-        DateTime? start;
-        final v = partyData['date'];
-        if (v is Timestamp) {
-          start = v.toDate();
-        } else if (v is String) {
-          start = DateTime.tryParse(v);
-        }
-        if (start != null) start = DateTime(start.year, start.month, start.day, 0, 0);
-        if (start == null || DateTime.now().isBefore(start.add(const Duration(days: 1)))) {
-          throw StateError("Bewertung erst ab dem nächsten Tag möglich.");
-        }
-
-        final userRef = FirebaseFirestore.instance.collection('users').doc(hostDocId);
-        final userSnap = await tx.get(userRef);
-
-        final prevVal = (ratingSnap.data()?['value'] as String?);
         int deltaGood = 0, deltaBad = 0;
         if (value == 'good') deltaGood++;
         if (value == 'bad') deltaBad++;
         if (prevVal == 'good') deltaGood--;
         if (prevVal == 'bad') deltaBad--;
-        final changed = (deltaGood != 0 || deltaBad != 0);
 
+        // 1) bei MIR speichern
         tx.set(
-          ratingRef,
-          {'username': username, 'value': value, 'ts': FieldValue.serverTimestamp()},
-          SetOptions(merge: true),
-        );
-
-        final perPartyUserRatingRef = userRef
-            .collection('partyRatings')
-            .doc(partyId)
-            .collection('byUser')
-            .doc(username);
-
-        tx.set(
-          perPartyUserRatingRef,
+          userRatingRef,
           {
             'partyId': partyId,
-            'fromUser': username,
             'value': value,
-            'ts': FieldValue.serverTimestamp()
+            'ts': FieldValue.serverTimestamp(),
+            'partyName': (partyData['name'] ?? '').toString(),
+            'hostId': ((partyData['hostUid'] ?? partyData['hostId']) ?? '').toString(),
+            'hostName': (partyData['hostName'] ?? '').toString(),
+            'date': partyData['date'],
+            'time': (partyData['time'] ?? '').toString(),
           },
           SetOptions(merge: true),
         );
 
-        if (changed) {
-          tx.set(
-            partyRef,
-            {
-              'ratingsGood': FieldValue.increment(deltaGood),
-              'ratingsBad': FieldValue.increment(deltaBad),
-            },
-            SetOptions(merge: true),
-          );
+        // 2) optional: im Party-Dokument
+        tx.set(
+          partyRatingRef,
+          {'username': username, 'value': value, 'ts': FieldValue.serverTimestamp()},
+          SetOptions(merge: true),
+        );
 
-          final currentGood = (userSnap.data()?['partyScoreGood'] ?? 0) as int;
-          final currentBad = (userSnap.data()?['partyScoreBad'] ?? 0) as int;
+        // optional: Aggregation bei MIR (nicht Host)
+        if (deltaGood != 0 || deltaBad != 0) {
+          final userSnap = await tx.get(userRef);
+          final currentGood = (userSnap.data()?['partyRatingsGood'] ?? 0) as int;
+          final currentBad = (userSnap.data()?['partyRatingsBad'] ?? 0) as int;
+
           final newGood = currentGood + deltaGood;
           final newBad = currentBad + deltaBad;
           final total = newGood + newBad;
@@ -1054,10 +1043,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           tx.set(
             userRef,
             {
-              'partyScoreGood': newGood,
-              'partyScoreBad': newBad,
-              'partyScorePct': pct,
-              'partyScoreUpdatedAt': FieldValue.serverTimestamp(),
+              'partyRatingsGood': newGood,
+              'partyRatingsBad': newBad,
+              'partyRatingsPct': pct,
+              'partyRatingsUpdatedAt': FieldValue.serverTimestamp(),
             },
             SetOptions(merge: true),
           );
@@ -1066,14 +1055,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(value == 'good' ? "Danke für die positive Bewertung!" : "Danke für dein Feedback!"),
-        ),
-      );
-    } on StateError catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Bewertung nicht möglich: ${e.message}")),
+        SnackBar(content: Text(value == 'good' ? "Bewertung gespeichert 👍" : "Bewertung gespeichert 👎")),
       );
     } catch (e) {
       if (!mounted) return;
@@ -1083,46 +1065,60 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
   }
 
+  // ✅ FIX: schon bewertet? -> users/{me}/partyRatings checken
   Future<bool> _userHasRated(String partyId, String username) async {
+    final myDocId = _safeDocId(username);
     final snap = await FirebaseFirestore.instance
-        .collection('Party')
+        .collection('users')
+        .doc(myDocId)
+        .collection('partyRatings')
         .doc(partyId)
-        .collection('ratings')
-        .doc(username)
         .get();
     return snap.exists;
   }
 
+  // ✅ FIX: Prompt NICHT an RSVP koppeln -> jede Party kann bewertet werden (wenn im 24h Fenster)
   Future<void> _maybePromptForRating() async {
     if (_ratingPromptShown || _currentUsername == null) return;
+
     for (final entry in _partyCache.entries) {
       final pid = entry.key;
       final data = entry.value;
+
+      // ✅ nur im Bewertungsfenster (bei dir: 24h-Logik)
       if (!_isInRatingWindow(data)) continue;
 
+      // ✅ nur wenn ich RSVP going/maybe habe
       final myRsvp = await FirebaseFirestore.instance
           .collection('Party')
           .doc(pid)
           .collection('rsvps')
           .doc(_currentUsername!)
           .get();
+
       final status = myRsvp.data()?['status'] as String?;
       if (status != 'going' && status != 'maybe') continue;
 
+      // ✅ nur wenn noch nicht bewertet
       final rated = await _userHasRated(pid, _currentUsername!);
       if (rated) continue;
 
       _ratingPromptShown = true;
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text("Wie war „${data['name'] ?? 'die Party'}“? Jetzt bewerten."),
-          action: SnackBarAction(label: "ÖFFNEN", onPressed: () => _openPartySheet(data, pid)),
+          action: SnackBarAction(
+            label: "ÖFFNEN",
+            onPressed: () => _openPartySheet(data, pid),
+          ),
         ),
       );
       break;
     }
   }
+
 
   Future<void> _sendReportDialog(String partyId) async {
     final outerContext = context;
@@ -1337,6 +1333,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         baseCanSeeFull = st == 'approved';
       }
     }
+
     final inRatingWindow = _isInRatingWindow(data);
 
     if (!mounted) return;
