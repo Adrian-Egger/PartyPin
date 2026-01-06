@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // ✅ FIX: für anonymous auth
+import 'package:firebase_auth/firebase_auth.dart'; // ✅ anonymous auth (Storage)
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -33,6 +33,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   String? _avatar; // URL (avatarUrl)
   String _passwordFromDb = "";
 
+  // ✅ users vs bars
+  String _collection = "users";
+  CollectionReference<Map<String, dynamic>> get _col =>
+      FirebaseFirestore.instance.collection(_collection);
+
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _currentPasswordController =
   TextEditingController();
@@ -60,40 +65,67 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   // ---------- User-Daten laden ----------
-
   Future<void> _loadUserData() async {
     final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username') ?? "";
+    final username = (prefs.getString('username') ?? "").trim();
     final cachedAvatar = prefs.getString('avatar'); // URL gecached
+
+    // ✅ accountType sollte beim Login gesetzt werden: "user" oder "bar"
+    // Wir sind robust: wenn es fehlt, versuchen wir users UND bars.
+    final accountType = (prefs.getString('accountType') ?? "").toLowerCase();
 
     String? avatarUrl;
     String password = "";
 
-    if (username.isNotEmpty) {
+    Future<bool> tryLoadFrom(String collectionName) async {
+      if (username.isEmpty) return false;
+
+      final lower = username.toLowerCase();
       final query = await FirebaseFirestore.instance
-          .collection("users")
-          .where("username", isEqualTo: username)
+          .collection(collectionName)
+          .where("username_lower", isEqualTo: lower)
           .limit(1)
           .get();
 
-      if (query.docs.isNotEmpty) {
-        final doc = query.docs.first;
-        final data = doc.data();
+      if (query.docs.isEmpty) return false;
 
-        avatarUrl = (data['avatarUrl'] ?? '').toString().trim();
-        password = (data['password'] ?? '').toString();
+      final doc = query.docs.first;
+      final data = doc.data();
 
-        if (!mounted) return;
-        setState(() {
-          _docId = doc.id;
-          _username = (data['username'] ?? username).toString();
-          _usernameController.text = _username;
-          _avatar = avatarUrl!.isNotEmpty ? avatarUrl : cachedAvatar;
-          _passwordFromDb = password;
-        });
-        return;
-      }
+      avatarUrl = (data['avatarUrl'] ?? '').toString().trim();
+      password = (data['password'] ?? '').toString();
+
+      if (!mounted) return true;
+      setState(() {
+        _collection = collectionName;
+        _docId = doc.id;
+        _username = (data['username'] ?? username).toString();
+        _usernameController.text = _username;
+        _avatar = (avatarUrl != null && avatarUrl!.isNotEmpty)
+            ? avatarUrl
+            : cachedAvatar;
+        _passwordFromDb = password;
+      });
+
+      // ✅ merken, damit künftig sofort richtig gesucht wird
+      await prefs.setString(
+          'accountType', collectionName == "bars" ? "bar" : "user");
+
+      return true;
     }
+
+    // 1) Wenn accountType bekannt: direkt richtig suchen
+    if (accountType == "bar" || accountType == "bars" || accountType == "ba") {
+      final ok = await tryLoadFrom("bars");
+      if (ok) return;
+    } else if (accountType == "user" || accountType.isNotEmpty) {
+      final ok = await tryLoadFrom("users");
+      if (ok) return;
+    }
+
+    // 2) Fallback (falls accountType nicht gesetzt/alt): erst users, dann bars
+    if (await tryLoadFrom("users")) return;
+    if (await tryLoadFrom("bars")) return;
 
     // Fallback: nur Prefs, falls Firestore nichts gefunden hat
     if (!mounted) return;
@@ -102,15 +134,13 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       _usernameController.text = username;
       _avatar = cachedAvatar;
       _passwordFromDb = password;
+      _docId = "";
     });
   }
 
   Future<void> _updateFirestoreField(String field, dynamic value) async {
     if (_docId.isEmpty) return;
-    await FirebaseFirestore.instance
-        .collection("users")
-        .doc(_docId)
-        .update({field: value});
+    await _col.doc(_docId).update({field: value});
   }
 
   // ---------- ✅ FIX: sicherstellen, dass Storage Upload erlaubt ist ----------
@@ -129,7 +159,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   // ---------- Avatar / Foto ----------
-
   Future<bool> _ensurePermissionForSource(ImageSource source) async {
     if (source == ImageSource.camera) {
       final status = await Permission.camera.request();
@@ -140,13 +169,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       return true;
     }
 
-    // Galerie:
-    // - Android: je nach Version storage/photos – wir versuchen beides robust.
-    // - iOS: photos
+    // Galerie (robust):
     try {
       if (Platform.isAndroid) {
-        // Erst "photos" versuchen (Android 13+ in neueren permission_handler Versionen),
-        // wenn das nicht geht/abgelehnt wird -> storage.
         final p = await Permission.photos.request();
         if (p.isGranted) return true;
 
@@ -165,7 +190,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         return true;
       }
     } catch (_) {
-      // Falls Permission.photos auf Android in deiner Version nicht sauber unterstützt ist:
       final s = await Permission.storage.request();
       if (!s.isGranted) {
         _showSnack("Zugriff auf Fotos wurde verweigert.");
@@ -196,7 +220,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     if (image == null) return;
 
     if (_docId.isEmpty) {
-      _showSnack("User-Dokument nicht gefunden. Bitte neu einloggen.");
+      _showSnack("Dokument nicht gefunden. Bitte neu einloggen.");
       return;
     }
 
@@ -210,7 +234,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final file = File(image.path);
 
     try {
-      // Cache-busting: immer neuer Dateiname (sonst zeigt das Handy manchmal alte Bilder)
+      // Cache-busting: immer neuer Dateiname
       final ts = DateTime.now().millisecondsSinceEpoch;
       final ref = FirebaseStorage.instance
           .ref()
@@ -305,7 +329,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   // ---------- Username / Passwort ----------
-
   Future<void> _saveUsername() async {
     final newUsername = _usernameController.text.trim();
     if (newUsername.isEmpty) {
@@ -320,14 +343,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
 
     if (_docId.isEmpty) {
-      _showSnack("User-Dokument nicht gefunden.");
+      _showSnack("Dokument nicht gefunden.");
       return;
     }
 
     final lower = newUsername.toLowerCase();
 
-    final dup = await FirebaseFirestore.instance
-        .collection("users")
+    // ✅ dup-check in der AKTUELLEN Collection (users ODER bars)
+    final dup = await _col
         .where("username_lower", isEqualTo: lower)
         .limit(1)
         .get();
@@ -337,7 +360,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       return;
     }
 
-    await FirebaseFirestore.instance.collection("users").doc(_docId).update({
+    await _col.doc(_docId).update({
       "username": newUsername,
       "username_lower": lower,
     });
@@ -365,13 +388,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
 
     if (_docId.isEmpty) {
-      _showSnack("User-Dokument nicht gefunden.");
+      _showSnack("Dokument nicht gefunden.");
       return;
     }
 
-    final snap =
-    await FirebaseFirestore.instance.collection("users").doc(_docId).get();
-
+    final snap = await _col.doc(_docId).get();
     final data = snap.data();
     final pwInDb = (data?['password'] ?? '').toString();
 
@@ -394,7 +415,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   // ---------- Logout / Account löschen ----------
-
   Future<void> _logout() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -492,13 +512,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     );
 
     if (confirm2 == true && _docId.isNotEmpty) {
-      // Optional: Avatar in Storage löschen (kein Muss)
-      try {
-        // ⚠️ wir haben jetzt timestamped Dateien – du kannst alternativ im users-doc die URL speichern
-        // und daraus den Path ableiten. Hier lassen wir es bewusst weg.
-      } catch (_) {}
-
-      await FirebaseFirestore.instance.collection("users").doc(_docId).delete();
+      await _col.doc(_docId).delete();
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
@@ -524,7 +538,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   // ---------- UI ----------
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -742,12 +755,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       return const AssetImage('lib/Pics/profile_pic.png');
     }
 
-    // URL -> alle Geräte sehen es
     if (avatar.startsWith('http://') || avatar.startsWith('https://')) {
       return NetworkImage(avatar);
     }
 
-    // Fallback (sollte kaum noch passieren)
     if (File(avatar).existsSync()) {
       return FileImage(File(avatar));
     }
