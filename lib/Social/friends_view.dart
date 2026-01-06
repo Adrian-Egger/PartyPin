@@ -407,7 +407,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                             border: Border.all(color: _accentLine, width: 1),
                           ),
                           child: const Text(
-                            "👥 Freunde 🔥",
+                            " Freunde 👥",
                             style: TextStyle(
                               color: _text,
                               fontWeight: FontWeight.w900,

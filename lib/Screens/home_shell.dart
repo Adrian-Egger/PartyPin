@@ -23,7 +23,15 @@ enum _GateState { loading, login, terms, selection, ready }
 
 class HomeShell extends StatefulWidget {
   final int initialIndex;
-  const HomeShell({super.key, this.initialIndex = 2});
+
+  // ✅ NEU: Party, die beim Öffnen der Map automatisch als BottomSheet aufgeht
+  final String? initialOpenPartyId;
+
+  const HomeShell({
+    super.key,
+    this.initialIndex = 2,
+    this.initialOpenPartyId,
+  });
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -90,8 +98,10 @@ class _HomeShellState extends State<HomeShell> {
       final savedLat = prefs.getDouble('selectedLat');
       final savedLng = prefs.getDouble('selectedLng');
 
-      final hasLocation =
-          savedCity != null && savedCountry != null && savedLat != null && savedLng != null;
+      final hasLocation = savedCity != null &&
+          savedCountry != null &&
+          savedLat != null &&
+          savedLng != null;
 
       if (!hasLocation) {
         if (!mounted) return;
@@ -111,7 +121,9 @@ class _HomeShellState extends State<HomeShell> {
   Future<void> _loadUserAndBuildPages() async {
     final prefs = await SharedPreferences.getInstance();
 
-    final u = (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '').trim();
+    final u =
+    (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '')
+        .trim();
     final isBar = prefs.getBool('isBarAccount') ?? false;
     final barId = (prefs.getString('barId') ?? '').trim();
 
@@ -126,31 +138,40 @@ class _HomeShellState extends State<HomeShell> {
         // ✅ Bar account: 4 Tabs
         _pages = <Widget>[
           BarEventScreen(barId: _barId), // 0
-          const PartyMapScreen(),        // 1 (Start)
-          const BarFeedbackScreen(),     // 2
+          // ✅ Map (Bar) -> initialOpenPartyId auch hier durchreichen (schadet nicht)
+          PartyMapScreen(initialOpenPartyId: widget.initialOpenPartyId), // 1
+          const BarFeedbackScreen(), // 2
           MyBarTab(
             barId: _barId,
             myIndex: 3,
             tabIndex: _tabIndex,
-          ), // 3 (öffnet BarBottomSheet intern mit barId)
+          ), // 3
         ];
 
         // ✅ Bar startet IMMER auf Map (Index 1)
         _currentIndex = 1;
         _tabIndex.value = 1;
       } else {
-        // ✅ Normal Account bleibt exakt bei 4 Tabs
+        // ✅ Normal Account: 4 Tabs
         _pages = <Widget>[
           const FeedbackScreen(), // 0
           _username.isEmpty
               ? const _UsernameMissingScreen()
               : FriendsScreen(currentUsername: _username), // 1
-          const PartyMapScreen(), // 2
+          // ✅ Map -> hier MUSS initialOpenPartyId rein
+          PartyMapScreen(initialOpenPartyId: widget.initialOpenPartyId), // 2
           const NewPartyScreen(), // 3
         ];
 
-        _currentIndex = _clampIndex(widget.initialIndex, _pages.length - 1);
-        _tabIndex.value = _currentIndex;
+        // ✅ Wenn initialOpenPartyId gesetzt ist, soll IMMER die Map geöffnet werden
+        if (widget.initialOpenPartyId != null &&
+            widget.initialOpenPartyId!.trim().isNotEmpty) {
+          _currentIndex = 2;
+          _tabIndex.value = 2;
+        } else {
+          _currentIndex = _clampIndex(widget.initialIndex, _pages.length - 1);
+          _tabIndex.value = _currentIndex;
+        }
       }
     });
   }
@@ -158,10 +179,8 @@ class _HomeShellState extends State<HomeShell> {
   void _onBottomNavTapped(int i) {
     if (!_isTabsReady) return;
 
-    // ✅ WICHTIG: Für "Meine Bar" soll bei erneutem Tap wieder öffnen
-    // (weil MyBarTab nur auf tabIndex-change reagiert)
+    // ✅ Für "Meine Bar" soll bei erneutem Tap wieder öffnen
     if (_isBarAccount && i == 3) {
-      // kurz auf einen anderen Index togglen, dann zurück auf 3
       if (_tabIndex.value == 3) {
         final fallback = _currentIndex == 3 ? 1 : _currentIndex; // meist Map
         _tabIndex.value = fallback;
@@ -200,14 +219,19 @@ class _HomeShellState extends State<HomeShell> {
         type: BottomNavigationBarType.fixed,
         items: _isBarAccount
             ? const [
-          BottomNavigationBarItem(icon: Icon(Icons.celebration), label: "Event"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.celebration), label: "Event"),
           BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
-          BottomNavigationBarItem(icon: Icon(Icons.feedback), label: "Feedback"),
-          BottomNavigationBarItem(icon: Icon(Icons.store), label: "Meine Bar"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.feedback), label: "Feedback"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.store), label: "Meine Bar"),
         ]
             : const [
-          BottomNavigationBarItem(icon: Icon(Icons.feedback), label: "Feedback"),
-          BottomNavigationBarItem(icon: Icon(Icons.people), label: "Freunde"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.feedback), label: "Feedback"),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.people), label: "Freunde"),
           BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
           BottomNavigationBarItem(icon: Icon(Icons.add), label: "Neu"),
         ],

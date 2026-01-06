@@ -273,8 +273,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
         : '';
     _isUnlimitedGuests = data['guestLimit'] == 'Unbegrenzt';
 
-    _priceController.text =
-    data['price'] != null && data['price'] != 0 ? data['price'].toString() : '';
+    _priceController.text = data['price'] != null && data['price'] != 0 ? data['price'].toString() : '';
     _isFreeEntry = (data['price'] ?? 0) == 0;
 
     _addressController.text = (data['address'] ?? '').toString();
@@ -283,8 +282,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       final dt = (data['startTime'] as Timestamp).toDate();
       _selectedDate = DateTime(dt.year, dt.month, dt.day);
       _selectedTime = TimeOfDay(hour: dt.hour, minute: dt.minute);
-      _timeController.text =
-      "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+      _timeController.text = "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
     } else {
       if (data['date'] is Timestamp) {
         final d = (data['date'] as Timestamp).toDate();
@@ -538,31 +536,51 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     );
   }
 
+  // ✅ FIX: verhindert abgeschnittene Labels / Wortbruch
+  // - Wenn label '\n' enthält => 2 Zeilen
+  // - Sonst => FittedBox scaleDown => "Unbegrenzt" wird nie abgeschnitten
   Widget _switchTile({
     required String label,
     required bool value,
     required ValueChanged<bool> onChanged,
     IconData? icon,
   }) {
+    final bool twoLines = label.contains('\n');
+
+    final Widget labelWidget = twoLines
+        ? Text(
+      label,
+      maxLines: 2,
+      softWrap: true,
+      overflow: TextOverflow.visible,
+      style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
+    )
+        : FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Text(
+        label,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.visible,
+        style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
+      ),
+    );
+
     return Container(
       decoration: BoxDecoration(
         color: _card,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _panelBorder),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), // mehr Höhe => 2 Zeilen passen sicher
       child: Row(
         children: [
           if (icon != null) ...[
             Icon(icon, color: _secondary),
             const SizedBox(width: 10),
           ],
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
-            ),
-          ),
+          Expanded(child: labelWidget),
           Switch(
             value: value,
             onChanged: (v) {
@@ -657,8 +675,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     if (time != null) {
       setState(() {
         _selectedTime = time;
-        _timeController.text =
-        "${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}";
+        _timeController.text = "${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}";
       });
     }
   }
@@ -703,9 +720,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
         final placemarks = await geo.placemarkFromCoordinates(picked.latitude, picked.longitude);
         if (placemarks.isNotEmpty) {
           final p = placemarks.first;
-          final street = [p.street, p.subThoroughfare]
-              .where((e) => e != null && e.trim().isNotEmpty)
-              .join(' ');
+          final street = [p.street, p.subThoroughfare].where((e) => e != null && e.trim().isNotEmpty).join(' ');
           final city = p.locality ?? p.subAdministrativeArea ?? '';
           final postal = p.postalCode ?? '';
           final country = p.country ?? '';
@@ -1104,12 +1119,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     final name = _nameController.text.trim();
     final description = _descriptionController.text.trim();
 
-    final guestLimit =
-    _isUnlimitedGuests ? 'Unbegrenzt' : int.tryParse(_guestLimitController.text.trim());
+    final guestLimit = _isUnlimitedGuests ? 'Unbegrenzt' : int.tryParse(_guestLimitController.text.trim());
 
-    final price = _isFreeEntry
-        ? 0.0
-        : double.tryParse(_priceController.text.replaceAll(',', '.').trim()) ?? 0.0;
+    final price = _isFreeEntry ? 0.0 : double.tryParse(_priceController.text.replaceAll(',', '.').trim()) ?? 0.0;
 
     final address = _addressController.text.trim();
     final date = _selectedDate!;
@@ -1308,7 +1320,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                   border: Border.all(color: _accentLine, width: 1),
                 ),
                 child: Text(
-                  isEditing ? "✏️ Party bearbeiten 🔥" : "🎉 Neue Party 🔥",
+                  isEditing ? "✏️ Party bearbeiten 🔥" : "Neue Party 🎉",
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 24,
@@ -1474,7 +1486,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: _switchTile(
-                                      label: "Gratis Eintritt",
+                                      label: "Gratis\nEintritt", // ✅ 2 Zeilen erzwingen
                                       value: _isFreeEntry,
                                       icon: Icons.card_giftcard,
                                       onChanged: (v) {
@@ -1626,9 +1638,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                                   onPressed: _openExcludeFriendsDialog,
                                   icon: const Icon(Icons.person_off, size: 18, color: _secondary),
                                   label: Text(
-                                    _excludedFriends.isEmpty
-                                        ? "Freunde ausschließen"
-                                        : "Ausgeschlossen (${_excludedFriends.length})",
+                                    _excludedFriends.isEmpty ? "Freunde ausschließen" : "Ausgeschlossen (${_excludedFriends.length})",
                                     style: const TextStyle(color: Colors.white),
                                   ),
                                   style: OutlinedButton.styleFrom(

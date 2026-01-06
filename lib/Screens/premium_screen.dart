@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // ✅ FIX: UID Support
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -28,8 +29,7 @@ const String _paypalPlanMonthly = "P-55588718AV729883XNE6MJ5Y";
 const String _paypalPlanYearly = "P-0WL99384633096336NE6WUSA";
 
 // ✅ Deine echte Functions Base
-const String _functionsBase =
-    "https://us-central1-partypin-5dc3f.cloudfunctions.net";
+const String _functionsBase = "https://us-central1-partypin-5dc3f.cloudfunctions.net";
 
 // =======================
 // PREMIUM SCREEN
@@ -44,6 +44,7 @@ class PremiumScreen extends StatefulWidget {
 class _PremiumScreenState extends State<PremiumScreen> {
   PayPalPlan _selectedPlan = PayPalPlan.monthly;
   bool _isLoading = false;
+
   String? _currentUsername;
 
   late final AppLinks _appLinks;
@@ -101,7 +102,9 @@ class _PremiumScreenState extends State<PremiumScreen> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      _currentUsername = prefs.getString('currentUsername');
+      // ⚠️ Du hattest "currentUsername" - in anderen Files nutzt du oft "username".
+      // Wir lassen es so wie bei dir, aber robust weiter unten.
+      _currentUsername = (prefs.getString('currentUsername') ?? prefs.getString('username'))?.trim();
     });
   }
 
@@ -126,9 +129,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
     if (uri.host == 'paypal-return') {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Zahlung abgeschlossen. Premium wird gleich aktiviert…'),
-        ),
+        const SnackBar(content: Text('Zahlung abgeschlossen. Premium wird gleich aktiviert…')),
       );
     } else if (uri.host == 'paypal-cancel') {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -147,9 +148,88 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
   String _savingsText() => 'Spare ca. 2,89 € pro Jahr';
 
-  Stream<DocumentSnapshot<Map<String, dynamic>>> _userStream(String username) {
-    return FirebaseFirestore.instance.doc('users/$username').snapshots();
+  // ===========================
+  // ✅ FIX: Premium zuverlässig erkennen (UID -> users/{username} -> Query username)
+  // ===========================
+
+  bool _parsePremium(dynamic v) {
+    if (v == true) return true;
+    if (v is String) return v.trim().toLowerCase() == 'true';
+    if (v is num) return v == 1;
+    return false;
   }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _userDocByUidStream() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.trim().isEmpty) return const Stream.empty();
+    return FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
+  }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _userDocByUsernameStream(String username) {
+    final u = username.trim();
+    if (u.isEmpty) return const Stream.empty();
+    return FirebaseFirestore.instance.collection('users').doc(u).snapshots();
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _userByUsernameQueryStream(String username) {
+    final u = username.trim();
+    if (u.isEmpty) return const Stream.empty();
+    return FirebaseFirestore.instance
+        .collection('users')
+        .where('username', isEqualTo: u)
+        .limit(1)
+        .snapshots();
+  }
+
+  /// Liefert: (isPremium, isLoading)
+  Widget _premiumGateBuilder({
+    required String username,
+    required Widget Function(bool isPremium) builder,
+  }) {
+    // 1) users/{uid}
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _userDocByUidStream(),
+      builder: (context, uidSnap) {
+        if (uidSnap.connectionState == ConnectionState.waiting) {
+          return builder(false); // UI weiter unten kann Loading anzeigen, wenn du willst
+        }
+
+        if (uidSnap.data?.exists == true) {
+          final data = uidSnap.data?.data() ?? {};
+          final isPremium = _parsePremium(data['premium']);
+          return builder(isPremium);
+        }
+
+        // 2) users/{username}
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: _userDocByUsernameStream(username),
+          builder: (context, userSnap) {
+            if (userSnap.connectionState == ConnectionState.waiting) {
+              return builder(false);
+            }
+
+            if (userSnap.data?.exists == true) {
+              final data = userSnap.data?.data() ?? {};
+              final isPremium = _parsePremium(data['premium']);
+              return builder(isPremium);
+            }
+
+            // 3) Query users where username == X
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: _userByUsernameQueryStream(username),
+              builder: (context, qSnap) {
+                final docs = qSnap.data?.docs ?? const [];
+                final isPremium = docs.isNotEmpty ? _parsePremium(docs.first.data()['premium']) : false;
+                return builder(isPremium);
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ===========================
 
   Future<void> _openSubscriptionCheckout() async {
     final u = _currentUsername?.trim() ?? '';
@@ -252,19 +332,14 @@ class _PremiumScreenState extends State<PremiumScreen> {
             ),
           ),
           const SizedBox(height: 10),
-
           row(Icons.people_alt_rounded, 'Du siehst, ob Freunde von dir zu einer Party gehen.'),
-
           row(Icons.add_a_photo_rounded, 'Du kannst bei deinen eigenen Partys Bilder hinzufügen.'),
-
           row(Icons.verified_rounded, 'Premium-Badge & Zugriff auf zukünftige Premium-Features.'),
-
           row(Icons.rocket_launch_rounded, 'Early Access für neue Features, die zukünftig kommen.'),
         ],
       ),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -289,26 +364,10 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
     final yearlySelected = _selectedPlan == PayPalPlan.yearly;
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: _userStream(username),
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return Scaffold(
-            backgroundColor: bg,
-            appBar: _appBar(context),
-            body: Center(
-              child: Text(
-                'Fehler: ${snap.error}',
-                style: const TextStyle(color: Colors.white70),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          );
-        }
-
-        final data = snap.data?.data() ?? {};
-        final isPremium = data['premium'] == true;
-
+    // ✅ FIX: nicht mehr nur users/{username} – sondern UID/username/query fallback
+    return _premiumGateBuilder(
+      username: username,
+      builder: (isPremium) {
         // ✅ Premium aktiv
         if (isPremium) {
           return Scaffold(
@@ -323,8 +382,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                   decoration: BoxDecoration(
                     color: panel,
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                        color: accentRed.withOpacity(0.9), width: 1.2),
+                    border: Border.all(color: accentRed.withOpacity(0.9), width: 1.2),
                     boxShadow: [
                       BoxShadow(
                         color: accentRed.withOpacity(0.12),
@@ -337,8 +395,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 8),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                         decoration: BoxDecoration(
                           color: accentRed.withOpacity(0.12),
                           borderRadius: BorderRadius.circular(999),
@@ -381,8 +438,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                         width: double.infinity,
                         child: ElevatedButton.icon(
                           onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.check_circle,
-                              color: Colors.white),
+                          icon: const Icon(Icons.check_circle, color: Colors.white),
                           label: const Text(
                             'Alles klar',
                             style: TextStyle(
@@ -393,11 +449,8 @@ class _PremiumScreenState extends State<PremiumScreen> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: accentRed,
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                                vertical: 12, horizontal: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ),
                         ),
                       ),
@@ -418,7 +471,6 @@ class _PremiumScreenState extends State<PremiumScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // ✅ Entfernt: "Warte auf PayPal Bestätigung (Webhook)…"
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -445,10 +497,8 @@ class _PremiumScreenState extends State<PremiumScreen> {
                     ],
                   ),
                 ),
-
                 const SizedBox(height: 12),
                 _premiumFeaturesCard(),
-
                 const SizedBox(height: 16),
                 const Text(
                   'Wähle dein Abo',
@@ -465,8 +515,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                   price: _planPriceText(PayPalPlan.monthly),
                   selected: _selectedPlan == PayPalPlan.monthly,
                   highlight: null,
-                  onTap: () =>
-                      setState(() => _selectedPlan = PayPalPlan.monthly),
+                  onTap: () => setState(() => _selectedPlan = PayPalPlan.monthly),
                 ),
                 const SizedBox(height: 10),
                 _planCard(
@@ -484,9 +533,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                     backgroundColor: accentRed,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -495,10 +542,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                       const SizedBox(width: 10),
                       Text(
                         _isLoading ? 'Lädt…' : _payButtonLabel(),
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                        ),
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                       ),
                       const SizedBox(width: 10),
                       Text(
@@ -523,8 +567,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                   child: const Text(
                     'Hinweis: Abos werden über PayPal abgewickelt. Premium wird nach erfolgreicher Bestätigung automatisch aktiviert. '
                         'Kündigung in PayPal deaktiviert Premium automatisch.',
-                    style: TextStyle(
-                        color: Colors.white54, fontSize: 12, height: 1.3),
+                    style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.3),
                   ),
                 ),
               ],
@@ -583,8 +626,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                       if (highlight != null) ...[
                         const SizedBox(width: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 3),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
                             color: accentRed.withOpacity(0.12),
                             borderRadius: BorderRadius.circular(999),

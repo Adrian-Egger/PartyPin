@@ -11,6 +11,12 @@
 // - Closed Party: Wenn Anfrage gesendet (pending) -> Button wird ORANGE (deaktiviert)
 // - ✅ Timer unten entfernt (kein "Wird automatisch gelöscht in ...")
 // - ✅ FIX: Wenn Closed Party freigegeben (canSeeFull == true) -> "Anfrage senden" verschwindet
+// - ✅ FIX PREMIUM: Premium-Check stabil & kompatibel (UID -> username-doc -> username-query)
+// - ✅ FIX CLOSED REQUEST UI: "Anfrage gesendet" wird sofort angezeigt + Request-Status wird robust gefunden
+//      Priorität:
+//        1) requests/{uid}
+//        2) requests/{username}
+//        3) requests/{safeDocId(username)}
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -161,7 +167,6 @@ class PartyBottomSheet extends StatelessWidget {
             final s2 = userSnap.data?.data()?['status'] as String?;
             if (userExists && s2 != null) return builder(s2);
 
-            // Fallback: coming/maybe collections
             return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
               stream: _myComingUsernameStream(),
               builder: (context, comingSnap) {
@@ -183,10 +188,34 @@ class PartyBottomSheet extends StatelessWidget {
   }
 
   // ------------------ PREMIUM helpers ------------------
-  Stream<DocumentSnapshot<Map<String, dynamic>>> _myUserDocStream() {
+
+  bool _parsePremium(dynamic v) {
+    if (v == true) return true;
+    if (v is String) return v.trim().toLowerCase() == 'true';
+    if (v is num) return v == 1;
+    return false;
+  }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _userDocByUidStream() {
+    final uid = _uid();
+    if (uid == null || uid.trim().isEmpty) return const Stream.empty();
+    return FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
+  }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _userDocByUsernameStream() {
     final u = (currentUsername ?? '').trim();
     if (u.isEmpty) return const Stream.empty();
     return FirebaseFirestore.instance.collection('users').doc(u).snapshots();
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _userByUsernameQueryStream() {
+    final u = (currentUsername ?? '').trim();
+    if (u.isEmpty) return const Stream.empty();
+    return FirebaseFirestore.instance
+        .collection('users')
+        .where('username', isEqualTo: u)
+        .limit(1)
+        .snapshots();
   }
 
   Future<Set<String>> _loadFriendUsernames() async {
@@ -209,196 +238,277 @@ class PartyBottomSheet extends StatelessWidget {
     return out;
   }
 
+  /// ✅ Premium-Section:
+  /// 1) users/{uid}
+  /// 2) users/{username}
+  /// 3) users where username == me (limit 1)
   Widget _friendsGoingPremiumSection(BuildContext context) {
     if ((currentUsername ?? '').trim().isEmpty) return const SizedBox.shrink();
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: _myUserDocStream(),
-      builder: (context, userSnap) {
-        final isPremium = (userSnap.data?.data()?['premium'] == true);
+    Widget lockedCard() {
+      return _boxed(
+        InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PremiumScreen()),
+            );
+          },
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.grey[900],
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.redAccent.withOpacity(.55)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent.withOpacity(.15),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.redAccent.withOpacity(.6)),
+                  ),
+                  child: const Icon(Icons.lock_outline, color: Colors.redAccent),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "🔒 Premium Feature",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        "Sieh, welche deiner Freunde bei dieser Party hingehen.",
+                        style: TextStyle(color: Colors.white70, height: 1.25),
+                      ),
+                      SizedBox(height: 6),
+                      Text(
+                        "Tippe hier, um Premium zu holen →",
+                        style: TextStyle(
+                          color: Colors.redAccent,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
-        if (userSnap.connectionState == ConnectionState.waiting) {
+    Widget premiumContent(bool isPremium) {
+      if (!isPremium) return lockedCard();
+
+      return FutureBuilder<Set<String>>(
+        future: _loadFriendUsernames(),
+        builder: (context, friendSnap) {
+          final friends = friendSnap.data ?? <String>{};
+
+          if (friendSnap.connectionState == ConnectionState.waiting) {
+            return _boxed(
+              Row(
+                children: const [
+                  SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2)),
+                  SizedBox(width: 10),
+                  Text("Lade Freunde…", style: TextStyle(color: Colors.white70)),
+                ],
+              ),
+            );
+          }
+
+          if (friends.isEmpty) {
+            return _boxed(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Text(
+                    "👀 Freunde bei dieser Party",
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    "Du hast aktuell keine Freunde, die angezeigt werden können.",
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: comingStream(),
+            builder: (context, comingSnap) {
+              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: maybeStream(),
+                builder: (context, maybeSnap) {
+                  final comingDocs = comingSnap.data?.docs ?? const [];
+                  final maybeDocs = maybeSnap.data?.docs ?? const [];
+
+                  final comingFriends = <String>[];
+                  for (final d in comingDocs) {
+                    final u = d.id.trim();
+                    if (friends.contains(u)) comingFriends.add(u);
+                  }
+
+                  final maybeFriends = <String>[];
+                  for (final d in maybeDocs) {
+                    final u = d.id.trim();
+                    if (friends.contains(u)) maybeFriends.add(u);
+                  }
+
+                  comingFriends.sort();
+                  maybeFriends.sort();
+
+                  return _boxed(
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: const [
+                            Icon(Icons.groups_rounded,
+                                color: Colors.redAccent, size: 20),
+                            SizedBox(width: 8),
+                            Text(
+                              "👀 Freunde bei dieser Party",
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        if (comingFriends.isEmpty && maybeFriends.isEmpty)
+                          const Text(
+                            "Keine deiner Freunde sind hier aktuell in „Ich komme“ oder „Vielleicht“.",
+                            style: TextStyle(color: Colors.white70),
+                          )
+                        else ...[
+                          if (comingFriends.isNotEmpty) ...[
+                            const Text("✅ Kommen",
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: comingFriends
+                                  .map((u) => _friendChip(
+                                  u, Colors.greenAccent))
+                                  .toList(),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                          if (maybeFriends.isNotEmpty) ...[
+                            const Text("🤔 Vielleicht",
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: maybeFriends
+                                  .map((u) =>
+                                  _friendChip(u, Colors.orangeAccent))
+                                  .toList(),
+                            ),
+                          ],
+                        ],
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          );
+        },
+      );
+    }
+
+    // 1) users/{uid}
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _userDocByUidStream(),
+      builder: (context, uidSnap) {
+        if (uidSnap.connectionState == ConnectionState.waiting) {
           return _boxed(
             Row(
               children: const [
-                SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
                 SizedBox(width: 10),
-                Text("Lade Premium-Status…", style: TextStyle(color: Colors.white70)),
+                Text("Lade Premium-Status…",
+                    style: TextStyle(color: Colors.white70)),
               ],
             ),
           );
         }
 
-        if (!isPremium) {
-          return _boxed(
-            InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const PremiumScreen()),
-                );
-              },
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.grey[900],
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.redAccent.withOpacity(.55)),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: Colors.redAccent.withOpacity(.15),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.redAccent.withOpacity(.6)),
-                      ),
-                      child: const Icon(Icons.lock_outline, color: Colors.redAccent),
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            "🔒 Premium Feature",
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            "Sieh, welche deiner Freunde bei dieser Party hingehen.",
-                            style: TextStyle(color: Colors.white70, height: 1.25),
-                          ),
-                          SizedBox(height: 6),
-                          Text(
-                            "Tippe hier, um Premium zu holen →",
-                            style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w700),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
+        // Wenn UID-DOC existiert -> entscheidet es (premium true/false)
+        if (uidSnap.data?.exists == true) {
+          final d = uidSnap.data?.data() ?? {};
+          final isPremium = _parsePremium(d['premium']);
+          return premiumContent(isPremium);
         }
 
-        return FutureBuilder<Set<String>>(
-          future: _loadFriendUsernames(),
-          builder: (context, friendSnap) {
-            final friends = friendSnap.data ?? <String>{};
-
-            if (friendSnap.connectionState == ConnectionState.waiting) {
+        // 2) users/{username}
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: _userDocByUsernameStream(),
+          builder: (context, userSnap) {
+            if (userSnap.connectionState == ConnectionState.waiting) {
               return _boxed(
                 Row(
                   children: const [
-                    SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
                     SizedBox(width: 10),
-                    Text("Lade Freunde…", style: TextStyle(color: Colors.white70)),
+                    Text("Lade Premium-Status…",
+                        style: TextStyle(color: Colors.white70)),
                   ],
                 ),
               );
             }
 
-            if (friends.isEmpty) {
-              return _boxed(
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text(
-                      "👀 Freunde bei dieser Party",
-                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      "Du hast aktuell keine Freunde, die angezeigt werden können.",
-                      style: TextStyle(color: Colors.white70),
-                    ),
-                  ],
-                ),
-              );
+            if (userSnap.data?.exists == true) {
+              final d = userSnap.data?.data() ?? {};
+              final isPremium = _parsePremium(d['premium']);
+              return premiumContent(isPremium);
             }
 
+            // 3) Query fallback
             return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: comingStream(),
-              builder: (context, comingSnap) {
-                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: maybeStream(),
-                  builder: (context, maybeSnap) {
-                    final comingDocs = comingSnap.data?.docs ?? const [];
-                    final maybeDocs = maybeSnap.data?.docs ?? const [];
-
-                    final comingFriends = <String>[];
-                    for (final d in comingDocs) {
-                      final u = d.id.trim();
-                      if (friends.contains(u)) comingFriends.add(u);
-                    }
-
-                    final maybeFriends = <String>[];
-                    for (final d in maybeDocs) {
-                      final u = d.id.trim();
-                      if (friends.contains(u)) maybeFriends.add(u);
-                    }
-
-                    comingFriends.sort();
-                    maybeFriends.sort();
-
-                    return _boxed(
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: const [
-                              Icon(Icons.groups_rounded, color: Colors.redAccent, size: 20),
-                              SizedBox(width: 8),
-                              Text(
-                                "👀 Freunde bei dieser Party",
-                                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          if (comingFriends.isEmpty && maybeFriends.isEmpty)
-                            const Text(
-                              "Keine deiner Freunde sind hier aktuell in „Ich komme“ oder „Vielleicht“.",
-                              style: TextStyle(color: Colors.white70),
-                            )
-                          else ...[
-                            if (comingFriends.isNotEmpty) ...[
-                              const Text("✅ Kommen",
-                                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: comingFriends.map((u) => _friendChip(u, Colors.greenAccent)).toList(),
-                              ),
-                              const SizedBox(height: 12),
-                            ],
-                            if (maybeFriends.isNotEmpty) ...[
-                              const Text("🤔 Vielleicht",
-                                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: maybeFriends.map((u) => _friendChip(u, Colors.orangeAccent)).toList(),
-                              ),
-                            ],
-                          ],
-                        ],
-                      ),
-                    );
-                  },
-                );
+              stream: _userByUsernameQueryStream(),
+              builder: (context, qSnap) {
+                final docs = qSnap.data?.docs ?? const [];
+                final isPremium = docs.isNotEmpty
+                    ? _parsePremium(docs.first.data()['premium'])
+                    : false;
+                return premiumContent(isPremium);
               },
             );
           },
@@ -415,7 +525,8 @@ class PartyBottomSheet extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: c.withOpacity(.6)),
       ),
-      child: Text(username, style: TextStyle(color: c, fontWeight: FontWeight.w800)),
+      child: Text(username,
+          style: TextStyle(color: c, fontWeight: FontWeight.w800)),
     );
   }
 
@@ -425,7 +536,8 @@ class PartyBottomSheet extends StatelessWidget {
     final meName = (currentUsername ?? '').trim();
 
     if (uid == null) {
-      showStatusSnack(context, "Nicht eingeloggt (auth.uid fehlt).", positive: false);
+      showStatusSnack(context, "Nicht eingeloggt (auth.uid fehlt).",
+          positive: false);
       return;
     }
     if (meName.isEmpty) {
@@ -433,7 +545,8 @@ class PartyBottomSheet extends StatelessWidget {
       return;
     }
     if (!inRatingWindow) {
-      showStatusSnack(context, "Bewertung ist noch nicht möglich.", positive: false);
+      showStatusSnack(context, "Bewertung ist noch nicht möglich.",
+          positive: false);
       return;
     }
 
@@ -461,10 +574,14 @@ class PartyBottomSheet extends StatelessWidget {
       );
     } on FirebaseFunctionsException catch (e) {
       if (!context.mounted) return;
-      showStatusSnack(context, "Function-Fehler: ${e.code} (${e.message ?? ''})", positive: false);
+      showStatusSnack(context,
+          "Function-Fehler: ${e.code} (${e.message ?? ''})",
+          positive: false);
     } on FirebaseException catch (e) {
       if (!context.mounted) return;
-      showStatusSnack(context, "Firebase-Fehler: ${e.code} (${e.message ?? ''})", positive: false);
+      showStatusSnack(context,
+          "Firebase-Fehler: ${e.code} (${e.message ?? ''})",
+          positive: false);
     } catch (e) {
       if (!context.mounted) return;
       showStatusSnack(context, "Fehler beim Bewerten: $e", positive: false);
@@ -483,7 +600,8 @@ class PartyBottomSheet extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.grey[900],
-        title: const Text("Person ausladen?", style: TextStyle(color: Colors.white)),
+        title:
+        const Text("Person ausladen?", style: TextStyle(color: Colors.white)),
         content: Text(
           isFriendsOnly
               ? "Möchtest du „$cleanUser“ wirklich ausladen? Die Person wird aus allen Listen entfernt und bei dieser Only4Friends-Party ausgeschlossen."
@@ -493,11 +611,13 @@ class PartyBottomSheet extends StatelessWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text("Abbrechen", style: TextStyle(color: Colors.white70)),
+            child:
+            const Text("Abbrechen", style: TextStyle(color: Colors.white70)),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text("Ausladen", style: TextStyle(color: Colors.redAccent)),
+            child: const Text("Ausladen",
+                style: TextStyle(color: Colors.redAccent)),
           ),
         ],
       ),
@@ -544,33 +664,6 @@ class PartyBottomSheet extends StatelessWidget {
     } catch (e) {
       showStatusSnack(context, "Fehler beim Ausladen: $e", positive: false);
     }
-  }
-
-  // -------- Party-Start + Ablauf-Timer (23h ab Start) --------
-  DateTime? _partyStartFromData() {
-    final startRaw = data['startTime'];
-
-    if (startRaw is Timestamp) return startRaw.toDate().toLocal();
-    if (startRaw is String) {
-      final parsed = DateTime.tryParse(startRaw);
-      if (parsed != null) return parsed.toLocal();
-    }
-
-    final v = data['date'];
-    DateTime? base;
-    if (v is Timestamp) base = v.toDate();
-    if (v is String) base = DateTime.tryParse(v);
-    if (base == null) return null;
-
-    final timeStr = (data['time'] ?? '').toString().trim();
-    int hh = 0, mm = 0;
-    if (timeStr.contains(':')) {
-      final parts = timeStr.split(':');
-      if (parts.isNotEmpty) hh = int.tryParse(parts[0]) ?? 0;
-      if (parts.length > 1) mm = int.tryParse(parts[1]) ?? 0;
-    }
-
-    return DateTime(base.year, base.month, base.day, hh, mm);
   }
 
   // ✅ Timer unten entfernt -> immer shrink
@@ -675,7 +768,10 @@ class PartyBottomSheet extends StatelessWidget {
               SizedBox(width: 8),
               Text(
                 "📸 Bilder",
-                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800),
               ),
             ],
           ),
@@ -697,7 +793,10 @@ class PartyBottomSheet extends StatelessWidget {
                   if (b.caption.isNotEmpty) ...[
                     Text(
                       b.caption,
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, height: 1.25),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          height: 1.25),
                     ),
                     const SizedBox(height: 10),
                   ],
@@ -715,7 +814,8 @@ class PartyBottomSheet extends StatelessWidget {
                       ),
                     )
                   else
-                    const Text("Keine Bilder in diesem Block.", style: TextStyle(color: Colors.white70)),
+                    const Text("Keine Bilder in diesem Block.",
+                        style: TextStyle(color: Colors.white70)),
                 ],
               ),
             );
@@ -740,11 +840,14 @@ class PartyBottomSheet extends StatelessWidget {
             loadingBuilder: (context, child, progress) {
               if (progress == null) return child;
               return const Center(
-                child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2)),
+                child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
               );
             },
-            errorBuilder: (context, _, __) =>
-            const Center(child: Icon(Icons.broken_image_outlined, color: Colors.white54)),
+            errorBuilder: (context, _, __) => const Center(
+                child: Icon(Icons.broken_image_outlined, color: Colors.white54)),
           ),
         ),
       ),
@@ -773,7 +876,8 @@ class PartyBottomSheet extends StatelessWidget {
                     color: Colors.grey[900],
                     padding: const EdgeInsets.all(18),
                     child: const Center(
-                      child: Icon(Icons.broken_image_outlined, color: Colors.white70, size: 36),
+                      child: Icon(Icons.broken_image_outlined,
+                          color: Colors.white70, size: 36),
                     ),
                   ),
                 ),
@@ -798,15 +902,18 @@ class PartyBottomSheet extends StatelessWidget {
     final Color badgeColor = isFriendsOnly
         ? Colors.deepPurple[700]!
         : (isClosed ? Colors.blueGrey[800]! : Colors.green[800]!);
-    final IconData badgeIcon = isFriendsOnly ? Icons.group_rounded : (isClosed ? Icons.lock : Icons.public);
-    final String badgeLabel = isFriendsOnly ? "Only4Friends" : (isClosed ? "Closed" : "Open");
+    final IconData badgeIcon =
+    isFriendsOnly ? Icons.group_rounded : (isClosed ? Icons.lock : Icons.public);
+    final String badgeLabel =
+    isFriendsOnly ? "Only4Friends" : (isClosed ? "Closed" : "Open");
 
     Future<void> _confirmAndDeleteParty() async {
       final confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: Colors.grey[900],
-          title: const Text("Party löschen?", style: TextStyle(color: Colors.white)),
+          title: const Text("Party löschen?",
+              style: TextStyle(color: Colors.white)),
           content: const Text(
             "Willst du diese Party wirklich löschen? Alle Zusagen, Anfragen und Bewertungen gehen verloren.",
             style: TextStyle(color: Colors.white70),
@@ -814,11 +921,13 @@ class PartyBottomSheet extends StatelessWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text("Abbrechen", style: TextStyle(color: Colors.white70)),
+              child: const Text("Abbrechen",
+                  style: TextStyle(color: Colors.white70)),
             ),
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text("Löschen", style: TextStyle(color: Colors.redAccent)),
+              child: const Text("Löschen",
+                  style: TextStyle(color: Colors.redAccent)),
             ),
           ],
         ),
@@ -831,7 +940,14 @@ class PartyBottomSheet extends StatelessWidget {
         final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
         final batch = FirebaseFirestore.instance.batch();
 
-        const subCollections = ['rsvps', 'coming', 'maybe', 'requests', 'approved', 'ratings'];
+        const subCollections = [
+          'rsvps',
+          'coming',
+          'maybe',
+          'requests',
+          'approved',
+          'ratings'
+        ];
 
         for (final sub in subCollections) {
           final qs = await partyRef.collection(sub).get();
@@ -857,8 +973,11 @@ class PartyBottomSheet extends StatelessWidget {
       children: [
         Icon(ic, color: Colors.white70, size: 18),
         const SizedBox(width: 8),
-        Text("$label: ", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        Expanded(child: Text(value, style: const TextStyle(color: Colors.white70))),
+        Text("$label: ",
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.w600)),
+        Expanded(
+            child: Text(value, style: const TextStyle(color: Colors.white70))),
       ],
     );
 
@@ -932,7 +1051,10 @@ class PartyBottomSheet extends StatelessWidget {
                 Expanded(
                   child: Text(
                     (data['name'] ?? (isClosed ? "Geschlossene Party" : "Party")).toString(),
-                    style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white),
+                    style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -940,13 +1062,17 @@ class PartyBottomSheet extends StatelessWidget {
                 const SizedBox(width: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(color: badgeColor, borderRadius: BorderRadius.circular(999)),
+                  decoration: BoxDecoration(
+                      color: badgeColor, borderRadius: BorderRadius.circular(999)),
                   child: Row(
                     children: [
                       Icon(badgeIcon, color: Colors.white, size: 16),
                       const SizedBox(width: 6),
-                      Text(badgeLabel,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                      Text(
+                        badgeLabel,
+                        style: const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w600),
+                      ),
                     ],
                   ),
                 ),
@@ -959,7 +1085,9 @@ class PartyBottomSheet extends StatelessWidget {
                 final isVerified = snap.data == true;
                 return Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(color: Colors.indigo[700], borderRadius: BorderRadius.circular(12)),
+                  decoration: BoxDecoration(
+                      color: Colors.indigo[700],
+                      borderRadius: BorderRadius.circular(12)),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -968,7 +1096,8 @@ class PartyBottomSheet extends StatelessWidget {
                         const SizedBox(width: 8),
                       ],
                       Text("Host: $hostLabel",
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.w600)),
                     ],
                   ),
                 );
@@ -978,9 +1107,11 @@ class PartyBottomSheet extends StatelessWidget {
             if (isFriendsOnly)
               _pill("👥 Nur für Freunde sichtbar.", Colors.deepPurpleAccent)
             else if (isClosed && !canSeeFull)
-              _pill("🔒 Geschlossene Party – nur Datum & Mindestalter sichtbar.", Colors.redAccent)
+              _pill("🔒 Geschlossene Party – nur Datum & Mindestalter sichtbar.",
+                  Colors.redAccent)
             else if (isClosed && canSeeFull)
-                _pill("✅ Zugriff freigegeben – alle Details sichtbar.", Colors.lightGreenAccent),
+                _pill("✅ Zugriff freigegeben – alle Details sichtbar.",
+                    Colors.lightGreenAccent),
             const SizedBox(height: 16),
             if (canSeeFull) fullDetails else closedPartial,
             if (canSeeFull) ...[
@@ -993,7 +1124,10 @@ class PartyBottomSheet extends StatelessWidget {
             const Divider(color: Color(0x33FFFFFF)),
             const SizedBox(height: 12),
             if (isHost) ...[
-              if (isClosed && !isFriendsOnly) _hostClosedLists(context) else _hostOpenLists(context),
+              if (isClosed && !isFriendsOnly)
+                _hostClosedLists(context)
+              else
+                _hostOpenLists(context),
               const SizedBox(height: 16),
               Center(
                 child: Column(
@@ -1010,7 +1144,8 @@ class PartyBottomSheet extends StatelessWidget {
                         await Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => NewPartyScreen(existingData: data, docId: partyId),
+                            builder: (_) =>
+                                NewPartyScreen(existingData: data, docId: partyId),
                           ),
                         );
                         await onEditedParty();
@@ -1025,20 +1160,19 @@ class PartyBottomSheet extends StatelessWidget {
                       onPressed: _confirmAndDeleteParty,
                       icon: const Icon(Icons.delete_forever, color: Colors.redAccent),
                       label: const Text("Party löschen",
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                          style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                     ),
                   ],
                 ),
               ),
             ] else ...[
-              // ✅ FIX: Wenn Closed + freigegeben (canSeeFull) -> KEIN "Anfrage senden" mehr anzeigen
               if (!isClosed || isFriendsOnly)
                 _guestOpenActions(context)
               else if (canSeeFull)
-                  const SizedBox.shrink() // ✅ komplett weg (kein Text, kein Button)
+                const SizedBox.shrink()
               else
                 _guestClosedActions(context),
-
               const SizedBox(height: 12),
               _ratingGate(context),
               if (isActive) ...[
@@ -1046,7 +1180,8 @@ class PartyBottomSheet extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: onReport,
                   icon: const Icon(Icons.flag, color: Colors.redAccent),
-                  label: const Text("Party melden", style: TextStyle(color: Colors.redAccent)),
+                  label: const Text("Party melden",
+                      style: TextStyle(color: Colors.redAccent)),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.redAccent),
                     minimumSize: const Size.fromHeight(44),
@@ -1054,10 +1189,6 @@ class PartyBottomSheet extends StatelessWidget {
                 ),
               ],
             ],
-
-            // ✅ Timer/Expiry-Info komplett entfernt
-            // const SizedBox(height: 12),
-            // _buildExpiryInfo(),
           ],
         );
       },
@@ -1189,6 +1320,7 @@ class PartyBottomSheet extends StatelessWidget {
   }
 
   // ---------- Guest Closed ----------
+  // ✅ Robust: zeigt "Anfrage gesendet" sofort + findet Status egal ob DocId uid/username/safeDocId(username)
   Widget _guestClosedActions(BuildContext context) {
     if (currentUsername == null) {
       return const Text(
@@ -1198,88 +1330,140 @@ class PartyBottomSheet extends StatelessWidget {
     }
 
     final uid = _uid();
-    final reqDocId = uid ?? safeDocId(currentUsername!);
+    final uname = currentUsername!.trim();
+    final safeUname = safeDocId(uname);
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
+    Stream<DocumentSnapshot<Map<String, dynamic>>> _reqStream(String docId) {
+      if (docId.trim().isEmpty) return const Stream.empty();
+      return FirebaseFirestore.instance
           .collection('Party')
           .doc(partyId)
           .collection('requests')
-          .doc(reqDocId)
-          .snapshots(),
-      builder: (context, myReqSnap) {
-        String? status;
-        if (myReqSnap.hasData && myReqSnap.data != null && myReqSnap.data!.exists) {
-          final map = myReqSnap.data!.data();
-          status = map == null ? null : map['status'] as String?;
-          if (status == 'approved' || status == 'declined' || status == 'pending') {
-            final s = status;
-            SchedulerBinding.instance.addPostFrameCallback((_) => setClosedLockIcon(s));
-          }
-        } else {
-          status = null;
-        }
+          .doc(docId)
+          .snapshots();
+    }
 
-        // ✅ pending => Button ORANGE
-        if (status == 'pending') {
-          return ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              minimumSize: const Size.fromHeight(52),
-              backgroundColor: Colors.orangeAccent,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: null,
-            icon: const Icon(Icons.hourglass_top_rounded),
-            label: const Text("Anfrage gesendet", style: TextStyle(fontSize: 18)),
-          );
-        }
+    Widget _requestStatusBuilder({
+      required Widget Function(String? status) builder,
+    }) {
+      // 1) requests/{uid}
+      return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: uid == null ? const Stream.empty() : _reqStream(uid),
+        builder: (context, s1) {
+          final st1 = s1.data?.data()?['status'] as String?;
+          if (s1.data?.exists == true && st1 != null) return builder(st1);
 
-        if (status == null) {
-          return ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              minimumSize: const Size.fromHeight(52),
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () async {
-              try {
-                await onSendJoinRequest();
-                if (!context.mounted) return;
-                showStatusSnack(context, "Anfrage gesendet – warte auf Antwort", positive: true);
-                setClosedLockIcon('pending');
-              } catch (e) {
-                if (!context.mounted) return;
-                showStatusSnack(context, "Fehler: $e", positive: false);
-              }
-            },
-            icon: const Icon(Icons.lock_open_rounded),
-            label: const Text("Anfrage senden", style: TextStyle(fontSize: 18)),
-          );
-        } else if (status == 'approved') {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const ListTile(
-                leading: Icon(Icons.check_circle, color: Colors.greenAccent),
-                title: Text("Zugang genehmigt – Details freigeschaltet.", style: TextStyle(color: Colors.white)),
-                subtitle: Text("Du kannst jetzt alle Infos sehen.", style: TextStyle(color: Colors.white70)),
-              ),
-              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance.collection('Party').doc(partyId).collection('approved').snapshots(),
-                builder: (context, snap) {
-                  final count = snap.data?.docs.length ?? 0;
-                  return _counter("🔔 $count zugelassen");
+          // 2) requests/{username}
+          return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            stream: _reqStream(uname),
+            builder: (context, s2) {
+              final st2 = s2.data?.data()?['status'] as String?;
+              if (s2.data?.exists == true && st2 != null) return builder(st2);
+
+              // 3) requests/{safeDocId(username)}
+              return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: _reqStream(safeUname),
+                builder: (context, s3) {
+                  final st3 = s3.data?.data()?['status'] as String?;
+                  if (s3.data?.exists == true && st3 != null) return builder(st3);
+
+                  return builder(null);
                 },
-              ),
-            ],
+              );
+            },
           );
-        } else {
-          return const ListTile(
-            leading: Icon(Icons.cancel, color: Colors.redAccent),
-            title: Text("Anfrage abgelehnt", style: TextStyle(color: Colors.white)),
-            subtitle: Text("Du kannst den Host direkt kontaktieren.", style: TextStyle(color: Colors.white70)),
-          );
-        }
+        },
+      );
+    }
+
+    bool localPending = false;
+
+    return StatefulBuilder(
+      builder: (context, setState) {
+        return _requestStatusBuilder(
+          builder: (statusFromDb) {
+            final status = statusFromDb ?? (localPending ? 'pending' : null);
+
+            if (status == 'pending') {
+              SchedulerBinding.instance
+                  .addPostFrameCallback((_) => setClosedLockIcon('pending'));
+              return ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                  backgroundColor: Colors.orangeAccent,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: null,
+                icon: const Icon(Icons.hourglass_top_rounded),
+                label: const Text("Anfrage gesendet", style: TextStyle(fontSize: 18)),
+              );
+            }
+
+            if (status == null) {
+              return ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () async {
+                  try {
+                    setState(() => localPending = true); // ✅ sofort UI
+                    await onSendJoinRequest();
+                    if (!context.mounted) return;
+                    showStatusSnack(context, "Anfrage gesendet – warte auf Antwort",
+                        positive: true);
+                    setClosedLockIcon('pending');
+                  } catch (e) {
+                    setState(() => localPending = false);
+                    if (!context.mounted) return;
+                    showStatusSnack(context, "Fehler: $e", positive: false);
+                  }
+                },
+                icon: const Icon(Icons.lock_open_rounded),
+                label: const Text("Anfrage senden", style: TextStyle(fontSize: 18)),
+              );
+            }
+
+            if (status == 'approved') {
+              SchedulerBinding.instance
+                  .addPostFrameCallback((_) => setClosedLockIcon('approved'));
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const ListTile(
+                    leading: Icon(Icons.check_circle, color: Colors.greenAccent),
+                    title: Text("Zugang genehmigt – Details freigeschaltet.",
+                        style: TextStyle(color: Colors.white)),
+                    subtitle: Text("Du kannst jetzt alle Infos sehen.",
+                        style: TextStyle(color: Colors.white70)),
+                  ),
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('Party')
+                        .doc(partyId)
+                        .collection('approved')
+                        .snapshots(),
+                    builder: (context, snap) {
+                      final count = snap.data?.docs.length ?? 0;
+                      return _counter("🔔 $count zugelassen");
+                    },
+                  ),
+                ],
+              );
+            }
+
+            // declined
+            SchedulerBinding.instance
+                .addPostFrameCallback((_) => setClosedLockIcon('declined'));
+            return const ListTile(
+              leading: Icon(Icons.cancel, color: Colors.redAccent),
+              title: Text("Anfrage abgelehnt", style: TextStyle(color: Colors.white)),
+              subtitle: Text("Du kannst den Host direkt kontaktieren.",
+                  style: TextStyle(color: Colors.white70)),
+            );
+          },
+        );
       },
     );
   }
@@ -1320,7 +1504,8 @@ class PartyBottomSheet extends StatelessWidget {
           builder: (context, reqsSnap) {
             final docs = reqsSnap.data?.docs ?? [];
             if (docs.isEmpty) {
-              return _boxed(const Text("Keine Anfragen.", style: TextStyle(color: Colors.white70)));
+              return _boxed(const Text("Keine Anfragen.",
+                  style: TextStyle(color: Colors.white70)));
             }
             return _boxed(
               Column(
@@ -1331,7 +1516,10 @@ class PartyBottomSheet extends StatelessWidget {
                     SizedBox(width: 8),
                     Text(
                       "🛎️ Zugangs-Anfragen",
-                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800),
                     ),
                   ]),
                   const SizedBox(height: 10),
@@ -1370,35 +1558,40 @@ class PartyBottomSheet extends StatelessWidget {
                                   ),
                                 ),
                                 const SizedBox(height: 4),
-                                Text("Status: $status", style: TextStyle(color: statusColor)),
+                                Text("Status: $status",
+                                    style: TextStyle(color: statusColor)),
                               ],
                             ),
                           ),
                           if (status == 'pending') ...[
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green, foregroundColor: Colors.white),
+                                  backgroundColor: Colors.green,
+                                  foregroundColor: Colors.white),
                               onPressed: () => onUpdateRequestStatus(user, 'approved'),
                               child: const Text("Zulassen"),
                             ),
                             const SizedBox(width: 8),
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+                                  backgroundColor: Colors.redAccent,
+                                  foregroundColor: Colors.white),
                               onPressed: () => onUpdateRequestStatus(user, 'declined'),
                               child: const Text("Ablehnen"),
                             ),
                           ] else if (status == 'declined') ...[
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green, foregroundColor: Colors.white),
+                                  backgroundColor: Colors.green,
+                                  foregroundColor: Colors.white),
                               onPressed: () => onUpdateRequestStatus(user, 'approved'),
                               child: const Text("Zulassen"),
                             ),
                           ] else ...[
                             ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent, foregroundColor: Colors.white),
+                                  backgroundColor: Colors.redAccent,
+                                  foregroundColor: Colors.white),
                               onPressed: () => onUpdateRequestStatus(user, 'declined'),
                               child: const Text("Ablehnen"),
                             ),
@@ -1490,7 +1683,8 @@ class PartyBottomSheet extends StatelessWidget {
                   foregroundColor: Colors.white,
                   minimumSize: const Size.fromHeight(44),
                 ),
-                onPressed: canRate ? () async => _setRatingViaFunction(context, 'good') : null,
+                onPressed:
+                canRate ? () async => _setRatingViaFunction(context, 'good') : null,
                 icon: const Icon(Icons.thumb_up),
                 label: const Text("Gut"),
               ),
@@ -1503,7 +1697,8 @@ class PartyBottomSheet extends StatelessWidget {
                   foregroundColor: Colors.white,
                   minimumSize: const Size.fromHeight(44),
                 ),
-                onPressed: canRate ? () async => _setRatingViaFunction(context, 'bad') : null,
+                onPressed:
+                canRate ? () async => _setRatingViaFunction(context, 'bad') : null,
                 icon: const Icon(Icons.thumb_down),
                 label: const Text("Schlecht"),
               ),
@@ -1515,15 +1710,20 @@ class PartyBottomSheet extends StatelessWidget {
           stream: ratingsStream(),
           builder: (context, snap) {
             final docs = snap.data?.docs ?? [];
-            final good = docs.where((d) => (d.data()['value'] ?? '') == 'good').length;
-            final bad = docs.where((d) => (d.data()['value'] ?? '') == 'bad').length;
+            final good =
+                docs.where((d) => (d.data()['value'] ?? '') == 'good').length;
+            final bad =
+                docs.where((d) => (d.data()['value'] ?? '') == 'bad').length;
             return Center(
               child: Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
                   "⭐ Bewertungen: $good gut · $bad schlecht",
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600),
                 ),
               ),
             );
@@ -1569,7 +1769,10 @@ class PartyBottomSheet extends StatelessWidget {
     child: Text(
       text,
       textAlign: TextAlign.center,
-      style: const TextStyle(color: Colors.white70, fontSize: 18, fontWeight: FontWeight.w700),
+      style: const TextStyle(
+          color: Colors.white70,
+          fontSize: 18,
+          fontWeight: FontWeight.w700),
     ),
   );
 
@@ -1602,7 +1805,8 @@ class PartyBottomSheet extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               title,
-              style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
+              style: const TextStyle(
+                  color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
             ),
           ]),
           const SizedBox(height: 10),
@@ -1613,7 +1817,8 @@ class PartyBottomSheet extends StatelessWidget {
               final u = usernames[i];
               return Column(
                 children: [
-                  if (i > 0) Divider(color: Colors.grey[800], height: 16, thickness: 1),
+                  if (i > 0)
+                    Divider(color: Colors.grey[800], height: 16, thickness: 1),
                   Row(
                     children: [
                       Icon(rowIcon, color: rowIconColor, size: 22),
@@ -1621,12 +1826,16 @@ class PartyBottomSheet extends StatelessWidget {
                       Expanded(
                         child: Text(
                           u,
-                          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700),
                         ),
                       ),
                       IconButton(
                         tooltip: "Ausladen",
-                        icon: const Icon(Icons.close_rounded, color: Colors.redAccent),
+                        icon: const Icon(Icons.close_rounded,
+                            color: Colors.redAccent),
                         onPressed: () => onKick(u),
                       ),
                     ],

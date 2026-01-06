@@ -1,6 +1,5 @@
 // lib/Screens/party_map_screen.dart
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -356,23 +355,26 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           backgroundColor: const Color(0xFF141A22),
           shape:
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: const [
+          title: const Row(
+            children: [
               Icon(Icons.workspace_premium, color: Colors.amber),
               SizedBox(width: 10),
               Text(
                 "Premium aktiviert",
                 style: TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w900),
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ],
           ),
           content: const Text(
             "Du bist jetzt ein Premium-Mitglied.\nHerzlichen Glückwunsch und viel Spaß!",
             style: TextStyle(
-                color: Colors.white70,
-                height: 1.25,
-                fontWeight: FontWeight.w600),
+              color: Colors.white70,
+              height: 1.25,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           actions: [
             ElevatedButton(
@@ -380,7 +382,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                 backgroundColor: _accent,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text("OK"),
@@ -425,12 +428,19 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     final s = raw.toString().trim().toLowerCase();
 
     // "komme"/"coming"/etc -> going
-    if (s == 'going' || s == 'come' || s == 'komme' || s == 'coming' || s == 'yes') {
+    if (s == 'going' ||
+        s == 'come' ||
+        s == 'komme' ||
+        s == 'coming' ||
+        s == 'yes') {
       return 'going';
     }
 
     // "angefragt"/request/pending -> pending (orange)
-    if (s == 'pending' || s == 'requested' || s == 'request' || s == 'anfrage') {
+    if (s == 'pending' ||
+        s == 'requested' ||
+        s == 'request' ||
+        s == 'anfrage') {
       return 'pending';
     }
 
@@ -647,7 +657,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     final canvas = Canvas(recorder);
     final size = ui.Size(diameter.toDouble(), diameter.toDouble());
     final center = Offset(size.width / 2, size.height / 2);
-    canvas.drawCircle(center, diameter / 2, Paint()..color = const Color(0x00000000));
+    canvas.drawCircle(
+      center,
+      diameter / 2,
+      Paint()..color = const Color(0x00000000),
+    );
     final picture = recorder.endRecording();
     final img = await picture.toImage(diameter, diameter);
     final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
@@ -663,7 +677,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     );
   }
 
-  Future<BitmapDescriptor> _createBarMarkerIconWithGreenRing(String? imageUrl) async {
+  Future<BitmapDescriptor> _createBarMarkerIconWithGreenRing(
+      String? imageUrl) async {
     return _createBarMarkerIconWithRing(
       imageUrl: imageUrl,
       ringColor: Colors.greenAccent,
@@ -689,7 +704,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     canvas.drawCircle(
       center,
       outerRadius,
-      Paint()..color = const Color(0xFF1C1F26),
+      Paint()..color = _panel,
     );
 
     final imageRadius = outerRadius - ringWidth;
@@ -848,15 +863,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   bool _isHostForPartyData(Map<String, dynamic> data) {
     final hostName = (data['hostName'] ?? '').toString().trim();
-    final hostUid =
-    ((data['hostUid'] ?? data['hostId']) ?? '').toString().trim();
+    final hostUid = ((data['hostUid'] ?? data['hostId']) ?? '')
+        .toString()
+        .trim();
     final cu = _currentUsername?.trim();
     final cf = _currentFullName?.trim();
 
-    final byUid =
-        cu != null && cu.isNotEmpty && hostUid.isNotEmpty && hostUid == cu;
-    final byName =
-        cf != null && cf.isNotEmpty && hostName.isNotEmpty && hostName == cf;
+    final byUid = cu != null && cu.isNotEmpty && hostUid.isNotEmpty && hostUid == cu;
+    final byName = cf != null && cf.isNotEmpty && hostName.isNotEmpty && hostName == cf;
 
     return byUid || byName;
   }
@@ -926,7 +940,9 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         (data['visibility'] ?? 'public').toString() == 'friends' &&
         !_isClosedDoc(data);
 
-    final icon = isFriendsOnly ? _iconForFriendsPartyMarker(partyId) : _iconForOpenPartyMarker(partyId);
+    final icon = isFriendsOnly
+        ? _iconForFriendsPartyMarker(partyId)
+        : _iconForOpenPartyMarker(partyId);
 
     setState(() {
       _markers.removeWhere((m) => m.markerId.value == mid);
@@ -977,7 +993,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           if (data['minAge'] is int) {
             partyAge = data['minAge'] as int;
           } else {
-            final ageStr = (data['minAge'] ?? data['age'] ?? data['eventAge'] ?? '')
+            final ageStr =
+            (data['minAge'] ?? data['age'] ?? data['eventAge'] ?? '')
                 .toString()
                 .toLowerCase()
                 .trim();
@@ -1046,9 +1063,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
         if (isFriendOnly && !isHostForThisParty) {
           final me = _currentUsername?.trim();
-          final isFriend = me != null &&
-              me.isNotEmpty &&
-              _myFriendsSet.contains(hostUsername);
+          final isFriend =
+              me != null && me.isNotEmpty && _myFriendsSet.contains(hostUsername);
           final isExcluded = me != null && excluded.contains(me);
           if (!isFriend || isExcluded) continue;
         }
@@ -1175,6 +1191,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         final data = doc.data();
         if (!_showBars) continue;
 
+        // Event abgelaufen -> zurücksetzen
         if (data['eventActive'] == true && data['eventDate'] is Timestamp) {
           final dt = (data['eventDate'] as Timestamp).toDate();
           final start = dt.subtract(const Duration(hours: 1));
@@ -1241,14 +1258,16 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   Future<String?> _myRequestStatus(String partyId, String username) async {
     try {
       final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
+
+      // 1) approvedUsers array
       try {
         final partyDoc = await partyRef.get();
-        final arr =
-            (partyDoc.data()?['approvedUsers'] as List?)?.cast<String>() ??
-                const <String>[];
+        final arr = (partyDoc.data()?['approvedUsers'] as List?)?.cast<String>() ??
+            const <String>[];
         if (arr.contains(username)) return 'approved';
       } catch (_) {}
 
+      // 2) requests/{username}
       try {
         final reqSnap = await partyRef.collection('requests').doc(username).get();
         final m = reqSnap.data();
@@ -1264,9 +1283,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   }
 
   // =========================
-  // ✅ RATING / REPORT / STREAMS (wie bei dir)
+  // ✅ RATING / REPORT / STREAMS
   // =========================
-
   Future<void> _setRating(String partyId, String username, String value) async {
     final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
     final partySnap = await partyRef.get();
@@ -1349,6 +1367,168 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Fehler beim Bewerten: $e")),
+      );
+    }
+  }
+
+  // ✅ REPORT: Dialog + Firestore
+  Future<void> _sendReportDialog(String partyId) async {
+    if (!mounted) return;
+
+    final reasons = <String>[
+      'Fake / Irreführend',
+      'Gewalt / Gefahr',
+      'Belästigung / Hass',
+      'Spam / Werbung',
+      'Sonstiges',
+    ];
+
+    String selected = reasons.first;
+    final noteCtrl = TextEditingController();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF141A22),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.report_gmailerrorred_rounded, color: Colors.redAccent),
+              SizedBox(width: 10),
+              Text(
+                'Party melden',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+              ),
+            ],
+          ),
+          content: StatefulBuilder(
+            builder: (ctx, setSB) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Grund auswählen:',
+                    style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    value: selected,
+                    dropdownColor: const Color(0xFF1C1F26),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: const Color(0xFF1C1F26),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.white24),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.redAccent),
+                      ),
+                    ),
+                    items: reasons
+                        .map((r) => DropdownMenuItem(
+                      value: r,
+                      child: Text(r, style: const TextStyle(color: Colors.white)),
+                    ))
+                        .toList(),
+                    onChanged: (v) => setSB(() => selected = v ?? reasons.first),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    maxLines: 3,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'Optional: kurze Info dazu…',
+                      hintStyle: const TextStyle(color: Colors.white54),
+                      filled: true,
+                      fillColor: const Color(0xFF1C1F26),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.white24),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Colors.redAccent),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Abbrechen', style: TextStyle(color: Colors.white70)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Melden'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      noteCtrl.dispose();
+      return;
+    }
+
+    final note = noteCtrl.text.trim();
+    noteCtrl.dispose();
+
+    await _createReportInFirestore(
+      partyId: partyId,
+      reason: selected,
+      note: note,
+    );
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Meldung wurde gesendet. Danke.')),
+    );
+  }
+
+  Future<void> _createReportInFirestore({
+    required String partyId,
+    required String reason,
+    required String note,
+  }) async {
+    try {
+      final reporter = (_currentUsername ?? '').trim();
+
+      final data = _partyCache[partyId];
+      final partyName = (data?['name'] ?? '').toString();
+      final hostId = ((data?['hostUid'] ?? data?['hostId']) ?? '').toString();
+      final hostName = (data?['hostName'] ?? '').toString();
+
+      await FirebaseFirestore.instance.collection('Meldungen').add({
+        'type': 'party',
+        'partyId': partyId,
+        'partyName': partyName,
+        'hostId': hostId,
+        'hostName': hostName,
+        'reason': reason,
+        'note': note,
+        'reportedBy': reporter,
+        'reportedAt': FieldValue.serverTimestamp(),
+        'status': 'open',
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Fehler beim Melden: $e')),
       );
     }
   }
@@ -1492,7 +1672,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         onSendJoinRequest: () => _sendJoinRequest(partyId, _currentUsername!),
         onUpdateRequestStatus: (u, s) => _updateRequestStatus(partyId, u, s),
         onSetRating: (val) => _setRating(partyId, _currentUsername!, val),
-        onReport: () async {},
+        onReport: () => _sendReportDialog(partyId), // ✅ EINGEBAUT
         rsvpStream: () => _rsvpStream(partyId),
         comingStream: () => FirebaseFirestore.instance
             .collection('Party')
@@ -1523,7 +1703,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           if (mounted) Navigator.pop(context);
         },
       ),
-
     );
   }
 
@@ -1557,8 +1736,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       } else if (status == 'maybe') {
         tx.set(maybeRef, {'username': username, 'timestamp': FieldValue.serverTimestamp()});
         tx.delete(comingRef);
-      } else {
-        // falls irgendwas anderes reinkommt -> nichts extra
       }
     });
 
@@ -1673,6 +1850,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         consumeTapEvents: true,
         onTap: () => _openPartySheet(_partyCache[partyId]!, partyId),
       ));
+
+      // hitbox sicherstellen
       if (_markers.every((m) => m.markerId.value != hitId)) {
         _markers.add(Marker(
           markerId: MarkerId(hitId),
@@ -1689,7 +1868,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   }
 
   // =========================
-  // ✅ ZOOM ICON UPDATE (wie bei dir)
+  // ✅ ZOOM ICON UPDATE
   // =========================
   double _zoomToScale(double zoom) {
     final z = zoom.clamp(4.0, 18.0);
@@ -1906,7 +2085,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   }
 
   // =========================
-  // ✅ FILTER SHEET (unverändert bei dir)
+  // ✅ FILTER SHEET
   // =========================
   Future<void> _openFilterSheet() async {
     bool showParties = _showParties;
@@ -1954,8 +2133,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: const [
+                  const Row(
+                    children: [
                       Icon(Icons.filter_list, color: Colors.white),
                       SizedBox(width: 8),
                       Text(
@@ -2158,7 +2337,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   // =========================
   // ✅ UI
   // =========================
-
   @override
   Widget build(BuildContext context) {
     if (_startPos == null) {
@@ -2168,6 +2346,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
 
     return Scaffold(
+      backgroundColor: _bgBottom,
       appBar: AppBar(
         elevation: 0,
         backgroundColor: const Color(0xFF141A22),
@@ -2288,7 +2467,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                 }
 
                 final cc = await _getSelectedCountryCode();
-                final withCity = "$query, ${_currentCity.trim().isNotEmpty ? _currentCity.trim() : 'Wien'}";
+                final withCity =
+                    "$query, ${_currentCity.trim().isNotEmpty ? _currentCity.trim() : 'Wien'}";
 
                 GeocodedLocation? location = await GeocodingService.getLocationFromAddress(
                   withCity,

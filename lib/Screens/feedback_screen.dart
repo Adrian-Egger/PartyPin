@@ -533,7 +533,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           border: Border.all(color: _accentLine, width: 1),
         ),
         child: const Text(
-          "💬 Feedback 🔥",
+          "Feedback💬 ",
           style: TextStyle(
             color: _text,
             fontWeight: FontWeight.w900,

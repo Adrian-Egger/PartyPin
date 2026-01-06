@@ -234,12 +234,15 @@ class _AccessPartiesScreenState extends State<AccessPartiesScreen> {
         "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
   }
 
-  void _openPartyMapTab() {
-    // ✅ Über HomeShell öffnen (BottomNav bleibt da) -> Map Tab
+  // ✅ PartyId MUSS mitgegeben werden, sonst kann die Map kein BottomSheet öffnen
+  void _openPartyMapTab(String partyId) {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (_) => const HomeShell(initialIndex: 2),
+        builder: (_) => HomeShell(
+          initialIndex: 2,
+          initialOpenPartyId: partyId,
+        ),
       ),
     );
   }
@@ -304,7 +307,7 @@ class _AccessPartiesScreenState extends State<AccessPartiesScreen> {
           ),
         ),
         trailing: const Icon(Icons.map, color: Colors.white54),
-        onTap: _openPartyMapTab, // ✅ exakt so gewünscht: HomeShell -> Party Map Tab
+        onTap: () => _openPartyMapTab(it.partyId),
       ),
     );
   }
@@ -381,10 +384,10 @@ class _AccessPartiesScreenState extends State<AccessPartiesScreen> {
                 )
               else
                 ..._requested.map(_partyTile),
-
               _sectionTitle(
-                  "✅ Eingetragene / Zugelassene Partys",
-                  _enrolled.length),
+                "✅ Eingetragene / Zugelassene Partys",
+                _enrolled.length,
+              ),
               if (_enrolled.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(
