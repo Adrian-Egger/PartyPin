@@ -1,10 +1,13 @@
 // lib/Screens/bar_event_screen.dart
+import 'dart:async';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+
+import 'home_shell.dart';
 
 class BarEventScreen extends StatefulWidget {
   final String barId;
@@ -24,6 +27,24 @@ class BarEventScreen extends StatefulWidget {
 }
 
 class _BarEventScreenState extends State<BarEventScreen> {
+  // ---------- THEME (schwarz/rot) ----------
+  static const Color kBg = Color(0xFF0E0F12);
+  static const Color kSurface = Color(0xFF141A22);
+  static const Color kRed = Colors.redAccent;
+
+  // ✅ 1:1 wie NewParty: keine extra TimePickerTheme-Spielereien
+  ThemeData _pickerTheme(ThemeData base) {
+    return ThemeData.dark().copyWith(
+      colorScheme: const ColorScheme.dark(
+        primary: kRed,
+        onPrimary: Colors.white,
+        surface: kSurface,
+        onSurface: Colors.white,
+      ),
+      dialogBackgroundColor: kSurface,
+    );
+  }
+
   final _titleCtrl = TextEditingController();
   final _taglineCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
@@ -33,9 +54,9 @@ class _BarEventScreenState extends State<BarEventScreen> {
   final _ageCtrl = TextEditingController();
 
   DateTime? _selectedDate;
-  TimeOfDay? _selectedTime; // Startzeit
-  TimeOfDay? _selectedEndTime; // Endzeit
-  bool _openEnd = false; // Open End aktiv?
+  TimeOfDay? _selectedTime;
+  TimeOfDay? _selectedEndTime;
+  bool _openEnd = false;
 
   // ab wann soll der Event-Loop sichtbar sein?
   DateTime? _visibleFromDateTime;
@@ -123,7 +144,10 @@ class _BarEventScreenState extends State<BarEventScreen> {
 
   List<Map<String, dynamic>> _safeSections(dynamic raw) {
     if (raw is List) {
-      return raw.where((e) => e is Map).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      return raw
+          .where((e) => e is Map)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
     }
     return <Map<String, dynamic>>[];
   }
@@ -209,7 +233,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
         return;
       }
 
-      // Soft-Cleanup: wenn vorbei -> löschen (optional, Cloud Function macht's später)
+      // Soft-Cleanup: wenn vorbei -> löschen
       final startAt = _readDate(data['startAt']) ?? _readDate(data['eventDate']);
       final bool openEnd = data['openEnd'] == true;
       final String endTimeStr = (data['endTime'] ?? '').toString().trim();
@@ -236,7 +260,6 @@ class _BarEventScreenState extends State<BarEventScreen> {
       setState(() {
         _resetFormState();
 
-        // Fallback: neue Keys + BottomSheet-Keys
         _titleCtrl.text = (data['title'] ?? data['eventTitle'] ?? '').toString();
         _taglineCtrl.text = (data['tagline'] ?? data['eventTagline'] ?? '').toString();
         _descCtrl.text = (data['desc'] ?? data['eventDescription'] ?? '').toString();
@@ -246,21 +269,23 @@ class _BarEventScreenState extends State<BarEventScreen> {
         _dresscodeCtrl.text = (data['dresscode'] ?? data['eventDresscode'] ?? '').toString();
         _ageCtrl.text = (data['age'] ?? data['eventAge'] ?? '').toString();
 
-        _showMusic = (data['musicEnabled'] is bool ? data['musicEnabled'] : data['eventMusicEnabled']) != false;
-        _showEntry = (data['entryEnabled'] is bool ? data['entryEnabled'] : data['eventEntryEnabled']) != false;
-        _showDresscode = (data['dresscodeEnabled'] is bool ? data['dresscodeEnabled'] : data['eventDresscodeEnabled']) != false;
+        _showMusic =
+            (data['musicEnabled'] is bool ? data['musicEnabled'] : data['eventMusicEnabled']) != false;
+        _showEntry =
+            (data['entryEnabled'] is bool ? data['entryEnabled'] : data['eventEntryEnabled']) != false;
+        _showDresscode =
+            (data['dresscodeEnabled'] is bool ? data['dresscodeEnabled'] : data['eventDresscodeEnabled']) !=
+                false;
         _showAge = (data['ageEnabled'] is bool ? data['ageEnabled'] : data['eventAgeEnabled']) != false;
 
         _openEnd = data['openEnd'] == true;
 
-        // startAt
         final DateTime? st = _readDate(data['startAt']) ?? _readDate(data['eventDate']);
         if (st != null) {
           _selectedDate = DateTime(st.year, st.month, st.day);
           _selectedTime = TimeOfDay.fromDateTime(st);
         }
 
-        // endTime
         final String et = (data['endTime'] ?? '').toString().trim();
         if (!_openEnd && et.contains(':')) {
           final parts = et.split(':');
@@ -271,7 +296,6 @@ class _BarEventScreenState extends State<BarEventScreen> {
           _selectedEndTime = null;
         }
 
-        // visibleFrom (fallback: BottomSheet-key eventVisibleFrom)
         final DateTime? vf = _readDate(data['visibleFrom']) ?? _readDate(data['eventVisibleFrom']);
         _visibleFromDateTime = vf;
 
@@ -282,7 +306,6 @@ class _BarEventScreenState extends State<BarEventScreen> {
           _visibleMode = (_visibleFromDateTime == null) ? '7d' : 'custom';
         }
 
-        // sections (fallback: BottomSheet-key eventSections)
         final sections = _safeSections(data['sections'] ?? data['eventSections']);
         _sections.clear();
         for (var i = 0; i < sections.length; i++) {
@@ -311,7 +334,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
   }
 
   // ----------------------------
-  // Picking date/time/visibleFrom
+  // Picking date/time/visibleFrom (✅ Picker wie NewParty)
   // ----------------------------
 
   Future<void> _pickDate() async {
@@ -321,6 +344,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
       firstDate: now.subtract(const Duration(days: 1)),
       lastDate: now.add(const Duration(days: 365)),
       initialDate: _selectedDate ?? now,
+      builder: (context, child) => Theme(data: _pickerTheme(Theme.of(context)), child: child!),
     );
     if (result != null) {
       setState(() => _selectedDate = result);
@@ -331,6 +355,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
     final result = await showTimePicker(
       context: context,
       initialTime: _selectedTime ?? TimeOfDay.now(),
+      builder: (context, child) => Theme(data: _pickerTheme(Theme.of(context)), child: child!),
     );
     if (result != null) {
       setState(() => _selectedTime = result);
@@ -341,6 +366,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
     final result = await showTimePicker(
       context: context,
       initialTime: _selectedEndTime ?? _selectedTime ?? TimeOfDay.now(),
+      builder: (context, child) => Theme(data: _pickerTheme(Theme.of(context)), child: child!),
     );
     if (result != null) {
       setState(() {
@@ -359,12 +385,14 @@ class _BarEventScreenState extends State<BarEventScreen> {
       firstDate: now.subtract(const Duration(days: 1)),
       lastDate: now.add(const Duration(days: 365)),
       initialDate: base,
+      builder: (context, child) => Theme(data: _pickerTheme(Theme.of(context)), child: child!),
     );
     if (pickedDate == null) return;
 
     final pickedTime = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(base),
+      builder: (context, child) => Theme(data: _pickerTheme(Theme.of(context)), child: child!),
     );
     if (pickedTime == null) return;
 
@@ -453,39 +481,28 @@ class _BarEventScreenState extends State<BarEventScreen> {
               .child('sections')
               .child('section_${i}_${DateTime.now().millisecondsSinceEpoch}.jpg');
 
-          final taskSnapshot = await ref.putFile(s.imageFile!);
-
-          if (taskSnapshot.state == TaskState.success) {
-            imageUrl = await ref.getDownloadURL();
-          } else {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Bild-Upload für Reihe ${i + 1} fehlgeschlagen (State: ${taskSnapshot.state}). Event wird trotzdem gespeichert.',
-                  ),
-                ),
-              );
-            }
-          }
-        } on FirebaseException catch (e) {
+          final task = ref.putFile(s.imageFile!);
+          await task.whenComplete(() {}).timeout(const Duration(seconds: 35));
+          imageUrl = await ref.getDownloadURL();
+        } on TimeoutException {
+          imageUrl = '';
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Bild-Upload für Reihe ${i + 1} fehlgeschlagen (${e.code}): ${e.message}. Event wird ohne Bild gespeichert.',
-                ),
-              ),
+              SnackBar(content: Text('Bild-Upload Reihe ${i + 1} Timeout → ohne Bild gespeichert.')),
+            );
+          }
+        } on FirebaseException catch (e) {
+          imageUrl = '';
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Bild-Upload Reihe ${i + 1} fehlgeschlagen (${e.code}) → ohne Bild.')),
             );
           }
         } catch (e) {
+          imageUrl = '';
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Unbekannter Fehler beim Bild-Upload (Reihe ${i + 1}): $e. Event wird ohne Bild gespeichert.',
-                ),
-              ),
+              SnackBar(content: Text('Bild-Upload Reihe ${i + 1} Fehler: $e → ohne Bild.')),
             );
           }
         }
@@ -493,7 +510,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
 
       result.add({
         'text': text,
-        'imageUrl': imageUrl ?? '',
+        'imageUrl': (imageUrl ?? '').trim(),
         'imageLeft': s.imageLeft,
       });
     }
@@ -576,9 +593,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
 
       final sectionsPayload = await _uploadSectionsAndBuildPayload(eventId: eventId);
 
-      // ✅ WICHTIG: Wir speichern *deine* Keys + die Keys die BarBottomSheet liest.
       final payload = <String, dynamic>{
-        // --- deine (internen) Keys ---
         'active': true,
         'title': title,
         'tagline': _taglineCtrl.text.trim(),
@@ -598,8 +613,6 @@ class _BarEventScreenState extends State<BarEventScreen> {
         'musicEnabled': _showMusic,
         'dresscode': _dresscodeCtrl.text.trim(),
         'dresscodeEnabled': _showDresscode,
-
-        // --- BottomSheet-Kompatibilität (damit alles wieder angezeigt wird) ---
         'eventActive': true,
         'eventDate': Timestamp.fromDate(startAt),
         'eventTitle': title,
@@ -615,12 +628,11 @@ class _BarEventScreenState extends State<BarEventScreen> {
         'eventMusicEnabled': _showMusic,
         'eventDresscode': _dresscodeCtrl.text.trim(),
         'eventDresscodeEnabled': _showDresscode,
-
         'updatedAt': FieldValue.serverTimestamp(),
         if (widget.eventId == null) 'createdAt': FieldValue.serverTimestamp(),
       };
 
-      await _eventRef(eventId).set(payload, SetOptions(merge: true));
+      await _eventRef(eventId).set(payload, SetOptions(merge: true)).timeout(const Duration(seconds: 20));
 
       if (!mounted) return;
 
@@ -628,13 +640,22 @@ class _BarEventScreenState extends State<BarEventScreen> {
         SnackBar(content: Text(widget.eventId == null ? '🎉 Event erstellt.' : '✅ Event gespeichert.')),
       );
 
-      Navigator.pop(context, eventId);
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomeShell(initialIndex: 1)),
+            (route) => false,
+      );
+    } on TimeoutException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Timeout beim Speichern. Prüfe Internet/Firestore Rules.')),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Fehler beim Speichern: $e')),
       );
-      setState(() => _isSaving = false);
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -678,10 +699,19 @@ class _BarEventScreenState extends State<BarEventScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(isEdit ? '✏️ Event bearbeiten' : '🍹 Neues Event erstellen'),
-        backgroundColor: const Color(0xFF141A22),
+        centerTitle: true,
+        backgroundColor: kSurface,
+        title: Text(
+          isEdit ? '🛠️ Event bearbeiten 🎉' : '🍹 Event erstellen 🎉',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+            fontSize: 22,
+          ),
+        ),
       ),
-      backgroundColor: const Color(0xFF0E0F12),
+      backgroundColor: kBg,
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : Column(
@@ -719,11 +749,11 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: _isSaving ? null : _pickDate,
-                          icon: const Icon(Icons.calendar_today, color: Colors.white),
+                          icon: const Icon(Icons.calendar_today, color: kRed),
                           label: Text(dateText, style: const TextStyle(color: Colors.white)),
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Colors.white24),
-                            backgroundColor: const Color(0xFF141A22),
+                            backgroundColor: kSurface,
                           ),
                         ),
                       ),
@@ -731,27 +761,28 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: _isSaving ? null : _pickTime,
-                          icon: const Icon(Icons.schedule, color: Colors.white),
+                          icon: const Icon(Icons.schedule, color: kRed),
                           label: Text(timeText, style: const TextStyle(color: Colors.white)),
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Colors.white24),
-                            backgroundColor: const Color(0xFF141A22),
+                            backgroundColor: kSurface,
                           ),
                         ),
                       ),
                     ],
                   ),
+
                   const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: _isSaving || _openEnd ? null : _pickEndTime,
-                          icon: const Icon(Icons.schedule_outlined, color: Colors.white),
+                          icon: const Icon(Icons.schedule_outlined, color: kRed),
                           label: Text(endTimeText, style: const TextStyle(color: Colors.white)),
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Colors.white24),
-                            backgroundColor: const Color(0xFF141A22),
+                            backgroundColor: kSurface,
                           ),
                         ),
                       ),
@@ -769,13 +800,14 @@ class _BarEventScreenState extends State<BarEventScreen> {
                     ],
                   ),
                   const SizedBox(height: 14),
+
                   _sectionTitle('Sichtbarkeit'),
                   const SizedBox(height: 8),
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF141A22),
+                      color: kSurface,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: Colors.white24),
                     ),
@@ -819,7 +851,8 @@ class _BarEventScreenState extends State<BarEventScreen> {
                                   : () async {
                                 if (_selectedDate == null || _selectedTime == null) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Bitte zuerst Datum und Startzeit wählen.')),
+                                    const SnackBar(
+                                        content: Text('Bitte zuerst Datum und Startzeit wählen.')),
                                   );
                                   return;
                                 }
@@ -833,6 +866,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       ],
                     ),
                   ),
+
                   const SizedBox(height: 12),
                   Row(
                     children: [
@@ -920,7 +954,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       onPressed: _isSaving ? null : _addSection,
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.redAccent),
-                        backgroundColor: const Color(0xFF141A22),
+                        backgroundColor: kSurface,
                       ),
                       icon: const Icon(Icons.add, color: Colors.redAccent),
                       label: const Text('Reihe hinzufügen', style: TextStyle(color: Colors.redAccent)),
@@ -934,14 +968,19 @@ class _BarEventScreenState extends State<BarEventScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: const BoxDecoration(
-              color: Color(0xFF141A22),
+              color: kSurface,
               boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, -4))],
             ),
             child: Row(
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: _isSaving ? null : () => Navigator.pop(context),
+                    onPressed: _isSaving
+                        ? null
+                        : () => Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const HomeShell(initialIndex: 1)),
+                          (route) => false,
+                    ),
                     style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.white38)),
                     child: const Text('Abbrechen', style: TextStyle(color: Colors.white70)),
                   ),
@@ -957,7 +996,8 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       height: 20,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                     )
-                        : Text(isEdit ? 'Speichern' : 'Erstellen', style: const TextStyle(color: Colors.white)),
+                        : Text(isEdit ? 'Speichern' : 'Erstellen',
+                        style: const TextStyle(color: Colors.white)),
                   ),
                 ),
               ],
@@ -1064,7 +1104,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
         hintText: hint,
         hintStyle: const TextStyle(color: Colors.white30),
         filled: true,
-        fillColor: const Color(0xFF141A22),
+        fillColor: kSurface,
         enabledBorder: OutlineInputBorder(
           borderSide: const BorderSide(color: Colors.white24),
           borderRadius: BorderRadius.circular(12),
@@ -1099,8 +1139,11 @@ class _BarEventScreenState extends State<BarEventScreen> {
             children: [
               Row(
                 children: [
-                  Text('Reihe ${i + 1}',
-                      style: const TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w600)),
+                  Text(
+                    'Reihe ${i + 1}',
+                    style: const TextStyle(
+                        color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
                   const Spacer(),
                   IconButton(
                     onPressed: _isSaving ? null : () => _removeSection(i),
@@ -1150,7 +1193,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
       child: Container(
         height: 120,
         decoration: BoxDecoration(
-          color: const Color(0xFF141A22),
+          color: kSurface,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white24),
         ),
@@ -1162,7 +1205,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
   Widget _contentTextCard({required _EventSection section}) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF141A22),
+        color: kSurface,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white24),
       ),

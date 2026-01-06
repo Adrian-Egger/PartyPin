@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'firebase_options.dart';
 import 'Screens/home_shell.dart';
+import 'Screens/create_account_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -12,23 +13,32 @@ Future<void> main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // ✅ nötig, damit Firebase Callable Functions funktionieren
+  // nötig für Callable Functions
   if (FirebaseAuth.instance.currentUser == null) {
     await FirebaseAuth.instance.signInAnonymously();
   }
 
-  runApp(const MyApp());
+  runApp(
+    const MyApp(
+      startScreen: HomeShell(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final Widget startScreen;
+
+  const MyApp({
+    super.key,
+    required this.startScreen,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
+    return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Party Finder',
-      home: HomeShell(),
+      home: startScreen,
     );
   }
 }

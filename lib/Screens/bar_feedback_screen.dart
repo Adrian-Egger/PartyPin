@@ -74,18 +74,10 @@ class _BarFeedbackScreenState extends State<BarFeedbackScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false, // ← verhindert Zurück-Pfeil
         backgroundColor: const Color(0xFF141A22),
-        leading: IconButton(
-          icon: const Icon(
-            Icons.arrow_back_ios_new_rounded,
-            color: accent, // ✅ Pfeil rot
-          ),
-          onPressed: () {
-            Navigator.pop(context); // Karte bleibt offen
-          },
-        ),
         title: const Text(
-          'Bar-Feedback 🍹⭐📝', // ✅ Emojis in Überschrift
+          '🍹 Bar-Feedback ⭐📝',
           style: TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.w800,
@@ -96,6 +88,7 @@ class _BarFeedbackScreenState extends State<BarFeedbackScreen> {
       backgroundColor: bgColor,
       body: body,
     );
+
   }
 }
 

@@ -747,6 +747,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       );
     }
 
+    final myKey = _userKey.trim();
+    final myName = _displayName().trim().toLowerCase();
+
     return ListView.builder(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 100, top: 8),
@@ -756,13 +759,22 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         final msg = (raw["message"] as String?) ?? "";
         final user = (raw["userName"] as String?) ?? "Unbekannt";
         final key = (raw["userKey"] as String?) ?? "";
+
         final ts = raw["timestamp"] as Timestamp?;
         final date = ts == null ? "—" : _fmt(ts.toDate());
-        final isMine = key.isNotEmpty && key == _userKey;
+
+        // ✅ IMMER als "mein" erkennen, wenn:
+        // - userKey passt ODER
+        // - userName passt (Fallback)
+        final isMine =
+            (myKey.isNotEmpty && key == myKey) ||
+                (myName.isNotEmpty && user.trim().toLowerCase() == myName);
+
         return _messageTile(message: msg, user: user, date: date, isMine: isMine);
       },
     );
   }
+
 
   @override
   Widget build(BuildContext context) {

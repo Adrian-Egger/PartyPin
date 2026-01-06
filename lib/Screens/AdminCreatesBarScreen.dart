@@ -1,11 +1,12 @@
 // lib/Screens/admin_create_bar_screen.dart
-import 'dart:io' show File, Platform;
+import 'dart:async';
+import 'dart:io' show File;
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -40,13 +41,13 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   String _status = "approved";
 
   // Profilbild
-  File? _pickedImageFile; // für Android/iOS/Desktop (für Preview)
+  File? _pickedImageFile; // für Android/iOS/Desktop (Preview)
   String? _profileImageUrl; // Download-URL von Firebase Storage
 
   // aktuell geladene Bar (für Update)
   String? _editingBarDocId;
 
-  // Admin-Bereich: 0 = Bars, 1 = Bar-Anfragen, 2 = Stats
+  // Admin-Bereich: 0 = Bars, 1 = Bar-Anfragen, 2 = Stats, 3 = Users
   int _selectedSection = 0;
   Future<Map<String, dynamic>>? _statsFuture;
 
@@ -55,6 +56,10 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
 
   // Öffnungszeiten (mon..sun)
   final Map<String, _OpeningHoursDay> _openingHours = {};
+
+  // ✅ Users-Suche
+  final TextEditingController _userSearchCtrl = TextEditingController();
+  String _userSearch = "";
 
   // Farben
   static const _bg = Color(0xFF0E0F12);
@@ -134,6 +139,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     _cityController.dispose();
     _countryController.dispose();
     _descController.dispose();
+    _userSearchCtrl.dispose();
     for (final h in _barHighlights) {
       h.textCtrl.dispose();
     }
@@ -169,7 +175,66 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // Bild auswählen & hochladen
+  // Doppelte Bestätigung (2x nachfragen)
+  // ---------------------------------------------------------------------------
+
+  Future<bool> _doubleConfirm({
+    required String title1,
+    required String msg1,
+    required String title2,
+    required String msg2,
+    required String okText,
+  }) async {
+    final first = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        title: Text(title1, style: const TextStyle(color: _textPrimary)),
+        content: Text(msg1, style: const TextStyle(color: _textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text("Abbrechen"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(okText, style: const TextStyle(color: _accent)),
+          ),
+        ],
+      ),
+    );
+    if (first != true) return false;
+
+    final second = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        title: Text(title2, style: const TextStyle(color: _textPrimary)),
+        content: Text(msg2, style: const TextStyle(color: _textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text("Abbrechen"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(okText, style: const TextStyle(color: _accent)),
+          ),
+        ],
+      ),
+    );
+
+    return second == true;
+  }
+
+  bool get _isMobile {
+    if (kIsWeb) return false;
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Bild auswählen & hochladen (Profilbild)
   // ---------------------------------------------------------------------------
 
   Future<void> _pickAndUploadImage() async {
@@ -181,48 +246,43 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       Uint8List? bytes;
       String fileName;
 
-      // WEB oder Desktop: FilePicker
-      if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
+      if (!_isMobile) {
+        // WEB + Desktop: FilePicker
         final result = await FilePicker.platform.pickFiles(type: FileType.image);
         if (result == null || result.files.isEmpty) {
-          setState(() => _uploadingImage = false);
+          if (mounted) setState(() => _uploadingImage = false);
           return;
         }
 
         final file = result.files.first;
-        if (file.bytes == null) {
-          if (file.path == null) {
-            setState(() => _uploadingImage = false);
-            return;
-          }
+        if (file.bytes != null) {
+          bytes = file.bytes!;
+        } else if (file.path != null) {
           final f = File(file.path!);
           bytes = await f.readAsBytes();
-        } else {
-          bytes = file.bytes!;
+          _pickedImageFile = f; // Desktop preview
         }
 
-        fileName =
-        'barInfos/profile_${DateTime.now().millisecondsSinceEpoch}_${file.name}';
+        fileName = 'barInfos/profile_${DateTime.now().millisecondsSinceEpoch}_${file.name}';
       } else {
-        // Android / iOS: ImagePicker (Galerie)
+        // Android/iOS: ImagePicker
         final picker = ImagePicker();
         final picked = await picker.pickImage(
           source: ImageSource.gallery,
           imageQuality: 85,
         );
         if (picked == null) {
-          setState(() => _uploadingImage = false);
+          if (mounted) setState(() => _uploadingImage = false);
           return;
         }
         final file = File(picked.path);
         bytes = await file.readAsBytes();
-        fileName =
-        'barInfos/profile_${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
+        fileName = 'barInfos/profile_${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
         _pickedImageFile = file;
       }
 
       if (bytes == null) {
-        setState(() => _uploadingImage = false);
+        if (mounted) setState(() => _uploadingImage = false);
         return;
       }
 
@@ -230,11 +290,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
       final url = await ref.getDownloadURL();
 
-      setState(() {
-        _profileImageUrl = url;
-      });
-
       if (!mounted) return;
+      setState(() => _profileImageUrl = url);
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Profilbild hochgeladen.")),
       );
@@ -276,18 +334,20 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       Uint8List? bytes;
       String fileName;
 
-      if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) {
+      if (!_isMobile) {
         final result = await FilePicker.platform.pickFiles(type: FileType.image);
         if (result == null || result.files.isEmpty) return;
         final file = result.files.first;
+
         if (file.bytes != null) {
           bytes = file.bytes!;
         } else if (file.path != null) {
           final f = File(file.path!);
           bytes = await f.readAsBytes();
+          _barHighlights[index].imageFile = f;
         }
-        fileName =
-        'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_${file.name}';
+
+        fileName = 'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_${file.name}';
       } else {
         final picker = ImagePicker();
         final picked = await picker.pickImage(
@@ -297,8 +357,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         if (picked == null) return;
         final f = File(picked.path);
         bytes = await f.readAsBytes();
-        fileName =
-        'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
+        fileName = 'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
         _barHighlights[index].imageFile = f;
       }
 
@@ -308,9 +367,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
       final url = await ref.getDownloadURL();
 
-      setState(() {
-        _barHighlights[index].imageUrl = url;
-      });
+      if (!mounted) return;
+      setState(() => _barHighlights[index].imageUrl = url);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -334,8 +392,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       String? imageUrl = h.imageUrl;
 
       if (h.imageFile != null && (imageUrl == null || imageUrl.isEmpty)) {
-        final fileName =
-            'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
+        final fileName = 'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
         final ref = storage.ref().child(fileName);
         await ref.putFile(h.imageFile!);
         imageUrl = await ref.getDownloadURL();
@@ -629,8 +686,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed:
-                      _isSaving ? null : () => _pickOpeningTime(dayMeta.key, true),
+                      onPressed: _isSaving ? null : () => _pickOpeningTime(dayMeta.key, true),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.white24),
                         backgroundColor: const Color(0xFF141A22),
@@ -645,8 +701,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: OutlinedButton(
-                      onPressed:
-                      _isSaving ? null : () => _pickOpeningTime(dayMeta.key, false),
+                      onPressed: _isSaving ? null : () => _pickOpeningTime(dayMeta.key, false),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.white24),
                         backgroundColor: const Color(0xFF141A22),
@@ -841,7 +896,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         return;
       }
 
-      final docId = barId;
+      final docId = barId; // barId als docId
       final docRef = FirebaseFirestore.instance.collection("bars").doc(docId);
       final existing = await docRef.get();
 
@@ -860,13 +915,11 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         "updatedAt": FieldValue.serverTimestamp(),
         "barHighlights": highlightsPayload,
         "openingHours": openingHoursPayload,
-
         "location": geo,
         "lat": geo.latitude,
         "lng": geo.longitude,
         "city_lower": city.toLowerCase(),
         "barName_lower": barName.toLowerCase(),
-
         if (_profileImageUrl != null && _profileImageUrl!.isNotEmpty)
           "profileImageUrl": _profileImageUrl,
         if (!existing.exists) "createdAt": FieldValue.serverTimestamp(),
@@ -886,9 +939,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         );
       }
 
-      setState(() {
-        _editingBarDocId = docId;
-      });
+      setState(() => _editingBarDocId = docId);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -900,7 +951,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // Stats-Logik
+  // Stats-Logik (FIX: Party.startTime statt requests.startTime)
   // ---------------------------------------------------------------------------
 
   Future<Map<String, dynamic>> _fetchStats() async {
@@ -916,18 +967,18 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     final startOfDay = DateTime(now.year, now.month, now.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));
 
+    // ✅ korrekt: startTime liegt bei dir als Timestamp direkt im Party Dokument
     final todaysQuerySnap = await fs
         .collection('Party')
-        .where('requests.startTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('requests.startTime', isLessThan: Timestamp.fromDate(endOfDay))
+        .where('startTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('startTime', isLessThan: Timestamp.fromDate(endOfDay))
         .get();
 
     final todaysParties = todaysQuerySnap.size;
 
     final activeParties = todaysQuerySnap.docs.where((doc) {
-      final data = doc.data() as Map<String, dynamic>;
-      final req = data['requests'] as Map<String, dynamic>?;
-      final ts = req?['startTime'] as Timestamp?;
+      final data = doc.data();
+      final ts = data['startTime'] as Timestamp?;
       if (ts == null) return false;
       final start = ts.toDate();
       return !start.isAfter(now);
@@ -952,9 +1003,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   }
 
   void _reloadStats() {
-    setState(() {
-      _statsFuture = _fetchStats();
-    });
+    setState(() => _statsFuture = _fetchStats());
   }
 
   // ---------------------------------------------------------------------------
@@ -988,58 +1037,18 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // Bar-Anfragen (auslesen + Details + löschen mit doppelter Nachfrage)
-  //   ✅ Status entfernt
-  //   ✅ createdAt lesbar
+  // Bar-Anfragen
   // ---------------------------------------------------------------------------
 
   Future<void> _confirmAndDeleteBarRequest(DocumentSnapshot doc) async {
-    final first = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _panel,
-        title: const Text("Anfrage löschen?", style: TextStyle(color: _textPrimary)),
-        content: const Text(
-          "Willst du diese Bar-Anfrage wirklich löschen?",
-          style: TextStyle(color: _textSecondary),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text("Abbrechen"),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text("Löschen", style: TextStyle(color: _accent)),
-          ),
-        ],
-      ),
+    final ok = await _doubleConfirm(
+      title1: "Anfrage löschen?",
+      msg1: "Willst du diese Bar-Anfrage wirklich löschen?",
+      title2: "Wirklich endgültig löschen?",
+      msg2: "Diese Aktion kann nicht rückgängig gemacht werden.",
+      okText: "Löschen",
     );
-    if (first != true) return;
-
-    final second = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _panel,
-        title: const Text("Wirklich endgültig löschen?",
-            style: TextStyle(color: _textPrimary)),
-        content: const Text(
-          "Diese Aktion kann nicht rückgängig gemacht werden.",
-          style: TextStyle(color: _textSecondary),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text("Abbrechen"),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text("Endgültig löschen", style: TextStyle(color: _accent)),
-          ),
-        ],
-      ),
-    );
-    if (second != true) return;
+    if (!ok) return;
 
     try {
       await doc.reference.delete();
@@ -1059,8 +1068,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     final data = (doc.data() as Map<String, dynamic>?) ?? {};
 
     final barName =
-    (data['barname'] ?? data['barName'] ?? data['name'] ?? 'Bar-Anfrage')
-        .toString();
+    (data['barname'] ?? data['barName'] ?? data['name'] ?? 'Bar-Anfrage').toString();
 
     Widget row(String label, dynamic value, {bool isTimestamp = false}) {
       final v = isTimestamp ? formatTimestamp(value) : (value ?? '').toString().trim();
@@ -1136,16 +1144,13 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
-
                   row("Barname", data['barname'] ?? data['barName']),
                   row("Username", data['username']),
                   row("E-Mail", data['email']),
                   row("Telefon", data['phoneNumber']),
                   row("Hinweis", data['availabilityNote']),
                   row("Erstellt am", data['createdAt'], isTimestamp: true),
-
                   const SizedBox(height: 6),
-
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -1211,11 +1216,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                   .orderBy('createdAt', descending: true)
                   .snapshots(),
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting &&
-                    !snapshot.hasData) {
-                  return const Center(
-                    child: CircularProgressIndicator(color: _secondary),
-                  );
+                if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator(color: _secondary));
                 }
 
                 if (snapshot.hasError) {
@@ -1231,10 +1233,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                 final docs = snapshot.data?.docs ?? [];
                 if (docs.isEmpty) {
                   return const Center(
-                    child: Text(
-                      "Keine Bar-Anfragen vorhanden.",
-                      style: TextStyle(color: _textSecondary),
-                    ),
+                    child: Text("Keine Bar-Anfragen vorhanden.", style: TextStyle(color: _textSecondary)),
                   );
                 }
 
@@ -1245,12 +1244,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                     final doc = docs[index];
                     final data = (doc.data() as Map<String, dynamic>?) ?? {};
 
-                    final name = (data['barname'] ??
-                        data['barName'] ??
-                        data['name'] ??
-                        'Unbenannt')
-                        .toString();
-
+                    final name = (data['barname'] ?? data['barName'] ?? data['name'] ?? 'Unbenannt').toString();
                     final created = formatTimestamp(data['createdAt']);
                     final username = (data['username'] ?? '').toString().trim();
 
@@ -1259,19 +1253,12 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                       leading: const Icon(Icons.inbox, color: _secondary),
                       title: Text(
                         name,
-                        style: const TextStyle(
-                          color: _textPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      // ✅ statt Status: Username + Datum/Uhrzeit
                       subtitle: Text(
-                        [
-                          if (username.isNotEmpty) username,
-                          if (created.isNotEmpty) created,
-                        ].join(" • "),
+                        [if (username.isNotEmpty) username, if (created.isNotEmpty) created].join(" • "),
                         style: const TextStyle(color: _textSecondary, fontSize: 12),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -1287,6 +1274,590 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // ✅ USERS: Suche + Detailansicht + Aktionen (Account löschen / Premium an/aus)
+  // ---------------------------------------------------------------------------
+
+  String _lower(String s) => s.trim().toLowerCase();
+
+  Query<Map<String, dynamic>> _prefixQuery({
+    required CollectionReference<Map<String, dynamic>> col,
+    required String field,
+    required String q,
+    required int limit,
+  }) {
+    final end = '$q\uf8ff';
+    return col.orderBy(field).startAt([q]).endAt([end]).limit(limit);
+  }
+
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _mergeUserQueryStreams(
+      List<Stream<QuerySnapshot<Map<String, dynamic>>>> streams,
+      ) {
+    final controller = StreamController<List<QueryDocumentSnapshot<Map<String, dynamic>>>>();
+    final Map<String, QueryDocumentSnapshot<Map<String, dynamic>>> byId = {};
+    final List<StreamSubscription> subs = [];
+
+    void emit() {
+      final list = byId.values.toList();
+
+      int cmp(QueryDocumentSnapshot<Map<String, dynamic>> a, QueryDocumentSnapshot<Map<String, dynamic>> b) {
+        final ad = a.data();
+        final bd = b.data();
+
+        final aUpd = ad['updatedAt'];
+        final bUpd = bd['updatedAt'];
+
+        DateTime? aT;
+        DateTime? bT;
+
+        if (aUpd is Timestamp) aT = aUpd.toDate();
+        if (bUpd is Timestamp) bT = bUpd.toDate();
+
+        if (aT != null && bT != null) return bT.compareTo(aT);
+
+        final au = (ad['username_lower'] ?? '').toString();
+        final bu = (bd['username_lower'] ?? '').toString();
+        return au.compareTo(bu);
+      }
+
+      list.sort(cmp);
+      controller.add(list);
+    }
+
+    for (final s in streams) {
+      subs.add(
+        s.listen(
+              (snap) {
+            for (final d in snap.docs) {
+              byId[d.id] = d;
+            }
+            emit();
+          },
+          onError: controller.addError,
+        ),
+      );
+    }
+
+    controller.onCancel = () async {
+      for (final sub in subs) {
+        await sub.cancel();
+      }
+      await controller.close();
+    };
+
+    return controller.stream;
+  }
+
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _userSearchStream() {
+    final q = _lower(_userSearch);
+    final users = FirebaseFirestore.instance.collection('users');
+
+    if (q.isEmpty) {
+      return users
+          .orderBy('updatedAt', descending: true)
+          .limit(30)
+          .snapshots()
+          .map((s) => s.docs);
+    }
+
+    final s1 = _prefixQuery(col: users, field: 'username_lower', q: q, limit: 25).snapshots();
+    final s2 = _prefixQuery(col: users, field: 'firstName_lower', q: q, limit: 25).snapshots();
+    final s3 = _prefixQuery(col: users, field: 'lastName_lower', q: q, limit: 25).snapshots();
+
+    return _mergeUserQueryStreams([s1, s2, s3]);
+  }
+
+  Future<void> _setUserPremium(DocumentReference<Map<String, dynamic>> ref, bool value) async {
+    final ok = await _doubleConfirm(
+      title1: value ? "Premium aktivieren?" : "Premium beenden?",
+      msg1: value
+          ? "Willst du diesem User Premium geben (Firestore: premium=true)?"
+          : "Willst du Premium für diesen User wirklich beenden?",
+      title2: "Wirklich durchführen?",
+      msg2: "Diese Aktion wird sofort in Firebase gespeichert.",
+      okText: value ? "Premium aktivieren" : "Premium beenden",
+    );
+    if (!ok) return;
+
+    try {
+      await ref.set({
+        'premium': value,
+        'premiumUpdatedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        if (value) 'premiumSince': FieldValue.serverTimestamp(),
+        if (!value) 'premiumUntil': FieldValue.serverTimestamp(), // optional: Ende markieren
+      }, SetOptions(merge: true));
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(value ? "Premium aktiviert (Firestore)." : "Premium beendet (Firestore).")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Fehler: $e")),
+      );
+    }
+  }
+
+  Future<void> _deleteUserDoc(DocumentReference<Map<String, dynamic>> ref) async {
+    final ok = await _doubleConfirm(
+      title1: "Account löschen?",
+      msg1:
+      "Willst du diesen User wirklich löschen?\n\nHinweis: Das löscht hier nur das Firestore users-Dokument. "
+          "Den Firebase-Auth-Account kann man nur per Admin/Cloud Function löschen.",
+      title2: "Wirklich endgültig löschen?",
+      msg2: "Diese Aktion kann nicht rückgängig gemacht werden.",
+      okText: "Löschen",
+    );
+    if (!ok) return;
+
+    try {
+      await ref.delete();
+      if (!mounted) return;
+      Navigator.of(context).pop(); // Detail schließen
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("User-Dokument gelöscht.")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Fehler: $e")),
+      );
+    }
+  }
+
+  void _openUserDetails(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final ref = doc.reference;
+
+    // ---------- Helpers (nur für diese BottomSheet-Ansicht) ----------
+    String two(int n) => n.toString().padLeft(2, '0');
+
+    String _fmtTs(dynamic v) {
+      if (v == null) return "";
+      if (v is Timestamp) {
+        final dt = v.toDate();
+        return "${two(dt.day)}.${two(dt.month)}.${dt.year} ${two(dt.hour)}:${two(dt.minute)}";
+      }
+      return v.toString().trim();
+    }
+
+    String _fmtDateOnly(dynamic v) {
+      if (v == null) return "";
+      if (v is Timestamp) {
+        final dt = v.toDate();
+        return "${two(dt.day)}.${two(dt.month)}.${dt.year}";
+      }
+      if (v is DateTime) {
+        return "${two(v.day)}.${two(v.month)}.${v.year}";
+      }
+      if (v is Map) {
+        final m = Map<String, dynamic>.from(v as Map);
+        final day = m['day'] ?? m['d'];
+        final month = m['month'] ?? m['m'];
+        final year = m['year'] ?? m['y'];
+        final dd = int.tryParse((day ?? '').toString());
+        final mm = int.tryParse((month ?? '').toString());
+        final yy = int.tryParse((year ?? '').toString());
+        if (dd != null && mm != null && yy != null) {
+          return "${two(dd)}.${two(mm)}.${yy}";
+        }
+      }
+
+      final s = v.toString().trim();
+      if (s.isEmpty) return "";
+
+      // ISO yyyy-mm-dd
+      final iso = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(s);
+      if (iso != null) {
+        final yy = iso.group(1)!;
+        final mm = iso.group(2)!;
+        final dd = iso.group(3)!;
+        return "$dd.$mm.$yy";
+      }
+
+      return s; // fallback
+    }
+
+    dynamic _getNested(Map<String, dynamic> data, String key1, String key2) {
+      final v = data[key1];
+      if (v is Map) return (v as Map)[key2];
+      return null;
+    }
+
+    dynamic _getBirthday(Map<String, dynamic> data) {
+      return data['birthDate'] ??
+          data['birthdate'] ??
+          data['birth_date'] ??
+          data['birthday'] ??
+          data['geb'] ??
+          data['geburtstag'] ??
+          data['geburtsdatum'] ??
+          data['dateOfBirth'] ??
+          data['dob'] ??
+          _getNested(data, 'profile', 'birthDate') ??
+          _getNested(data, 'profile', 'birthday') ??
+          _getNested(data, 'profile', 'geburtsdatum') ??
+          _getNested(data, 'settings', 'birthDate') ??
+          _getNested(data, 'settings', 'birthday');
+    }
+
+    String _pickString(Map<String, dynamic> data, List<String> keys) {
+      for (final k in keys) {
+        final v = data[k];
+        if (v == null) continue;
+        final s = v.toString().trim();
+        if (s.isNotEmpty) return s;
+      }
+      return "";
+    }
+
+    String _pickPhone(Map<String, dynamic> data) {
+      return _pickString(data, [
+        'phone',
+        'phoneNumber',
+        'telefon',
+        'tel',
+        'mobile',
+        'handy',
+        'number',
+      ]);
+    }
+
+    String _pickPassword(Map<String, dynamic> data) {
+      return _pickString(data, [
+        'password',
+        'passwort',
+        'pw',
+      ]);
+    }
+
+    int? _pickAge(Map<String, dynamic> data) {
+      final raw = data['age'] ?? data['alter'];
+      if (raw == null) return null;
+      if (raw is num) return raw.toInt();
+      return int.tryParse(raw.toString().trim());
+    }
+
+    Widget row(String label, String value) {
+      final v = value.trim();
+      if (v.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF141A22),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white24),
+          ),
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: _textSecondary, fontSize: 11)),
+              const SizedBox(height: 4),
+              Text(
+                v,
+                style: const TextStyle(
+                  color: _textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _bg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (_) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(context).size.height * 0.92,
+            child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: ref.snapshots(),
+              builder: (context, snap) {
+                final data = snap.data?.data() ?? doc.data();
+
+                final username = _pickString(data, ['username', 'currentUsername', 'userName']);
+                final firstName = _pickString(data, ['firstName', 'vorname', 'firstname']);
+                final lastName = _pickString(data, ['lastName', 'nachname', 'lastname']);
+
+                final fullName = _pickString(data, ['fullName', 'fullname']).isNotEmpty
+                    ? _pickString(data, ['fullName', 'fullname'])
+                    : "${firstName.trim()} ${lastName.trim()}".trim();
+
+                final city = _pickString(data, ['city', 'stadt']);
+                final country = _pickString(data, ['country', 'land']);
+
+                final age = _pickAge(data);
+                final phone = _pickPhone(data);
+                final password = _pickPassword(data);
+
+                final birthdayStr = _fmtDateOnly(_getBirthday(data));
+                final createdAtStr = _fmtTs(data['createdAt']);
+
+                final premium = data['premium'] == true;
+
+                final title = username.isNotEmpty ? username : (fullName.isNotEmpty ? fullName : doc.id);
+
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.person, color: _secondary),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: const TextStyle(
+                                color: _textPrimary,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.close, color: _textSecondary),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              row("Username", username),
+                              row("Full Name", fullName),
+                              row("Telefonnummer", phone),
+                              row("City", city),
+                              row("Country", country),
+                              row("Alter", age?.toString() ?? ""),
+                              row("Geburtsdatum", birthdayStr),
+                              row("Passwort", password),
+                              row("Premium", premium ? "true" : "false"),
+                              row("Created at", createdAtStr),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 10),
+
+                      // Aktionen unten
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: () => _deleteUserDoc(ref),
+                            icon: const Icon(Icons.delete_forever),
+                            label: const Text(
+                              "Account löschen",
+                              style: TextStyle(fontWeight: FontWeight.w800),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _accent,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          if (!premium)
+                            ElevatedButton.icon(
+                              onPressed: () => _setUserPremium(ref, true),
+                              icon: const Icon(Icons.workspace_premium),
+                              label: const Text(
+                                "Premium geben",
+                                style: TextStyle(fontWeight: FontWeight.w800),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            )
+                          else
+                            ElevatedButton.icon(
+                              onPressed: () => _setUserPremium(ref, false),
+                              icon: const Icon(Icons.block),
+                              label: const Text(
+                                "Premium beenden",
+                                style: TextStyle(fontWeight: FontWeight.w800),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.orangeAccent,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+
+
+
+
+
+
+  Widget _buildUsersSection() {
+    return Container(
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _panelBorder),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.manage_accounts, color: _secondary),
+              SizedBox(width: 8),
+              Text(
+                "User verwalten",
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _userSearchCtrl,
+            onChanged: (v) => setState(() => _userSearch = v),
+            style: const TextStyle(color: _textPrimary),
+            decoration: _dec(
+              label: "Suche: Username / Vorname / Nachname",
+              hint: "z. B. max, maxmuster, mustermann ...",
+              icon: Icons.search,
+              suffix: _userSearch.isEmpty
+                  ? null
+                  : IconButton(
+                onPressed: () {
+                  _userSearchCtrl.clear();
+                  setState(() => _userSearch = "");
+                },
+                icon: const Icon(Icons.clear, color: _textSecondary),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 520,
+            child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+              stream: _userSearchStream(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator(color: _secondary));
+                }
+
+                if (snapshot.hasError) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      "Fehler beim Laden:\n${snapshot.error}",
+                      style: const TextStyle(color: _accent),
+                    ),
+                  );
+                }
+
+                final docs = snapshot.data ?? [];
+                if (docs.isEmpty) {
+                  return const Center(
+                    child: Text("Keine User gefunden.", style: TextStyle(color: _textSecondary)),
+                  );
+                }
+
+                return ListView.separated(
+                  itemCount: docs.length,
+                  separatorBuilder: (_, __) => const Divider(color: _panelBorder),
+                  itemBuilder: (context, index) {
+                    final doc = docs[index];
+                    final d = doc.data();
+
+                    final username = (d['username'] ?? d['currentUsername'] ?? d['userName'] ?? '').toString();
+                    final firstName = (d['firstName'] ?? '').toString();
+                    final lastName = (d['lastName'] ?? '').toString();
+                    final premium = d['premium'] == true;
+
+                    final title = username.isNotEmpty ? username : "${firstName.trim()} ${lastName.trim()}".trim();
+
+                    final subtitleParts = <String>[];
+                    final fullName = "${firstName.trim()} ${lastName.trim()}".trim();
+                    if (fullName.isNotEmpty) subtitleParts.add(fullName);
+                    subtitleParts.add(premium ? "Premium" : "Free");
+
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(
+                        premium ? Icons.workspace_premium : Icons.person,
+                        color: premium ? Colors.amberAccent : _secondary,
+                      ),
+                      title: Text(
+                        title.isEmpty ? doc.id : title,
+                        style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        subtitleParts.join(" • "),
+                        style: const TextStyle(color: _textSecondary, fontSize: 12),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => _openUserDetails(doc),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            "Hinweis: Für die Suche müssen in users die Felder username_lower / firstName_lower / lastName_lower existieren.",
+            style: TextStyle(color: Colors.white38, fontSize: 11),
           ),
         ],
       ),
@@ -1336,6 +1907,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           chip(index: 1, text: "Bar-Anfragen"),
           const SizedBox(width: 4),
           chip(index: 2, text: "Statistiken"),
+          const SizedBox(width: 4),
+          chip(index: 3, text: "Users"),
         ],
       ),
     );
@@ -1414,8 +1987,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           FutureBuilder<Map<String, dynamic>>(
             future: _statsFuture,
             builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting &&
-                  !snapshot.hasData) {
+              if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
                 return const Center(
                   child: Padding(
                     padding: EdgeInsets.symmetric(vertical: 20),
@@ -1458,13 +2030,13 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                   ),
                   const SizedBox(height: 10),
                   _buildStatTile(
-                    title: "Partys heute (Startdatum = heute)",
+                    title: "Partys heute (startTime = heute)",
                     value: todaysParties.toString(),
                     icon: Icons.today,
                   ),
                   const SizedBox(height: 10),
                   _buildStatTile(
-                    title: "Aktuell laufende Partys (Start heute, schon gestartet)",
+                    title: "Aktuell laufende Partys (heute, schon gestartet)",
                     value: activeParties.toString(),
                     icon: Icons.access_time_filled,
                   ),
@@ -1568,22 +2140,15 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
               SizedBox(
                 height: 220,
                 child: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('bars')
-                      .orderBy('barName')
-                      .snapshots(),
+                  stream: FirebaseFirestore.instance.collection('bars').orderBy('barName').snapshots(),
                   builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting &&
-                        !snapshot.hasData) {
-                      return const Center(
-                        child: CircularProgressIndicator(color: _secondary),
-                      );
+                    if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator(color: _secondary));
                     }
                     final docs = snapshot.data?.docs ?? [];
                     if (docs.isEmpty) {
                       return const Center(
-                        child: Text("Noch keine Bars angelegt.",
-                            style: TextStyle(color: _textSecondary)),
+                        child: Text("Noch keine Bars angelegt.", style: TextStyle(color: _textSecondary)),
                       );
                     }
                     return ListView.separated(
@@ -1603,27 +2168,20 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                           leading: const Icon(Icons.local_bar, color: _secondary),
                           title: Text(
                             name,
-                            style: const TextStyle(
-                              color: _textPrimary,
-                              fontWeight: FontWeight.w600,
-                            ),
+                            style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
                           ),
                           subtitle: Row(
                             children: [
                               Flexible(
                                 child: Text(
                                   city,
-                                  style: const TextStyle(
-                                    color: _textSecondary,
-                                    fontSize: 12,
-                                  ),
+                                  style: const TextStyle(color: _textSecondary, fontSize: 12),
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                               if (city.isNotEmpty && status.isNotEmpty) ...[
                                 const SizedBox(width: 6),
-                                const Text("•",
-                                    style: TextStyle(color: _textSecondary, fontSize: 12)),
+                                const Text("•", style: TextStyle(color: _textSecondary, fontSize: 12)),
                                 const SizedBox(width: 6),
                               ],
                               Text(
@@ -1682,20 +2240,16 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                         ImageProvider? img;
                         if (!kIsWeb && _pickedImageFile != null) {
                           img = FileImage(_pickedImageFile!);
-                        } else if (_profileImageUrl != null &&
-                            _profileImageUrl!.isNotEmpty) {
+                        } else if (_profileImageUrl != null && _profileImageUrl!.isNotEmpty) {
                           img = NetworkImage(_profileImageUrl!);
                         }
                         return img;
                       })(),
                       child: (() {
                         final hasImage =
-                            (!kIsWeb && _pickedImageFile != null) ||
-                                (_profileImageUrl != null &&
-                                    _profileImageUrl!.isNotEmpty);
+                            (!kIsWeb && _pickedImageFile != null) || (_profileImageUrl != null && _profileImageUrl!.isNotEmpty);
                         if (hasImage) return null;
-                        return const Icon(Icons.local_bar,
-                            color: _textSecondary, size: 32);
+                        return const Icon(Icons.local_bar, color: _textSecondary, size: 32);
                       })(),
                     ),
                     const SizedBox(width: 16),
@@ -1706,25 +2260,18 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                             ? const SizedBox(
                           width: 16,
                           height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                         )
                             : const Icon(Icons.photo_library),
                         label: Text(
-                          _uploadingImage
-                              ? "Bild wird hochgeladen..."
-                              : "Bild wählen (Galerie / Ordner)",
+                          _uploadingImage ? "Bild wird hochgeladen..." : "Bild wählen (Galerie / Ordner)",
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _accent,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                       ),
                     ),
@@ -1757,9 +2304,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                     icon: Icons.tag,
                     hint: "z. B. club_xy_wien",
                   ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.allow(RegExp(r'[a-z0-9_.-]')),
-                  ],
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[a-z0-9_.-]'))],
                   validator: (v) {
                     final val = v?.trim() ?? '';
                     if (val.isEmpty) return "Pflichtfeld";
@@ -1793,8 +2338,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                           icon: Icons.location_city,
                           hint: "z. B. Wien",
                         ),
-                        validator: (v) =>
-                        (v == null || v.trim().isEmpty) ? "Pflichtfeld" : null,
+                        validator: (v) => (v == null || v.trim().isEmpty) ? "Pflichtfeld" : null,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1804,8 +2348,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                         controller: _countryController,
                         style: const TextStyle(color: _textPrimary),
                         decoration: _dec(label: "Land", icon: Icons.flag),
-                        validator: (v) =>
-                        (v == null || v.trim().isEmpty) ? "Pflichtfeld" : null,
+                        validator: (v) => (v == null || v.trim().isEmpty) ? "Pflichtfeld" : null,
                       ),
                     ),
                   ],
@@ -1844,11 +2387,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                             const SizedBox(width: 6),
                             Text(
                               label,
-                              style: TextStyle(
-                                color: color,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
+                              style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w600),
                             ),
                           ],
                         ),
@@ -1926,8 +2465,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                       backgroundColor: const Color(0xFF141A22),
                     ),
                     icon: const Icon(Icons.add, color: Colors.redAccent),
-                    label: const Text('Highlight hinzufügen',
-                        style: TextStyle(color: Colors.redAccent)),
+                    label: const Text('Highlight hinzufügen', style: TextStyle(color: Colors.redAccent)),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -1946,18 +2484,13 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                       disabledBackgroundColor: Colors.redAccent.withOpacity(0.4),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     child: _isSaving
                         ? const SizedBox(
                       width: 22,
                       height: 22,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
-                      ),
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                     )
                         : const Text(
                       "Bar speichern",
@@ -2009,8 +2542,10 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                         _buildBarsSection()
                       else if (_selectedSection == 1)
                         _buildBarRequestsSection()
-                      else
-                        _buildStatsSection(),
+                      else if (_selectedSection == 2)
+                          _buildStatsSection()
+                        else
+                          _buildUsersSection(),
                       const SizedBox(height: 16),
                     ],
                   ),

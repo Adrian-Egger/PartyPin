@@ -21,12 +21,16 @@ String computeEventKey(dynamic rawDate) {
 
 class BarBottomSheet extends StatefulWidget {
   final String barId;
-  final Map<String, dynamic> barData;
+
+  /// ✅ OPTIONAL:
+  /// - Map/Marker: du kannst weiter barData übergeben (wie bisher)
+  /// - "Meine Bar": du gibst nur barId -> Sheet lädt barData selbst aus Firestore
+  final Map<String, dynamic>? barData;
 
   const BarBottomSheet({
     super.key,
     required this.barId,
-    required this.barData,
+    this.barData,
   });
 
   @override
@@ -84,7 +88,9 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     if (ownerUid.isNotEmpty && ownerUid == uid) return true;
 
     final barName = (barData['barName'] ?? '').toString().trim().toLowerCase();
-    if (barName.isNotEmpty && _currentUsernameLower.isNotEmpty && barName == _currentUsernameLower) {
+    if (barName.isNotEmpty &&
+        _currentUsernameLower.isNotEmpty &&
+        barName == _currentUsernameLower) {
       return true;
     }
 
@@ -115,6 +121,11 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
         .collection('events')
         .orderBy('startAt', descending: false)
         .limit(50);
+  }
+
+  // ✅ Bar-Dokument Stream (für "Meine Bar": nur barId, Daten kommen aus Firestore)
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _barDocStream() {
+    return FirebaseFirestore.instance.collection('bars').doc(widget.barId).snapshots();
   }
 
   DateTime? _readDate(dynamic v) {
@@ -260,11 +271,57 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // ✅ Wenn barData übergeben wurde (Marker-Klick etc.), alles wie bisher
+    if (widget.barData != null) {
+      return _buildSheetWithBarData(context, widget.barData!);
+    }
+
+    // ✅ Wenn KEIN barData übergeben wurde ("Meine Bar"): Bar-Daten live aus Firestore holen
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _barDocStream(),
+      builder: (context, barSnap) {
+        if (barSnap.hasError) {
+          return const Center(
+            child: Text(
+              'Bar konnte nicht geladen werden.',
+              style: TextStyle(color: Colors.white70),
+            ),
+          );
+        }
+        if (!barSnap.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (!(barSnap.data?.exists ?? false)) {
+          return const Center(
+            child: Text(
+              'Bar existiert nicht (mehr).',
+              style: TextStyle(color: Colors.white70),
+            ),
+          );
+        }
+
+        final data = barSnap.data!.data();
+        if (data == null) {
+          return const Center(
+            child: Text(
+              'Bar-Daten fehlen.',
+              style: TextStyle(color: Colors.white70),
+            ),
+          );
+        }
+
+        return _buildSheetWithBarData(context, data);
+      },
+    );
+  }
+
+  // ✅ Original-Flow (dein bisheriges build), nur ausgelagert, damit barData von überall kommen kann
+  Widget _buildSheetWithBarData(BuildContext context, Map<String, dynamic> barData) {
     // 1) Stream für Kandidaten (sichtbares Event)
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _visibleEventCandidatesQuery(widget.barId).snapshots(),
       builder: (context, visibleSnap) {
-        final Map<String, dynamic> mergedBarData = Map<String, dynamic>.from(widget.barData);
+        final Map<String, dynamic> mergedBarData = Map<String, dynamic>.from(barData);
 
         // Wenn Firestore-Query wirklich hart scheitert, zeigen wir trotzdem das Sheet ohne Event
         if (visibleSnap.hasError) {
@@ -460,7 +517,6 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
         final bool isOwner = _isOwner(barDataForUi);
 
         // ---------- UPCOMING LIST MODEL (für Bar-Infos) ----------
-        // Filter: active == true, cleanupAt > now (oder fehlt), startAt vorhanden, title nicht leer
         final List<_UpcomingEventItem> upcomingItems = upcomingDocs.map((d) {
           final data = d.data();
 
@@ -482,7 +538,6 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
           return true;
         }).toList();
 
-        // Wenn Upcoming Query error hat: trotzdem anzeigen, aber ohne Liste
         final upcomingHasError = upcomingSnap.hasError;
 
         return AppDraggableSheet(
@@ -570,7 +625,6 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
 
                   const SizedBox(height: 10),
 
-                  // Optional: kleine Info, falls sichtbares Event Stream error hatte
                   if (visibleError != null)
                     Container(
                       margin: const EdgeInsets.only(top: 10, bottom: 6),
@@ -906,8 +960,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     final dt = e.startAt!;
     final dateStr =
         '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
-    final timeStr =
-        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final timeStr = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
 
     return Container(
       width: double.infinity,
@@ -922,7 +975,6 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
         children: [
           const Icon(Icons.event, color: Colors.white70, size: 18),
           const SizedBox(width: 10),
-
           Expanded(
             child: Text(
               '$dateStr · $timeStr — ${e.title}',
@@ -933,7 +985,6 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
               ),
             ),
           ),
-
           if (isOwner) ...[
             IconButton(
               tooltip: 'Bearbeiten',
@@ -1877,7 +1928,8 @@ class EventDetailsCard extends StatelessWidget {
     final prefs = await SharedPreferences.getInstance();
     final savedUsername = (prefs.getString('currentUsername') ?? '').trim();
 
-    final fallbackName = user.displayName?.trim().isNotEmpty == true ? user.displayName!.trim() : 'Unbekannter Nutzer';
+    final fallbackName =
+    user.displayName?.trim().isNotEmpty == true ? user.displayName!.trim() : 'Unbekannter Nutzer';
     final userName = savedUsername.isNotEmpty ? savedUsername : fallbackName;
 
     final firestore = FirebaseFirestore.instance;

@@ -1,25 +1,35 @@
 // lib/Screens/new_party.dart
 import 'dart:async';
+import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 
+// ✅ Premium Bilder
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+
+// ✅ Premium Screen (Pfad ggf. anpassen)
+import '../Screens/premium_screen.dart';
+
 import '../Services/geocoding_services.dart';
 import 'map_picker_screen.dart';
 import '../Social/friends_model.dart';
 import '../Screens/exclude_friends.dart';
 
-// ✅ NEU: BottomNav Targets
-import '../Screens/party_map_screen.dart';
-import '../Screens/feedback_screen.dart';
-import '../Social/friends_view.dart';
+// ✅ HomeShell (WICHTIG für BottomNav!)
+import 'home_shell.dart';
 
 class NewPartyScreen extends StatefulWidget {
   final Map<String, dynamic>? existingData;
   final String? docId;
+
+  /// Optional: Wird weiter aufgerufen (z.B. PartyMapScreen kann refreshen)
   final void Function({bool updated, Map<String, dynamic>? payload})? onGoToMapAndRefresh;
 
   const NewPartyScreen({
@@ -33,8 +43,7 @@ class NewPartyScreen extends StatefulWidget {
   State<NewPartyScreen> createState() => _NewPartyScreenState();
 }
 
-class _NewPartyScreenState extends State<NewPartyScreen>
-    with SingleTickerProviderStateMixin {
+class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _scrollCtrl = ScrollController();
 
@@ -55,8 +64,10 @@ class _NewPartyScreenState extends State<NewPartyScreen>
 
   DateTime? _selectedDate;
   TimeOfDay? _selectedTime;
+
   bool _isUnlimitedGuests = false;
   bool _isFreeEntry = false;
+
   bool _isLoading = false;
   bool _triedSubmit = false;
 
@@ -67,9 +78,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
   double? _pickedLat;
   double? _pickedLng;
 
-  // ===========================
   // Friends-only + Excludes (Only4Friends steuert das)
-  // ===========================
   final FriendsModel _friendsModel = FriendsModel();
   bool _friendsOnly = false; // visibility: friends/public
   List<String> _excludedFriends = []; // usernames
@@ -85,17 +94,33 @@ class _NewPartyScreenState extends State<NewPartyScreen>
   static const _accent = Color(0xFFFF3B30);
   static const _secondary = _accent;
 
-  // ✅ wie Feedback/Friends Header
-  static const _accentSoft = Color(0x26FF3B30); // ~15% rot
-  static const _accentLine = Color(0x66FF3B30); // ~40% rot
+  static const _accentSoft = Color(0x26FF3B30);
+  static const _accentLine = Color(0x66FF3B30);
 
-  // ✅ NEU: BottomNav Index (0=Feedback, 1=Map, 2=Freunde, 3=Neue Party)
+  // BottomNav Index (lokal nur fürs UI hier)
+  // 0=Feedback, 1=Map, 2=Freunde, 3=Neue Party
   int _currentIndex = 3;
 
-  // ✅ FIX: Legal-Consent nur hier (NewPartyScreen) anzeigen
+  // Legal Gate nur hier
   bool _legalGateHandled = false;
 
   void _unfocus() => FocusManager.instance.primaryFocus?.unfocus();
+
+  // ===========================
+  // ✅ Premium Bilder (Blöcke)
+  // ===========================
+  final ImagePicker _picker = ImagePicker();
+  bool _isPremium = false;
+
+  // ✅ LIVE Premium aus Firestore
+  StreamSubscription? _premiumSub;
+
+  static const int _maxImageBlocks = 5; // max 5 Blöcke
+  static const int _maxImagesPerBlock = 5; // max 5 Bilder je Block
+
+  final List<_ImageBlockDraft> _imageBlocks = [
+    _ImageBlockDraft(), // 1 Block standardmäßig
+  ];
 
   @override
   void initState() {
@@ -104,7 +129,9 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     _preloadExisting();
     _wireListeners();
 
-    // ✅ Draft/Entwurf komplett deaktiviert:
+    // ✅ Premium live aus Firestore
+    _bindPremiumStatusFromFirestore();
+
     _deleteDraftSilently();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -127,6 +154,8 @@ class _NewPartyScreenState extends State<NewPartyScreen>
 
   @override
   void dispose() {
+    _premiumSub?.cancel();
+
     _scrollCtrl.dispose();
 
     _nameNode.dispose();
@@ -143,7 +172,86 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     _timeController.dispose();
     _priceController.dispose();
     _minAgeController.dispose();
+
+    for (final b in _imageBlocks) {
+      b.dispose();
+    }
+
     super.dispose();
+  }
+
+  // ===========================
+  // ✅ Premium Status live aus FIRESTORE (users.premium)
+  // ===========================
+  Future<void> _bindPremiumStatusFromFirestore() async {
+    _premiumSub?.cancel();
+
+    final prefs = await SharedPreferences.getInstance();
+    final me = (prefs.getString('username') ?? '').trim();
+
+    if (me.isEmpty) {
+      if (!mounted) return;
+      setState(() => _isPremium = false);
+      return;
+    }
+
+    final fs = FirebaseFirestore.instance;
+
+    // 1) Versuch: DocId == username
+    final directRef = fs.collection('users').doc(me);
+
+    try {
+      final directSnap = await directRef.get();
+
+      if (directSnap.exists) {
+        final initial = (directSnap.data() ?? {})['premium'] == true;
+        if (mounted) setState(() => _isPremium = initial);
+
+        _premiumSub = directRef.snapshots().listen((snap) async {
+          final data = snap.data() ?? {};
+          final p = data['premium'] == true;
+
+          // optional cache
+          try {
+            final sp = await SharedPreferences.getInstance();
+            await sp.setBool('is_premium', p);
+          } catch (_) {}
+
+          if (!mounted) return;
+          setState(() => _isPremium = p);
+        });
+
+        return;
+      }
+    } catch (_) {
+      // fallback weiter unten
+    }
+
+    // 2) Fallback: DocId ist NICHT username -> Query auf Feld username
+    final q = fs.collection('users').where('username', isEqualTo: me).limit(1);
+
+    try {
+      final qs = await q.get();
+      final p = qs.docs.isNotEmpty ? (qs.docs.first.data()['premium'] == true) : false;
+      if (mounted) setState(() => _isPremium = p);
+    } catch (_) {
+      if (mounted) setState(() => _isPremium = false);
+    }
+
+    _premiumSub = q.snapshots().listen((qs) async {
+      bool p = false;
+      if (qs.docs.isNotEmpty) {
+        p = qs.docs.first.data()['premium'] == true;
+      }
+
+      try {
+        final sp = await SharedPreferences.getInstance();
+        await sp.setBool('is_premium', p);
+      } catch (_) {}
+
+      if (!mounted) return;
+      setState(() => _isPremium = p);
+    });
   }
 
   Future<void> _deleteDraftSilently() async {
@@ -157,17 +265,19 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     if (widget.existingData == null) return;
     final data = widget.existingData!;
 
-    _nameController.text = data['name'] ?? '';
-    _descriptionController.text = data['description'] ?? '';
-    _guestLimitController.text =
-    data['guestLimit'] != null && data['guestLimit'] != 'Unbegrenzt'
+    _nameController.text = (data['name'] ?? '').toString();
+    _descriptionController.text = (data['description'] ?? '').toString();
+
+    _guestLimitController.text = data['guestLimit'] != null && data['guestLimit'] != 'Unbegrenzt'
         ? data['guestLimit'].toString()
         : '';
     _isUnlimitedGuests = data['guestLimit'] == 'Unbegrenzt';
+
     _priceController.text =
     data['price'] != null && data['price'] != 0 ? data['price'].toString() : '';
     _isFreeEntry = (data['price'] ?? 0) == 0;
-    _addressController.text = data['address'] ?? '';
+
+    _addressController.text = (data['address'] ?? '').toString();
 
     if (data['startTime'] is Timestamp) {
       final dt = (data['startTime'] as Timestamp).toDate();
@@ -183,13 +293,16 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       if (data['time'] != null) {
         final parts = (data['time'] as String).split(':');
         if (parts.length == 2) {
-          _selectedTime = TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+          _selectedTime = TimeOfDay(
+            hour: int.tryParse(parts[0]) ?? 0,
+            minute: int.tryParse(parts[1]) ?? 0,
+          );
           _timeController.text = data['time'];
         }
       }
     }
 
-    _partyType = data['type'] ?? 'Open';
+    _partyType = (data['type'] ?? 'Open').toString();
     _minAgeController.text = (data['minAge'] != null) ? data['minAge'].toString() : '';
     _pickedLat = (data['lat'] as num?)?.toDouble();
     _pickedLng = (data['lng'] as num?)?.toDouble();
@@ -237,6 +350,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     final prefs = await SharedPreferences.getInstance();
     final vorname = prefs.getString('vorname') ?? '';
     final nachname = prefs.getString('nachname') ?? '';
+    if (!mounted) return;
     setState(() {
       final full = "$vorname $nachname".trim();
       _hostName = full.isEmpty ? null : full;
@@ -408,7 +522,6 @@ class _NewPartyScreenState extends State<NewPartyScreen>
               ),
               const SizedBox(width: 8),
             ],
-            const Text(" ", style: TextStyle(fontSize: 0)),
             Text(
               title,
               style: const TextStyle(
@@ -587,10 +700,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       });
 
       try {
-        final placemarks = await geo.placemarkFromCoordinates(
-          picked.latitude,
-          picked.longitude,
-        );
+        final placemarks = await geo.placemarkFromCoordinates(picked.latitude, picked.longitude);
         if (placemarks.isNotEmpty) {
           final p = placemarks.first;
           final street = [p.street, p.subThoroughfare]
@@ -624,11 +734,13 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
     )
-        .then((_) => _scrollCtrl.animateTo(
-      0,
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOut,
-    ));
+        .then(
+          (_) => _scrollCtrl.animateTo(
+        0,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+      ),
+    );
   }
 
   String _slugifyPartyName(String name) {
@@ -655,15 +767,18 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     return candidate;
   }
 
+  // ✅ WICHTIG: immer zurück in HomeShell(Map) -> BottomNav bleibt
   void _closeWithResult({required bool updated, Map<String, dynamic>? payload}) {
     _unfocus();
     HapticFeedback.lightImpact();
+
     widget.onGoToMapAndRefresh?.call(updated: updated, payload: payload);
-    final result = {
-      'updated': updated,
-      if (payload != null) ...payload,
-    };
-    if (mounted) Navigator.of(context).pop(result);
+
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const HomeShell(initialIndex: 2)), // 2 = Map Tab
+          (route) => false,
+    );
   }
 
   Future<void> _openExcludeFriendsDialog() async {
@@ -694,6 +809,282 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     }
   }
 
+  // ===========================
+  // ✅ Premium Bilder: Blöcke + Upload + UI
+  // ===========================
+
+  Widget _xfileThumb(XFile f) {
+    if (kIsWeb) {
+      return Image.network(f.path, width: 86, height: 86, fit: BoxFit.cover);
+    }
+    return Image.file(File(f.path), width: 86, height: 86, fit: BoxFit.cover);
+  }
+
+  Future<void> _pickImagesForBlock(int blockIndex) async {
+    _unfocus();
+    if (blockIndex < 0 || blockIndex >= _imageBlocks.length) return;
+
+    final block = _imageBlocks[blockIndex];
+    final remaining = _maxImagesPerBlock - block.images.length;
+
+    if (remaining <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Maximal 5 Bilder pro Block.")),
+      );
+      return;
+    }
+
+    final picked = await _picker.pickMultiImage(imageQuality: 80);
+    if (picked.isEmpty) return;
+
+    final toAdd = picked.take(remaining).toList();
+    setState(() => block.images.addAll(toAdd));
+
+    if (picked.length > remaining) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Es sind nur 5 Bilder pro Block erlaubt.")),
+      );
+    }
+  }
+
+  void _addBlock() {
+    if (_imageBlocks.length >= _maxImageBlocks) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Maximal 5 Blöcke möglich.")),
+      );
+      return;
+    }
+    setState(() => _imageBlocks.add(_ImageBlockDraft()));
+  }
+
+  void _removeBlock(int i) {
+    if (_imageBlocks.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Mindestens 1 Block muss bleiben.")),
+      );
+      return;
+    }
+    setState(() {
+      _imageBlocks[i].dispose();
+      _imageBlocks.removeAt(i);
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> _uploadImageBlocks({required String partyDocId}) async {
+    final List<Map<String, dynamic>> uploadedBlocks = [];
+
+    for (var i = 0; i < _imageBlocks.length; i++) {
+      final block = _imageBlocks[i];
+      final caption = block.caption.text.trim();
+
+      // komplett leere Blöcke überspringen
+      if (block.images.isEmpty && caption.isEmpty) continue;
+
+      final List<Map<String, dynamic>> uploadedImages = [];
+
+      for (final x in block.images) {
+        final bytes = await x.readAsBytes();
+        final fileName = '${DateTime.now().millisecondsSinceEpoch}_${x.name}';
+
+        final ref = FirebaseStorage.instance
+            .ref()
+            .child('party_images')
+            .child(partyDocId)
+            .child('block_$i')
+            .child(fileName);
+
+        await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
+        final url = await ref.getDownloadURL();
+
+        uploadedImages.add({'url': url, 'createdAt': FieldValue.serverTimestamp()});
+      }
+
+      uploadedBlocks.add({
+        'caption': caption,
+        'images': uploadedImages,
+        'createdAt': FieldValue.serverTimestamp(),
+        'index': i,
+      });
+    }
+
+    return uploadedBlocks;
+  }
+
+  Widget _partyImagesSection() {
+    final locked = !_isPremium;
+
+    Widget plusRow() {
+      return Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: locked ? null : _addBlock,
+              icon: const Icon(Icons.add, color: _secondary),
+              label: Text(
+                "Block hinzufügen (${_imageBlocks.length}/$_maxImageBlocks)",
+                style: const TextStyle(color: Colors.white),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: _panelBorder),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    Widget blockCard(int i) {
+      final b = _imageBlocks[i];
+
+      return Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          color: _card,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _panelBorder),
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: locked ? null : () => _pickImagesForBlock(i),
+                    icon: const Icon(Icons.add_photo_alternate_outlined, color: _secondary),
+                    label: Text(
+                      b.images.isEmpty ? "Bilder hinzufügen" : "Bilder (${b.images.length}/5)",
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: _panelBorder),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                IconButton(
+                  tooltip: "Block löschen",
+                  onPressed: locked ? null : () => _removeBlock(i),
+                  icon: const Icon(Icons.delete_outline, color: Colors.white70),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: b.caption,
+              enabled: !locked,
+              maxLength: 80,
+              style: const TextStyle(color: _textPrimary),
+              decoration: _dec(
+                "Text zu diesem Block",
+                hint: "z. B. Dresscode, Thema, Infos…",
+                icon: Icons.short_text_rounded,
+                maxLength: 80,
+              ),
+            ),
+            if (b.images.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: List.generate(b.images.length, (imgIndex) {
+                  return Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: _xfileThumb(b.images[imgIndex]),
+                      ),
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: InkWell(
+                          onTap: locked ? null : () => setState(() => b.images.removeAt(imgIndex)),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.55),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            padding: const EdgeInsets.all(4),
+                            child: const Icon(Icons.close, size: 16, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (int i = 0; i < _imageBlocks.length; i++) blockCard(i),
+        const SizedBox(height: 4),
+        plusRow(),
+      ],
+    );
+
+    if (!locked) {
+      return _section(
+        title: "Party Bilder (Premium)",
+        icon: Icons.photo_camera_back_outlined,
+        child: content,
+      );
+    }
+
+    // Locked: verblasst + tap -> Premium
+    return GestureDetector(
+      onTap: () {
+        _unfocus();
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const PremiumScreen()));
+      },
+      child: Opacity(
+        opacity: 0.45,
+        child: _section(
+          title: "Party Bilder (Premium)",
+          icon: Icons.photo_camera_back_outlined,
+          child: Stack(
+            children: [
+              content,
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    color: Colors.black.withOpacity(0.10),
+                  ),
+                  alignment: Alignment.center,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.55),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: _panelBorder),
+                    ),
+                    child: const Text(
+                      "Premium Feature – Tippen zum Freischalten",
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ===========================
+
   Future<void> _saveParty() async {
     _unfocus();
     setState(() => _triedSubmit = true);
@@ -712,18 +1103,23 @@ class _NewPartyScreenState extends State<NewPartyScreen>
 
     final name = _nameController.text.trim();
     final description = _descriptionController.text.trim();
+
     final guestLimit =
     _isUnlimitedGuests ? 'Unbegrenzt' : int.tryParse(_guestLimitController.text.trim());
+
     final price = _isFreeEntry
         ? 0.0
         : double.tryParse(_priceController.text.replaceAll(',', '.').trim()) ?? 0.0;
+
     final address = _addressController.text.trim();
     final date = _selectedDate!;
     final timeOfDay = _selectedTime!;
+
     String time = _timeController.text.trim();
     if (time.isEmpty) {
       time = "${timeOfDay.hour.toString().padLeft(2, '0')}:${timeOfDay.minute.toString().padLeft(2, '0')}";
     }
+
     final minAge = int.tryParse(_minAgeController.text.trim());
     final type = _partyType;
 
@@ -733,7 +1129,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     double? lng = _pickedLng;
 
     final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username') ?? 'unknown_user';
+    final username = (prefs.getString('username') ?? 'unknown_user').trim();
 
     if (lat == null || lng == null) {
       GeocodedLocation? loc;
@@ -776,7 +1172,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       return;
     }
 
-    final baseData = {
+    final baseData = <String, dynamic>{
       'name': name,
       'description': description,
       'guestLimit': guestLimit,
@@ -801,6 +1197,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
 
     try {
       String savedDocId;
+
       if (widget.docId == null) {
         final uniqueId = await _generateUniqueDocId(name);
         final ref = FirebaseFirestore.instance.collection('Party').doc(uniqueId);
@@ -814,9 +1211,18 @@ class _NewPartyScreenState extends State<NewPartyScreen>
         await ref.set({'docId': savedDocId}, SetOptions(merge: true));
       }
 
+      // ✅ Premium: Blocks hochladen + speichern
+      if (_isPremium) {
+        final uploadedBlocks = await _uploadImageBlocks(partyDocId: savedDocId);
+        final ref = FirebaseFirestore.instance.collection('Party').doc(savedDocId);
+        await ref.set({'imageBlocks': uploadedBlocks}, SetOptions(merge: true));
+      }
+
       await _deleteDraftSilently();
 
       HapticFeedback.mediumImpact();
+
+      // ✅ zurück in HomeShell(Map) mit BottomNav
       _closeWithResult(updated: true, payload: {
         'data': {...baseData, 'docId': savedDocId},
         'lat': lat,
@@ -824,7 +1230,9 @@ class _NewPartyScreenState extends State<NewPartyScreen>
         'docId': savedDocId,
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Fehler beim Speichern: $e")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Fehler beim Speichern: $e")),
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -837,6 +1245,8 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     try {
       await FirebaseFirestore.instance.collection('Party').doc(widget.docId).delete();
       await _deleteDraftSilently();
+
+      // ✅ auch hier zurück in HomeShell(Map)
       _closeWithResult(updated: true, payload: {'deleted': true, 'docId': widget.docId});
     } catch (_) {
       // ignore
@@ -845,38 +1255,27 @@ class _NewPartyScreenState extends State<NewPartyScreen>
     }
   }
 
+  /// ✅ BottomNav: NIEMALS PartyMapScreen direkt pushen → immer HomeShell
   Future<void> _onBottomNavTapped(int index) async {
     if (index == _currentIndex) return;
-
     setState(() => _currentIndex = index);
 
-    if (index == 3) return;
+    if (index == 3) return; // bleibt auf Neu
 
-    if (index == 1) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const PartyMapScreen()),
-      );
-      return;
-    }
+    // Lokale Indizes: 0 Feedback, 1 Map, 2 Freunde, 3 Neu
+    // HomeShell (User): 0 Feedback, 1 Freunde, 2 Map, 3 Neu, 4 Profil
+    final homeIndex = switch (index) {
+      0 => 0, // Feedback
+      1 => 2, // Map
+      2 => 1, // Freunde
+      _ => 2,
+    };
 
-    if (index == 0) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const FeedbackScreen()),
-      );
-      return;
-    }
-
-    if (index == 2) {
-      final prefs = await SharedPreferences.getInstance();
-      final me = (prefs.getString('username') ?? 'unknown_user').trim();
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => FriendsScreen(currentUsername: me)),
-      );
-      return;
-    }
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => HomeShell(initialIndex: homeIndex)),
+          (route) => false,
+    );
   }
 
   @override
@@ -885,6 +1284,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
 
     return WillPopScope(
       onWillPop: () async {
+        // ✅ zurück in HomeShell(Map), nicht einfach pop
         _closeWithResult(updated: false);
         return false;
       },
@@ -1018,8 +1418,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                         icon: Icons.groups,
                                         errorText: (!_isUnlimitedGuests &&
                                             _triedSubmit &&
-                                            (int.tryParse(_guestLimitController.text.trim()) ==
-                                                null))
+                                            (int.tryParse(_guestLimitController.text.trim()) == null))
                                             ? "Gästelimit muss eine Zahl sein."
                                             : null,
                                       ),
@@ -1065,8 +1464,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                         icon: Icons.euro,
                                         errorText: (!_isFreeEntry &&
                                             _triedSubmit &&
-                                            (double.tryParse(
-                                                _priceController.text.replaceAll(',', '.').trim()) ==
+                                            (double.tryParse(_priceController.text.replaceAll(',', '.').trim()) ==
                                                 null))
                                             ? "Preis muss eine Zahl sein."
                                             : null,
@@ -1099,15 +1497,9 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                 keyboardType: TextInputType.number,
                                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                                 style: const TextStyle(color: _textPrimary),
-                                decoration: _dec(
-                                  "Mindestalter",
-                                  hint: "z. B. 16",
-                                  icon: Icons.cake_outlined,
-                                ),
+                                decoration: _dec("Mindestalter", hint: "z. B. 16", icon: Icons.cake_outlined),
                                 validator: (v) {
-                                  if (v == null || v.trim().isEmpty) {
-                                    return "Mindestalter darf nicht leer sein.";
-                                  }
+                                  if (v == null || v.trim().isEmpty) return "Mindestalter darf nicht leer sein.";
                                   final n = int.tryParse(v.trim());
                                   if (n == null) return "Mindestalter muss eine Zahl sein.";
                                   if (n < 0) return "Mindestalter darf nicht negativ sein.";
@@ -1199,38 +1591,6 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 10),
-                              Wrap(
-                                spacing: 8,
-                                children: [
-                                  _quickTimeChip("Heute 22:00", () {
-                                    _unfocus();
-                                    final now = DateTime.now();
-                                    _selectedDate = DateTime(now.year, now.month, now.day);
-                                    _selectedTime = const TimeOfDay(hour: 22, minute: 0);
-                                    _timeController.text = "22:00";
-                                    setState(() {});
-                                  }),
-                                  _quickTimeChip("Morgen 21:00", () {
-                                    _unfocus();
-                                    final now = DateTime.now().add(const Duration(days: 1));
-                                    _selectedDate = DateTime(now.year, now.month, now.day);
-                                    _selectedTime = const TimeOfDay(hour: 21, minute: 0);
-                                    _timeController.text = "21:00";
-                                    setState(() {});
-                                  }),
-                                  _quickTimeChip("Fr 22:00", () {
-                                    _unfocus();
-                                    final now = DateTime.now();
-                                    final diff = (5 - now.weekday + 7) % 7;
-                                    final d = now.add(Duration(days: diff == 0 ? 7 : diff));
-                                    _selectedDate = DateTime(d.year, d.month, d.day);
-                                    _selectedTime = const TimeOfDay(hour: 22, minute: 0);
-                                    _timeController.text = "22:00";
-                                    setState(() {});
-                                  }),
-                                ],
-                              ),
                               if (_triedSubmit && _selectedDate == null)
                                 const Padding(
                                   padding: EdgeInsets.only(top: 8),
@@ -1288,8 +1648,11 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                             ],
                           ),
                         ),
+                        const SizedBox(height: 14),
 
-                        // ✅ NEU: großer, mittiger, rot gefüllter Save-Button am Ende
+                        // ✅ Premium Bilder Sektion (Blöcke)
+                        _partyImagesSection(),
+
                         const SizedBox(height: 28),
                         Center(
                           child: ElevatedButton.icon(
@@ -1309,12 +1672,11 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                               elevation: 8,
                               shadowColor: _accent,
                               padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                             ),
                           ),
                         ),
+
                         if (isEditing) ...[
                           const SizedBox(height: 14),
                           Center(
@@ -1323,10 +1685,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                               icon: const Icon(Icons.delete_outline, color: _accent),
                               label: const Text(
                                 "Party löschen",
-                                style: TextStyle(
-                                  color: _accent,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                                style: TextStyle(color: _accent, fontWeight: FontWeight.w700),
                               ),
                             ),
                           ),
@@ -1339,6 +1698,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
               ),
             ),
           ),
+
           if (_isLoading)
             Positioned.fill(
               child: IgnorePointer(
@@ -1346,9 +1706,7 @@ class _NewPartyScreenState extends State<NewPartyScreen>
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   color: Colors.black.withOpacity(0.35),
-                  child: const Center(
-                    child: CircularProgressIndicator(strokeWidth: 3),
-                  ),
+                  child: const Center(child: CircularProgressIndicator(strokeWidth: 3)),
                 ),
               ),
             ),
@@ -1356,15 +1714,14 @@ class _NewPartyScreenState extends State<NewPartyScreen>
       ),
     );
   }
+}
 
-  Widget _quickTimeChip(String label, VoidCallback onPressed) {
-    return ActionChip(
-      label: Text(label),
-      onPressed: onPressed,
-      backgroundColor: _card,
-      shape: StadiumBorder(side: BorderSide(color: _panelBorder)),
-      labelStyle: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-    );
-  }
+// ===========================
+// Helper: Draft Block
+// ===========================
+class _ImageBlockDraft {
+  final TextEditingController caption = TextEditingController();
+  final List<XFile> images = [];
+
+  void dispose() => caption.dispose();
 }

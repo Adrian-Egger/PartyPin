@@ -6,7 +6,6 @@ import 'feedback_screen.dart';
 import 'party_map_screen.dart';
 import 'new_party.dart';
 import '../Social/friends_view.dart';
-import 'profil_settings_screen.dart';
 
 // Gate Screens
 import 'create_account_screen.dart';
@@ -16,6 +15,9 @@ import 'selection_screen.dart';
 // Bar Tabs
 import 'bar_event_screen.dart';
 import 'bar_feedback_screen.dart';
+
+// ✅ MyBarTab
+import 'my_bar_tab.dart';
 
 enum _GateState { loading, login, terms, selection, ready }
 
@@ -35,6 +37,11 @@ class _HomeShellState extends State<HomeShell> {
   _GateState _gate = _GateState.loading;
 
   int _currentIndex = 2;
+
+  /// ✅ Wichtig: IndexedStack baut alle Tabs sofort.
+  /// MyBarTab öffnet nur, wenn _tabIndex wirklich auf 3 wechselt.
+  final ValueNotifier<int> _tabIndex = ValueNotifier<int>(2);
+
   String _username = "";
   bool _isBarAccount = false;
   String _barId = "";
@@ -46,6 +53,12 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     _bootGate();
+  }
+
+  @override
+  void dispose() {
+    _tabIndex.dispose();
+    super.dispose();
   }
 
   int _clampIndex(int i, int max) {
@@ -86,13 +99,11 @@ class _HomeShellState extends State<HomeShell> {
         return;
       }
 
-      // ✅ Alles ok → Tabs bauen
       await _loadUserAndBuildPages();
       if (!mounted) return;
       setState(() => _gate = _GateState.ready);
     } catch (_) {
       if (!mounted) return;
-      // Fallback: lieber Selection statt “kaputt”
       setState(() => _gate = _GateState.selection);
     }
   }
@@ -112,13 +123,23 @@ class _HomeShellState extends State<HomeShell> {
       _barId = barId;
 
       if (_isBarAccount) {
+        // ✅ Bar account: 4 Tabs
         _pages = <Widget>[
           BarEventScreen(barId: _barId), // 0
-          const PartyMapScreen(),        // 1
+          const PartyMapScreen(),        // 1 (Start)
           const BarFeedbackScreen(),     // 2
+          MyBarTab(
+            barId: _barId,
+            myIndex: 3,
+            tabIndex: _tabIndex,
+          ), // 3 (öffnet BarBottomSheet intern mit barId)
         ];
-        _currentIndex = _clampIndex(widget.initialIndex, _pages.length - 1);
+
+        // ✅ Bar startet IMMER auf Map (Index 1)
+        _currentIndex = 1;
+        _tabIndex.value = 1;
       } else {
+        // ✅ Normal Account bleibt exakt bei 4 Tabs
         _pages = <Widget>[
           const FeedbackScreen(), // 0
           _username.isEmpty
@@ -126,26 +147,40 @@ class _HomeShellState extends State<HomeShell> {
               : FriendsScreen(currentUsername: _username), // 1
           const PartyMapScreen(), // 2
           const NewPartyScreen(), // 3
-          const ProfileSettingsScreen(), // 4
         ];
+
         _currentIndex = _clampIndex(widget.initialIndex, _pages.length - 1);
+        _tabIndex.value = _currentIndex;
       }
     });
   }
 
   void _onBottomNavTapped(int i) {
     if (!_isTabsReady) return;
+
+    // ✅ WICHTIG: Für "Meine Bar" soll bei erneutem Tap wieder öffnen
+    // (weil MyBarTab nur auf tabIndex-change reagiert)
+    if (_isBarAccount && i == 3) {
+      // kurz auf einen anderen Index togglen, dann zurück auf 3
+      if (_tabIndex.value == 3) {
+        final fallback = _currentIndex == 3 ? 1 : _currentIndex; // meist Map
+        _tabIndex.value = fallback;
+      }
+      setState(() => _currentIndex = 3);
+      _tabIndex.value = 3;
+      return;
+    }
+
     if (i == _currentIndex) return;
+
     setState(() => _currentIndex = i);
+    _tabIndex.value = i;
   }
 
   @override
   Widget build(BuildContext context) {
-    // Gate-Screens: HomeShell bleibt Root, BottomNav wird ausgeblendet.
     if (_gate != _GateState.ready) {
-      return Scaffold(
-        body: _buildGateBody(),
-      );
+      return Scaffold(body: _buildGateBody());
     }
 
     if (!_isTabsReady) {
@@ -168,6 +203,7 @@ class _HomeShellState extends State<HomeShell> {
           BottomNavigationBarItem(icon: Icon(Icons.celebration), label: "Event"),
           BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
           BottomNavigationBarItem(icon: Icon(Icons.feedback), label: "Feedback"),
+          BottomNavigationBarItem(icon: Icon(Icons.store), label: "Meine Bar"),
         ]
             : const [
           BottomNavigationBarItem(icon: Icon(Icons.feedback), label: "Feedback"),
