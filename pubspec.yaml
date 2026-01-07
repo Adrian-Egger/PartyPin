@@ -1,7 +1,7 @@
 name: party_pin
 description: App for Partypeople
 publish_to: "none"
-version: 4.0.0+10
+version: 4.2.0+12
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
