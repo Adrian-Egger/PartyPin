@@ -401,75 +401,93 @@ class LegalScreen extends StatelessWidget {
               children: [
                 _section(
                   "Impressum",
-                  "PartyPin\nE-Mail: mypartypin@gmail.com\nAdresse: Beispielstraße 1, 1010 Wien\n"
-                      "Geschäftsführer: Max Mustermann\nUID: ATU12345678",
+                  "PartyPin\n"
+                      "E-Mail: mypartypin@gmail.com\n"
+                      "Sitz: Österreich\n\n"
+                      "Diese App ist eine technische Plattform zur Anzeige und Vermittlung von Veranstaltungen. "
+                      "PartyPin tritt zu keinem Zeitpunkt als Veranstalter, Mitveranstalter oder Verantwortlicher für Inhalte oder Events auf.",
                 ),
+
                 _section(
                   "Datenschutzerklärung",
-                  """1. Erhobene Daten
-- Registrierungsdaten (Vorname, Nachname, Alter, Benutzername)
-- Standortdaten (zur Anzeige von Partys)
+                  """1. Allgemeines  
+Der Schutz personenbezogener Daten ist uns wichtig. Dennoch weisen wir ausdrücklich darauf hin, dass die Nutzung internetbasierter Dienste stets mit Risiken verbunden ist. Eine vollständige Datensicherheit kann nicht garantiert werden.
+
+2. Verarbeitete Daten  
+Je nach Nutzung der App können folgende Daten verarbeitet werden:
+- Registrierungsdaten (z. B. Benutzername, Alter)
 - Profildaten (z. B. Profilbild)
-- Kommunikationsinhalte zwischen Nutzern
+- Standortdaten (freiwillig oder gerätebasiert)
+- Nutzerinhalte (Texte, Bilder, Partyinformationen)
+- Technische Daten (IP-Adresse, Geräteinformationen)
 
-2. Zweck der Verarbeitung
-- Registrierung & Anmeldung
-- Partys anzeigen & Teilnahme verwalten
-- Kommunikation zwischen Nutzern
-- Sicherheit der App gewährleisten
+3. Zweck der Verarbeitung  
+- Betrieb und Bereitstellung der App  
+- Anzeige und Verwaltung von Partys  
+- Kommunikation zwischen Nutzern  
+- Missbrauchs- und Sicherheitsprävention  
 
-3. Rechtsgrundlage
-- Art. 6 Abs. 1 lit. b DSGVO
-- Art. 6 Abs. 1 lit. f DSGVO
+4. Rechtsgrundlagen  
+Die Verarbeitung erfolgt gemäß Art. 6 Abs. 1 lit. b, c und f DSGVO.
 
-4. Weitergabe
-- Nur gesetzlich erforderlich oder zur App-Funktion notwendig
+5. Haftungsausschluss – Daten  
+Wir übernehmen keine Haftung für:
+- Datenverluste  
+- unbefugten Zugriff Dritter  
+- Hackerangriffe  
+- technische Störungen  
+- Fehlübertragungen  
+- Ausfälle externer Dienste (z. B. Server, Cloud, Firebase)
 
-5. Speicherung & Löschung
-- Daten solange wie das Nutzerkonto besteht
+Die Nutzung der App erfolgt diesbezüglich ausdrücklich auf eigenes Risiko.
 
-6. Rechte der Nutzer
-- Auskunft, Berichtigung, Löschung, Einschränkung, Widerspruch, Datenübertragbarkeit
-- Kontakt: mypartypin@gmail.com
+6. Weitergabe an Dritte  
+Eine Weitergabe erfolgt nur, soweit dies technisch erforderlich, gesetzlich vorgeschrieben oder zur Durchsetzung der Nutzungsbedingungen notwendig ist. Für die Datenverarbeitung durch Drittanbieter übernehmen wir keine Haftung.
 
-7. Sicherheit
-- Technische & organisatorische Maßnahmen
+7. Speicherdauer  
+Daten werden grundsätzlich solange gespeichert, wie ein Nutzerkonto besteht oder gesetzliche Verpflichtungen dies erfordern.
 
-8. Änderungen
-- Anpassung an App-Funktionen oder rechtliche Anforderungen
-
-9. Anwendbares Recht
-- Recht der Bundesrepublik Österreich, soweit zwingendes Verbraucherrecht nicht entgegensteht
+8. Änderungen  
+Diese Datenschutzerklärung kann jederzeit angepasst werden. Die weitere Nutzung der App gilt als Zustimmung zur aktuellen Version.
 """,
                 ),
+
                 _section(
                   "AGB / Nutzungsbedingungen",
-                  """1. Geltungsbereich
-- App zur Darstellung & Teilnahme an Partys
+                  """1. Rolle von PartyPin  
+PartyPin ist ausschließlich eine technische Plattform. Wir sind weder Veranstalter noch Verantwortliche für Partys, Inhalte oder Teilnehmer.
 
-2. Registrierung
-- Wahrheitsgemäße Angaben nötig
+2. Teilnahme an Veranstaltungen  
+Die Teilnahme an Partys erfolgt ausschließlich auf eigenes Risiko. PartyPin übernimmt keinerlei Verantwortung oder Haftung für Ereignisse im Zusammenhang mit Veranstaltungen.
 
-3. Nutzung der App
-- Partys anlegen & verwalten
-- Verantwortlich für Inhalte sind die Nutzer
+3. Haftungsausschluss – Veranstaltungen  
+Wir haften insbesondere nicht für:
+- Verletzungen oder Todesfälle  
+- Sachschäden oder Diebstahl  
+- Alkohol-, Drogen- oder Medikamentenkonsum  
+- sexuelle Übergriffe oder Belästigungen  
+- Streitigkeiten zwischen Nutzern  
+- strafbare Handlungen  
+- polizeiliche oder behördliche Maßnahmen  
+- abgesagte, verlegte oder manipulierte Events  
 
-4. Pflichten der Nutzer
-- Keine rechtswidrigen Inhalte
-- Keine Nutzung zum Zwecke von Belästigung oder Betrug
-- Wahrung der Rechte Dritter
+4. Nutzerinhalte  
+Alle Inhalte werden von Nutzern erstellt. Nutzer sind allein verantwortlich für Rechtmäßigkeit, Richtigkeit und Folgen ihrer Inhalte.
 
-5. Haftung
-- Betreiber übernehmen keine Garantie für Inhalte oder Verfügbarkeit
+5. Verfügbarkeit  
+Wir garantieren keine ständige oder fehlerfreie Verfügbarkeit der App. Wartungen, Ausfälle oder Beendigungen sind jederzeit möglich.
 
-6. Änderungen der AGB
-- Änderungen werden in der App angezeigt
-- Nutzung nach Änderung gilt als Zustimmung
+6. Haftungsbeschränkung  
+Jegliche Haftung ist – soweit gesetzlich zulässig – ausgeschlossen. Eine Haftung besteht ausschließlich bei Vorsatz oder grober Fahrlässigkeit, soweit zwingend gesetzlich vorgeschrieben.
 
-7. Anwendbares Recht
-- Österreichisches Recht soweit zulässig
+7. Änderungen der Bedingungen  
+Diese Nutzungsbedingungen können jederzeit geändert werden. Die fortgesetzte Nutzung gilt als Zustimmung.
+
+8. Anwendbares Recht  
+Es gilt österreichisches Recht, soweit zwingende Verbraucherschutzvorschriften nichts anderes bestimmen.
 """,
                 ),
+
                 const SizedBox(height: 20),
                 Center(
                   child: ElevatedButton(
@@ -495,6 +513,7 @@ class LegalScreen extends StatelessWidget {
       ),
     );
   }
+
 }
 
 // =======================

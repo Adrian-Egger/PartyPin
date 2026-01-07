@@ -5,11 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'friends_model.dart';
 
-// ✅ NEU: BottomNav Targets
-import '../Screens/party_map_screen.dart';
-import '../Screens/feedback_screen.dart';
-import '../Screens/new_party.dart';
-
 class FriendsScreen extends StatefulWidget {
   final String currentUsername;
 
@@ -55,8 +50,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
   // ✅ Cache: damit „Freunde durchsuchen“ auch nach Vorname/Nachname/Voller Name/Username geht
   final Map<String, _FriendVM> _friendVmCache = {};
 
-  // ✅ NEU: BottomNav Index (0=Feedback, 1=Map, 2=Freunde, 3=Neue Party)
-  int _currentIndex = 2;
+  // ✅ Tastatur überall schließen
+  void _dismissKeyboard() {
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
 
   @override
   void initState() {
@@ -103,15 +100,17 @@ class _FriendsScreenState extends State<FriendsScreen> {
         .endAt(['${_query}\uf8ff'])
         .limit(20)
         .snapshots()
-        .map((qs) => qs.docs
-        .map((d) {
-      final data = d.data();
-      return (data['username'] ?? '').toString();
-    })
-        .where((uname) =>
-    uname.isNotEmpty &&
-        uname.toLowerCase() != widget.currentUsername.trim().toLowerCase())
-        .toList());
+        .map(
+          (qs) => qs.docs
+          .map((d) {
+        final data = d.data();
+        return (data['username'] ?? '').toString();
+      })
+          .where((uname) =>
+      uname.isNotEmpty &&
+          uname.toLowerCase() != widget.currentUsername.trim().toLowerCase())
+          .toList(),
+    );
   }
 
   void _showSnack(
@@ -149,6 +148,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
         final uname = (data['username'] ?? '').toString();
         if (uname.isNotEmpty) return (docId: d.id, username: uname);
       }
+
       final qs = await _model.users.where('username', isEqualTo: n).limit(1).get();
       if (qs.docs.isNotEmpty) {
         final d = qs.docs.first;
@@ -206,6 +206,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
       _showSnack('Anfrage gesendet', color: _ok, icon: Icons.check_circle_rounded);
       _searchCtrl.clear();
       if (mounted) setState(() => _query = '');
+      _dismissKeyboard();
     } else {
       _showSnack('Fehler: $err', color: _err, icon: Icons.error_outline);
     }
@@ -322,7 +323,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
         return vm;
       }));
 
-      // Reihenfolge wie `others` behalten:
       final map = {for (final x in fetched) x.username.toLowerCase(): x};
       for (final u in missing) {
         final vm = map[u.toLowerCase()];
@@ -330,7 +330,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
       }
     }
 
-    // vms ist jetzt nicht zwingend exakt in others-Reihenfolge, daher sauber sortieren:
     final order = <String, int>{};
     for (int i = 0; i < others.length; i++) {
       order[others[i].toLowerCase()] = i;
@@ -341,226 +340,205 @@ class _FriendsScreenState extends State<FriendsScreen> {
     return vms;
   }
 
-  // ✅ NEU: BottomNav Navigation
-  Future<void> _onBottomNavTapped(int index) async {
-    if (index == _currentIndex) return;
-
-    setState(() => _currentIndex = index);
-
-    if (index == 2) return;
-
-    if (index == 1) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const PartyMapScreen()),
-      );
-      return;
-    }
-
-    if (index == 0) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const FeedbackScreen()),
-      );
-      return;
-    }
-
-    if (index == 3) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const NewPartyScreen()),
-      );
-      return;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final me = widget.currentUsername.trim();
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [_bgTop, _bgBottom],
+    // ✅ Kein bottomNavigationBar hier -> verhindert doppelte BottomNav
+    // ✅ Tap irgendwo schließt Tastatur
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: _dismissKeyboard,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [_bgTop, _bgBottom],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              // ✅ Header: wie Feedback (Chip + Emojis + rot umrandet) + ✅ Zurückbutton entfernt
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-                child: Row(
-                  children: [
-                    const SizedBox(width: 48), // Platzhalter statt Back-Button
-                    Expanded(
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: _accentSoft,
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: _accentLine, width: 1),
-                          ),
-                          child: const Text(
-                            " Freunde 👥",
-                            style: TextStyle(
-                              color: _text,
-                              fontWeight: FontWeight.w900,
-                              fontSize: 24,
-                              letterSpacing: 0.2,
+          child: SafeArea(
+            child: Column(
+              children: [
+                // Header
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 48),
+                      Expanded(
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _accentSoft,
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: _accentLine, width: 1),
+                            ),
+                            child: const Text(
+                              " Freunde 👥",
+                              style: TextStyle(
+                                color: _text,
+                                fontWeight: FontWeight.w900,
+                                fontSize: 24,
+                                letterSpacing: 0.2,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                    StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: _model.reqs.where('status', isEqualTo: 'pending').snapshots(),
-                      builder: (ctx, snap) {
-                        int count = 0;
-                        if (snap.hasData) {
-                          final all = snap.data!.docs;
-                          count = all.where((d) {
-                            final m = d.data();
-                            final toU = (m['to'] ?? m['toUsername'] ?? '').toString().trim();
-                            final toD = (m['toDocId'] ?? '').toString().trim();
-                            return toU == me ||
-                                (_model.myDocId != null && toD == _model.myDocId);
-                          }).length;
-                        }
-                        final label = count == 0 ? null : (count > 9 ? '9+' : '$count');
+                      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: _model.reqs.where('status', isEqualTo: 'pending').snapshots(),
+                        builder: (ctx, snap) {
+                          int count = 0;
+                          if (snap.hasData) {
+                            final all = snap.data!.docs;
+                            count = all.where((d) {
+                              final m = d.data();
+                              final toU = (m['to'] ?? m['toUsername'] ?? '').toString().trim();
+                              final toD = (m['toDocId'] ?? '').toString().trim();
+                              return toU == me ||
+                                  (_model.myDocId != null && toD == _model.myDocId);
+                            }).length;
+                          }
+                          final label = count == 0 ? null : (count > 9 ? '9+' : '$count');
 
-                        return Stack(
-                          alignment: Alignment.center,
-                          clipBehavior: Clip.none,
-                          children: [
-                            IconButton(
-                              tooltip: 'Mich geaddet',
-                              icon: const Icon(Icons.person_add, color: _text),
-                              onPressed: _openIncomingSheet,
-                            ),
-                            if (label != null)
-                              Positioned(
-                                right: 6,
-                                top: 10,
-                                child: Container(
-                                  padding:
-                                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: _accent,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(color: Colors.white, width: 1),
-                                  ),
-                                  child: Text(
-                                    label,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w900,
+                          return Stack(
+                            alignment: Alignment.center,
+                            clipBehavior: Clip.none,
+                            children: [
+                              IconButton(
+                                tooltip: 'Mich geaddet',
+                                icon: const Icon(Icons.person_add, color: _text),
+                                onPressed: _openIncomingSheet,
+                              ),
+                              if (label != null)
+                                Positioned(
+                                  right: 6,
+                                  top: 10,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: _accent,
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(color: Colors.white, width: 1),
+                                    ),
+                                    child: Text(
+                                      label,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w900,
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                          ],
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-
-              // Search Add
-              Container(
-                margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                decoration: BoxDecoration(
-                  color: _panel,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: _border),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(.45),
-                      blurRadius: 16,
-                      offset: const Offset(0, 10),
-                    )
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.search_rounded, color: _accent),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _searchCtrl,
-                        style: const TextStyle(color: _text),
-                        decoration: const InputDecoration(
-                          hintText: 'Neue Freunde finden',
-                          hintStyle: TextStyle(color: _muted),
-                          border: InputBorder.none,
-                        ),
-                        textInputAction: TextInputAction.search,
-                        onSubmitted: _sendFriendRequest,
-                      ),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: () => _sendFriendRequest(_searchCtrl.text),
-                      icon: const Icon(Icons.person_add_alt_1),
-                      label: const Text('Add'),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Friends Filter
-              Container(
-                margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: _panel,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: _border),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.filter_list, color: _accent),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _friendsFilterCtrl,
-                        style: const TextStyle(color: _text),
-                        decoration: const InputDecoration(
-                          hintText: 'Freunde durchsuchen (Name oder Username)',
-                          hintStyle: TextStyle(color: _muted),
-                          border: InputBorder.none,
-                        ),
-                      ),
-                    ),
-                    if (_friendsFilter.isNotEmpty)
-                      IconButton(
-                        tooltip: 'Filter löschen',
-                        onPressed: () {
-                          _friendsFilterCtrl.clear();
-                          setState(() => _friendsFilter = '');
+                            ],
+                          );
                         },
-                        icon: const Icon(Icons.close, color: _muted),
                       ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
 
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: _query.isEmpty
-                      ? _buildFriendsList(me, filter: _friendsFilter)
-                      : _buildSearchResults(me),
+                // Search Add
+                Container(
+                  margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: _panel,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: _border),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(.45),
+                        blurRadius: 16,
+                        offset: const Offset(0, 10),
+                      )
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.search_rounded, color: _accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _searchCtrl,
+                          style: const TextStyle(color: _text),
+                          decoration: const InputDecoration(
+                            hintText: 'Neue Freunde finden',
+                            hintStyle: TextStyle(color: _muted),
+                            border: InputBorder.none,
+                          ),
+                          textInputAction: TextInputAction.search,
+                          onSubmitted: (v) {
+                            _dismissKeyboard();
+                            _sendFriendRequest(v);
+                          },
+                        ),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: () {
+                          _dismissKeyboard();
+                          _sendFriendRequest(_searchCtrl.text);
+                        },
+                        icon: const Icon(Icons.person_add_alt_1),
+                        label: const Text('Add'),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+
+                // Friends Filter
+                Container(
+                  margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: _panel,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _border),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.filter_list, color: _accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _friendsFilterCtrl,
+                          style: const TextStyle(color: _text),
+                          decoration: const InputDecoration(
+                            hintText: 'Freunde durchsuchen (Name oder Username)',
+                            hintStyle: TextStyle(color: _muted),
+                            border: InputBorder.none,
+                          ),
+                        ),
+                      ),
+                      if (_friendsFilter.isNotEmpty)
+                        IconButton(
+                          tooltip: 'Filter löschen',
+                          onPressed: () {
+                            _friendsFilterCtrl.clear();
+                            setState(() => _friendsFilter = '');
+                            _dismissKeyboard();
+                          },
+                          icon: const Icon(Icons.close, color: _muted),
+                        ),
+                    ],
+                  ),
+                ),
+
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: _query.isEmpty
+                        ? _buildFriendsList(me, filter: _friendsFilter)
+                        : _buildSearchResults(me),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -602,14 +580,15 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
             final all = fSnap.data!;
             final q = filter.trim().toLowerCase();
-
-            final filtered = q.isEmpty ? all : all.where((vm) => vm.searchBlob.contains(q)).toList();
+            final filtered =
+            q.isEmpty ? all : all.where((vm) => vm.searchBlob.contains(q)).toList();
 
             if (filtered.isEmpty) {
               return const _EmptyHint(text: 'Kein Freund gefunden', emoji: '😶');
             }
 
             return ListView.separated(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               itemCount: filtered.length,
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (_, i) {
@@ -648,6 +627,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
         }
 
         return ListView.separated(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           itemCount: users.length,
           separatorBuilder: (_, __) => const SizedBox(height: 8),
           itemBuilder: (ctx, i) {
@@ -725,9 +705,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   );
                 }
 
-                if (rel == RelStatus.friends) {
-                  return const SizedBox.shrink();
-                }
+                if (rel == RelStatus.friends) return const SizedBox.shrink();
 
                 if (rel == RelStatus.incomingPending) {
                   return shell(
@@ -753,7 +731,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               ElevatedButton(
-                                onPressed: () => _accept(uname, me),
+                                onPressed: () {
+                                  _dismissKeyboard();
+                                  _accept(uname, me);
+                                },
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: _ok,
                                   foregroundColor: Colors.white,
@@ -770,7 +751,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
                               const SizedBox(height: 6),
                               IconButton(
                                 tooltip: 'Ablehnen',
-                                onPressed: () => _decline(uname, me),
+                                onPressed: () {
+                                  _dismissKeyboard();
+                                  _decline(uname, me);
+                                },
                                 icon: const Icon(Icons.close_rounded, color: _err, size: 26),
                               ),
                             ],
@@ -803,10 +787,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                           const SizedBox(width: 10),
                           const Text(
                             'pending',
-                            style: TextStyle(
-                              color: _muted,
-                              fontWeight: FontWeight.w900,
-                            ),
+                            style: TextStyle(color: _muted, fontWeight: FontWeight.w900),
                           ),
                         ],
                       ),
@@ -834,7 +815,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
                         ),
                         const SizedBox(width: 10),
                         FilledButton.tonalIcon(
-                          onPressed: () => _sendFriendRequest(uname),
+                          onPressed: () {
+                            _dismissKeyboard();
+                            _sendFriendRequest(uname);
+                          },
                           icon: const Icon(Icons.person_add_alt_1),
                           label: const Text('Add'),
                         ),
@@ -855,6 +839,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final myDoc = _model.myDocId;
     final stream = _model.reqs.where('status', isEqualTo: 'pending').snapshots();
 
+    _dismissKeyboard();
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -869,107 +855,118 @@ class _FriendsScreenState extends State<FriendsScreen> {
           maxChildSize: 0.9,
           expand: false,
           builder: (ctx, scrollController) {
-            return SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-                child: Column(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(999),
+            return GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _dismissKeyboard,
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Mich geaddet',
-                      style: TextStyle(
-                        color: _text,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 18,
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Mich geaddet',
+                        style: TextStyle(
+                          color: _text,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                        stream: stream,
-                        builder: (ctx2, s2) {
-                          if (s2.hasError) {
-                            return Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: _ErrorHint(err: s2.error.toString()),
-                            );
-                          }
-
-                          final all = s2.data?.docs ?? const [];
-                          final docs = all.where((d) {
-                            final m = d.data();
-                            final toU = (m['to'] ?? m['toUsername'] ?? '').toString().trim();
-                            final toD = (m['toDocId'] ?? '').toString().trim();
-                            return toU == me || (myDoc != null && toD == myDoc);
-                          }).toList();
-
-                          if (docs.isEmpty) {
-                            return const Padding(
-                              padding: EdgeInsets.all(16),
-                              child: _EmptyHint(
-                                text: 'Niemand hat dich geaddet',
-                                emoji: '😶',
-                              ),
-                            );
-                          }
-
-                          docs.sort((a, b) {
-                            final at = a.data()['ts'];
-                            final bt = b.data()['ts'];
-                            final an = at is Timestamp ? at.toDate() : DateTime(0);
-                            final bn = bt is Timestamp ? bt.toDate() : DateTime(0);
-                            return bn.compareTo(an);
-                          });
-
-                          return ListView.separated(
-                            controller: scrollController,
-                            padding: const EdgeInsets.symmetric(vertical: 6),
-                            itemCount: docs.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 10),
-                            itemBuilder: (_, i) {
-                              final m = docs[i].data();
-                              final fromU = (m['from'] ?? '').toString();
-                              final fromDoc = (m['fromDocId'] ?? '').toString();
-                              final toU = (m['to'] ?? '').toString();
-
-                              return FutureBuilder<Map<String, dynamic>?>(
-                                future: _model.getUser(
-                                  docId: fromDoc.isNotEmpty ? fromDoc : null,
-                                  username: fromU,
-                                ),
-                                builder: (ctx, uSnap) {
-                                  final user = uSnap.data ?? {};
-                                  final first = (user['vorname'] ?? '').toString().trim();
-                                  final last = (user['nachname'] ?? '').toString().trim();
-                                  final full = (first + ' ' + last).trim().isEmpty
-                                      ? fromU
-                                      : ('$first $last').trim();
-                                  final photo = (user['photoUrl'] ?? '').toString().trim();
-
-                                  return _RequestCard(
-                                    photoUrl: photo,
-                                    title: full,
-                                    subtitle: 'möchte dich adden',
-                                    onAccept: () => _accept(fromU, toU),
-                                    onDecline: () => _decline(fromU, toU),
-                                  );
-                                },
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                          stream: stream,
+                          builder: (ctx2, s2) {
+                            if (s2.hasError) {
+                              return Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: _ErrorHint(err: s2.error.toString()),
                               );
-                            },
-                          );
-                        },
+                            }
+
+                            final all = s2.data?.docs ?? const [];
+                            final docs = all.where((d) {
+                              final m = d.data();
+                              final toU = (m['to'] ?? m['toUsername'] ?? '').toString().trim();
+                              final toD = (m['toDocId'] ?? '').toString().trim();
+                              return toU == me || (myDoc != null && toD == myDoc);
+                            }).toList();
+
+                            if (docs.isEmpty) {
+                              return const Padding(
+                                padding: EdgeInsets.all(16),
+                                child: _EmptyHint(
+                                  text: 'Niemand hat dich geaddet',
+                                  emoji: '😶',
+                                ),
+                              );
+                            }
+
+                            docs.sort((a, b) {
+                              final at = a.data()['ts'];
+                              final bt = b.data()['ts'];
+                              final an = at is Timestamp ? at.toDate() : DateTime(0);
+                              final bn = bt is Timestamp ? bt.toDate() : DateTime(0);
+                              return bn.compareTo(an);
+                            });
+
+                            return ListView.separated(
+                              controller: scrollController,
+                              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              itemCount: docs.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              itemBuilder: (_, i) {
+                                final m = docs[i].data();
+                                final fromU = (m['from'] ?? '').toString();
+                                final fromDoc = (m['fromDocId'] ?? '').toString();
+                                final toU = (m['to'] ?? '').toString();
+
+                                return FutureBuilder<Map<String, dynamic>?>(
+                                  future: _model.getUser(
+                                    docId: fromDoc.isNotEmpty ? fromDoc : null,
+                                    username: fromU,
+                                  ),
+                                  builder: (ctx, uSnap) {
+                                    final user = uSnap.data ?? {};
+                                    final first = (user['vorname'] ?? '').toString().trim();
+                                    final last = (user['nachname'] ?? '').toString().trim();
+                                    final full = (first + ' ' + last).trim().isEmpty
+                                        ? fromU
+                                        : ('$first $last').trim();
+                                    final photo = (user['photoUrl'] ?? '').toString().trim();
+
+                                    return _RequestCard(
+                                      photoUrl: photo,
+                                      title: full,
+                                      subtitle: 'möchte dich adden',
+                                      onAccept: () {
+                                        _dismissKeyboard();
+                                        _accept(fromU, toU);
+                                      },
+                                      onDecline: () {
+                                        _dismissKeyboard();
+                                        _decline(fromU, toU);
+                                      },
+                                    );
+                                  },
+                                );
+                              },
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );
@@ -1016,7 +1013,7 @@ class _FriendCard extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(
-          color: _FriendsScreenState._accent.withOpacity(0.35), // ✅ minimal rot
+          color: _FriendsScreenState._accent.withOpacity(0.35),
           width: 1,
         ),
       ),
@@ -1095,7 +1092,7 @@ class _RequestCard extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(
-          color: _FriendsScreenState._accent.withOpacity(0.35), // ✅ minimal rot
+          color: _FriendsScreenState._accent.withOpacity(0.35),
           width: 1,
         ),
       ),

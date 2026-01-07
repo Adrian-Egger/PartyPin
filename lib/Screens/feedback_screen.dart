@@ -120,6 +120,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   // Helpers
   DateTime _nowUtc() => DateTime.now().toUtc();
 
+  // ✅ Tastatur überall schließen (Tap irgendwo)
+  void _dismissKeyboard() {
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
   void _toast(
       String msg, {
         Color color = _info,
@@ -201,7 +206,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   // ✅ schreibt fehlendes rand bei geladenen docs einmalig nach
-  Future<void> _ensureRandForDocs(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
+  Future<void> _ensureRandForDocs(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
     try {
       final batch = FirebaseFirestore.instance.batch();
       bool hasAny = false;
@@ -209,7 +215,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       for (final d in docs) {
         final data = d.data();
         if (!data.containsKey('rand') || data['rand'] == null) {
-          batch.set(d.reference, {'rand': Random().nextDouble()}, SetOptions(merge: true));
+          batch.set(d.reference, {'rand': Random().nextDouble()},
+              SetOptions(merge: true));
           hasAny = true;
         }
       }
@@ -321,7 +328,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     }
 
     try {
-      final docRef = FirebaseFirestore.instance.collection("feedback_quota").doc(_userKey);
+      final docRef =
+      FirebaseFirestore.instance.collection("feedback_quota").doc(_userKey);
       final snap = await docRef.get();
 
       final nowUtc = _nowUtc();
@@ -423,8 +431,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
     _sendingVN.value = true;
 
-    final quotaRef = FirebaseFirestore.instance.collection("feedback_quota").doc(_userKey);
-    final feedbackRef = FirebaseFirestore.instance.collection("feedbacks").doc(); // auto-id
+    final quotaRef =
+    FirebaseFirestore.instance.collection("feedback_quota").doc(_userKey);
+    final feedbackRef =
+    FirebaseFirestore.instance.collection("feedbacks").doc(); // auto-id
 
     try {
       await FirebaseFirestore.instance.runTransaction((tx) async {
@@ -581,7 +591,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           ),
           child: Row(
             children: [
-              Icon(locked ? Icons.lock_clock : Icons.av_timer, size: 18, color: _muted),
+              Icon(locked ? Icons.lock_clock : Icons.av_timer,
+                  size: 18, color: _muted),
               const SizedBox(width: 8),
               Expanded(
                 child: ValueListenableBuilder<Duration>(
@@ -590,7 +601,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     locked
                         ? "24h-Limit erreicht · noch ${_fmtDur(rem)}"
                         : "Heute verfügbar: $_remainingToday von $kWindowLimit",
-                    style: const TextStyle(color: _muted, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                        color: _muted, fontWeight: FontWeight.w600),
                   ),
                 ),
               ),
@@ -617,7 +629,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: borderColor, width: 1), // ✅ dünn, clean
         boxShadow: const [
-          BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 8)),
+          BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 12,
+              offset: Offset(0, 8)),
         ],
       ),
       child: ListTile(
@@ -632,7 +647,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         ),
         title: Text(
           message,
-          style: const TextStyle(color: _text, fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(
+              color: _text, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         subtitle: Text(
           isMine ? "Von: $user (du)" : "Von: $user",
@@ -668,7 +684,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   decoration: InputDecoration(
                     hintText: locked ? "Gesperrt …" : _hint,
                     hintStyle: const TextStyle(color: _muted),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                    contentPadding: const EdgeInsets.symmetric(
+                        vertical: 14, horizontal: 12),
                     filled: true,
                     fillColor: _panel,
                     enabledBorder: OutlineInputBorder(
@@ -677,7 +694,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: _sentFlash ? _ok : _accent, width: 1.2),
+                      borderSide: BorderSide(
+                          color: _sentFlash ? _ok : _accent, width: 1.2),
                     ),
                   ),
                   textInputAction: TextInputAction.newline,
@@ -704,18 +722,22 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                                 backgroundColor: sendColor,
                                 disabledBackgroundColor: Colors.white12,
                                 foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 14, horizontal: 18),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12)),
                               ),
                               child: sending
                                   ? const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white),
                               )
                                   : Text(
                                 locked ? _fmtDur(rem) : "Senden",
-                                style: const TextStyle(fontWeight: FontWeight.w700),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700),
                               ),
                             );
                           },
@@ -743,7 +765,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     }
     if (_feedbackDocs.isEmpty) {
       return const Center(
-        child: Text("Noch kein Feedback vorhanden", style: TextStyle(color: _muted)),
+        child: Text("Noch kein Feedback vorhanden",
+            style: TextStyle(color: _muted)),
       );
     }
 
@@ -754,6 +777,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 100, top: 8),
       itemCount: _feedbackDocs.length,
+      // ✅ Bonus: auch beim Scrollen weg (optional, schadet nicht)
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       itemBuilder: (context, i) {
         final raw = _feedbackDocs[i].data();
         final msg = (raw["message"] as String?) ?? "";
@@ -766,42 +791,51 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         // ✅ IMMER als "mein" erkennen, wenn:
         // - userKey passt ODER
         // - userName passt (Fallback)
-        final isMine =
-            (myKey.isNotEmpty && key == myKey) ||
-                (myName.isNotEmpty && user.trim().toLowerCase() == myName);
+        final isMine = (myKey.isNotEmpty && key == myKey) ||
+            (myName.isNotEmpty && user.trim().toLowerCase() == myName);
 
         return _messageTile(message: msg, user: user, date: date, isMine: isMine);
       },
     );
   }
 
-
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _bgTop,
-      appBar: _appBar(),
-      body: Stack(
-        children: [
-          const Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [_bgTop, _bgBottom],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
+    // ✅ WICHTIG: GestureDetector um ALLES, damit Tap überall die Tastatur schließt
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: _dismissKeyboard,
+      child: Scaffold(
+        backgroundColor: _bgTop,
+        appBar: _appBar(),
+        body: Stack(
+          children: [
+            const Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [_bgTop, _bgBottom],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
                 ),
               ),
             ),
-          ),
-          Column(
-            children: [
-              _quotaBanner(),
-              Expanded(child: _buildFeedbackList()),
-              _inputBar(),
-            ],
-          ),
-        ],
+            Column(
+              children: [
+                _quotaBanner(),
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _dismissKeyboard,
+                    child: _buildFeedbackList(),
+                  ),
+                ),
+                _inputBar(),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

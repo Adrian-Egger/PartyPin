@@ -55,7 +55,6 @@ class MyBarScreen extends StatelessWidget {
           stream: _eventsQuery().snapshots(),
           builder: (context, evSnap) {
             final docs = evSnap.data?.docs ?? const [];
-
             return _MyBarBody(
               barId: id,
               barData: barData,
@@ -90,17 +89,33 @@ class _MyBarBody extends StatefulWidget {
 }
 
 class _MyBarBodyState extends State<_MyBarBody> {
-  static const _bg = Color(0xFF090B10);
-  static const _card = Color(0xFF1C1F26);
-  static const _card2 = Color(0xFF141A22);
+  // ✅ Clean Design (gleich wie deine anderen Screens)
+  static const _bgTop = Color(0xFF0E0F12);
+  static const _bgBottom = Color(0xFF141A22);
+  static const _panel = Color(0xFF1C1F26);
+  static const _panel2 = Color(0xFF141A22);
+  static const _panelBorder = Color(0xFF2A2F38);
+
+  static const _text = Colors.white;
   static const _muted = Color(0xFFB6BDC8);
   static const _accent = Color(0xFFFF3B30);
+  static const _ok = Color(0xFF22C55E);
+  static const _warn = Color(0xFFFFB020);
+  static const _err = Color(0xFFFF3B30);
+
+  static const _accentSoft = Color(0x26FF3B30); // ~15%
+  static const _accentLine = Color(0x66FF3B30); // ~40%
 
   bool _showEvent = true;
 
   bool get _isMobile {
     if (kIsWeb) return false;
-    return defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS;
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+  }
+
+  void _dismissKeyboard() {
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   static const List<_DayMeta> _days = [
@@ -131,7 +146,10 @@ class _MyBarBodyState extends State<_MyBarBody> {
 
   List<Map<String, dynamic>> _safeHighlights(dynamic raw) {
     if (raw is List) {
-      return raw.where((e) => e is Map).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      return raw
+          .where((e) => e is Map)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
     }
     return [];
   }
@@ -158,7 +176,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
     return (now.isAfter(start) || now.isAtSameMomentAs(start)) && now.isBefore(cleanupAt);
   }
 
-  // ---------------- opening hours (Admin-like) ----------------
+  // ---------------- opening hours ----------------
 
   String _formatTimeOfDay(TimeOfDay? t) {
     if (t == null) return '--:--';
@@ -221,7 +239,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
     return map;
   }
 
-  // ---------------- image picking/upload (no dart:io, works on all) ----------------
+  // ---------------- image picking/upload ----------------
 
   Future<_PickedImage?> _pickImageBytes() async {
     if (_isMobile) {
@@ -262,6 +280,8 @@ class _MyBarBodyState extends State<_MyBarBody> {
   // ---------------- EDIT SHEET ----------------
 
   Future<void> _openEditBarDetails() async {
+    _dismissKeyboard();
+
     final b = widget.barData;
 
     final barName = (b['barName'] ?? '').toString();
@@ -292,7 +312,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: _bg,
+      backgroundColor: _bgTop,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
@@ -301,6 +321,8 @@ class _MyBarBodyState extends State<_MyBarBody> {
           builder: (sheetCtx, setLocal) {
             bool saving = false;
             bool sheetClosed = false;
+
+            void dismissInSheet() => FocusManager.instance.primaryFocus?.unfocus();
 
             Future<void> pickTime(String dayKey, bool isFrom) async {
               final day = opening[dayKey];
@@ -363,7 +385,10 @@ class _MyBarBodyState extends State<_MyBarBody> {
               } catch (e) {
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Fehler beim Bild-Upload: $e')),
+                  SnackBar(
+                    backgroundColor: _panel,
+                    content: Text('Fehler beim Bild-Upload: $e', style: const TextStyle(color: _text)),
+                  ),
                 );
               }
             }
@@ -373,18 +398,21 @@ class _MyBarBodyState extends State<_MyBarBody> {
               final closed = day.closed;
 
               return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
+                padding: const EdgeInsets.symmetric(vertical: 5),
                 child: Row(
                   children: [
                     SizedBox(
-                      width: 86,
+                      width: 84,
                       child: Row(
                         children: [
                           Text(meta.emoji, style: const TextStyle(fontSize: 16)),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: 6),
                           Text(
                             meta.short,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                            style: const TextStyle(
+                              color: _text,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
                         ],
                       ),
@@ -393,16 +421,20 @@ class _MyBarBodyState extends State<_MyBarBody> {
                     if (closed)
                       Expanded(
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
                           decoration: BoxDecoration(
-                            color: _accent.withOpacity(0.12),
+                            color: _accentSoft,
                             borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: _accent),
+                            border: Border.all(color: _accentLine, width: 1),
                           ),
                           child: const Text(
                             "Geschlossen",
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: _accent, fontSize: 12, fontWeight: FontWeight.w700),
+                            style: TextStyle(
+                              color: _text,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
                         ),
                       )
@@ -414,57 +446,62 @@ class _MyBarBodyState extends State<_MyBarBody> {
                               child: OutlinedButton(
                                 onPressed: saving ? null : () => pickTime(meta.key, true),
                                 style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: Colors.white24),
-                                  backgroundColor: _card2,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                  side: const BorderSide(color: _panelBorder),
+                                  backgroundColor: _panel2,
+                                  foregroundColor: _text,
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
                                 child: Text(
                                   "von ${_formatTimeOfDay(day.from)}",
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 6),
+                            const SizedBox(width: 8),
                             Expanded(
                               child: OutlinedButton(
                                 onPressed: saving ? null : () => pickTime(meta.key, false),
                                 style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: Colors.white24),
-                                  backgroundColor: _card2,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 8),
+                                  side: const BorderSide(color: _panelBorder),
+                                  backgroundColor: _panel2,
+                                  foregroundColor: _text,
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
                                 child: Text(
                                   "bis ${_formatTimeOfDay(day.to)}",
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
                                 ),
                               ),
                             ),
                           ],
                         ),
                       ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 8),
                     InkWell(
                       onTap: saving ? null : () => toggleClosed(meta.key),
                       borderRadius: BorderRadius.circular(999),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                         decoration: BoxDecoration(
-                          color: closed ? _accent.withOpacity(0.14) : Colors.transparent,
+                          color: closed ? _accentSoft : Colors.transparent,
                           borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: closed ? _accent : Colors.white24),
+                          border: Border.all(color: closed ? _accentLine : _panelBorder, width: 1),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
                               closed ? Icons.check_circle : Icons.radio_button_unchecked,
-                              size: 15,
+                              size: 16,
                               color: closed ? _accent : Colors.white54,
                             ),
-                            const SizedBox(width: 4),
-                            const Text("geschlossen", style: TextStyle(color: Colors.white70, fontSize: 11)),
+                            const SizedBox(width: 6),
+                            const Text(
+                              "zu",
+                              style: TextStyle(color: _muted, fontSize: 12, fontWeight: FontWeight.w800),
+                            ),
                           ],
                         ),
                       ),
@@ -501,234 +538,265 @@ class _MyBarBodyState extends State<_MyBarBody> {
                 if (!mounted) return;
                 if (!sheetCtx.mounted) return;
 
-                // ✅ ab hier: KEIN setLocal mehr, wir schließen
                 sheetClosed = true;
                 Navigator.of(sheetCtx).pop();
 
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Gespeichert.')),
+                  SnackBar(
+                    backgroundColor: _panel,
+                    content: const Text('Gespeichert ✅', style: TextStyle(color: _text, fontWeight: FontWeight.w800)),
+                  ),
                 );
               } on FirebaseException catch (e) {
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Firebase: ${e.code} ${e.message ?? ''}')),
+                  SnackBar(
+                    backgroundColor: _panel,
+                    content: Text('Firebase: ${e.code} ${e.message ?? ''}',
+                        style: const TextStyle(color: _text)),
+                  ),
                 );
               } catch (e) {
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Fehler beim Speichern: $e')),
+                  SnackBar(
+                    backgroundColor: _panel,
+                    content: Text('Fehler beim Speichern: $e', style: const TextStyle(color: _text)),
+                  ),
                 );
               } finally {
-                // ✅ nur wenn Sheet noch offen ist
-                if (!sheetClosed && sheetCtx.mounted) {
-                  setLocal(() => saving = false);
-                }
+                if (!sheetClosed && sheetCtx.mounted) setLocal(() => saving = false);
               }
             }
 
-            return SafeArea(
-              child: Padding(
-                padding: EdgeInsets.only(
-                  left: 16,
-                  right: 16,
-                  top: 14,
-                  bottom: 16 + MediaQuery.of(sheetCtx).viewInsets.bottom,
-                ),
-                child: SizedBox(
-                  height: MediaQuery.of(sheetCtx).size.height * 0.92,
-                  child: Column(
-                    children: [
-                      Row(
+            return GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: dismissInSheet,
+              child: SafeArea(
+                child: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [_bgTop, _bgBottom],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                  ),
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      left: 16,
+                      right: 16,
+                      top: 12,
+                      bottom: 16 + MediaQuery.of(sheetCtx).viewInsets.bottom,
+                    ),
+                    child: SizedBox(
+                      height: MediaQuery.of(sheetCtx).size.height * 0.92,
+                      child: Column(
                         children: [
-                          const Icon(Icons.edit, color: Colors.white70),
-                          const SizedBox(width: 8),
-                          const Expanded(
-                            child: Text(
-                              'Bar bearbeiten',
-                              style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          IconButton(
-                            onPressed: saving ? null : () => Navigator.of(sheetCtx).pop(),
-                            icon: const Icon(Icons.close, color: Colors.white54),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                          Row(
                             children: [
-                              _infoReadOnlyCard(
-                                title: 'Fixe Daten (nicht editierbar)',
-                                lines: [
-                                  if (barName.trim().isNotEmpty) 'Name: $barName',
-                                  if (address.trim().isNotEmpty) 'Adresse: $address',
-                                  if (city.trim().isNotEmpty || country.trim().isNotEmpty)
-                                    'Ort: ${[city, country].where((e) => e.trim().isNotEmpty).join(', ')}',
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-
-                              _panelCard(
-                                title: 'Beschreibung',
-                                child: TextField(
-                                  controller: descCtrl,
-                                  maxLines: 4,
-                                  style: const TextStyle(color: Colors.white),
-                                  decoration: InputDecoration(
-                                    filled: true,
-                                    fillColor: _card2,
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: const BorderSide(color: Colors.white24),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: const BorderSide(color: _accent),
-                                    ),
-                                    hintText: 'Beschreibe deine Bar ...',
-                                    hintStyle: const TextStyle(color: Colors.white38),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: _accentSoft,
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(color: _accentLine, width: 1),
+                                ),
+                                child: const Text(
+                                  "Bar bearbeiten ✏️",
+                                  style: TextStyle(
+                                    color: _text,
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 16,
                                   ),
                                 ),
                               ),
-                              const SizedBox(height: 12),
-
-                              _panelCard(
-                                title: 'Öffnungszeiten',
-                                subtitle: 'Wenn noch leer: Zeiten auswählen oder Tage schließen.',
-                                child: Column(
-                                  children: _days.map(openingRow).toList(),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-
-                              _panelCard(
-                                title: 'Highlights',
-                                trailing: OutlinedButton.icon(
-                                  onPressed: saving ? null : addHighlight,
-                                  icon: const Icon(Icons.add, color: _accent),
-                                  label: const Text('Hinzufügen', style: TextStyle(color: _accent)),
-                                  style: OutlinedButton.styleFrom(side: const BorderSide(color: _accent)),
-                                ),
-                                child: Column(
-                                  children: List.generate(highlights.length, (i) {
-                                    final h = highlights[i];
-                                    final url = (h.imageUrl ?? '').trim();
-
-                                    return Container(
-                                      margin: const EdgeInsets.only(bottom: 12),
-                                      padding: const EdgeInsets.all(10),
-                                      decoration: BoxDecoration(
-                                        color: _card2,
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(color: Colors.white12),
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Text(
-                                                'Highlight ${i + 1}',
-                                                style: const TextStyle(
-                                                  color: Colors.white70,
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.w800,
-                                                ),
-                                              ),
-                                              const Spacer(),
-                                              IconButton(
-                                                onPressed: saving ? null : () => removeHighlight(i),
-                                                icon: const Icon(Icons.delete_outline, color: _accent),
-                                              ),
-                                            ],
-                                          ),
-                                          InkWell(
-                                            onTap: saving ? null : () => pickHighlightImage(i),
-                                            borderRadius: BorderRadius.circular(12),
-                                            child: Container(
-                                              height: 150,
-                                              decoration: BoxDecoration(
-                                                color: _card,
-                                                borderRadius: BorderRadius.circular(12),
-                                                border: Border.all(color: Colors.white24),
-                                              ),
-                                              child: url.isNotEmpty
-                                                  ? ClipRRect(
-                                                borderRadius: BorderRadius.circular(12),
-                                                child: Image.network(
-                                                  url,
-                                                  fit: BoxFit.cover,
-                                                  width: double.infinity,
-                                                ),
-                                              )
-                                                  : Column(
-                                                mainAxisAlignment: MainAxisAlignment.center,
-                                                children: const [
-                                                  Icon(Icons.add_a_photo, color: Colors.white70),
-                                                  SizedBox(height: 6),
-                                                  Text('Bild auswählen', style: TextStyle(color: Colors.white54)),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(height: 10),
-                                          Container(
-                                            padding: const EdgeInsets.all(10),
-                                            decoration: BoxDecoration(
-                                              color: _card,
-                                              borderRadius: BorderRadius.circular(12),
-                                              border: Border.all(color: Colors.white24),
-                                            ),
-                                            child: TextField(
-                                              controller: h.textCtrl,
-                                              maxLines: 3,
-                                              style: const TextStyle(color: Colors.white),
-                                              decoration: const InputDecoration(
-                                                border: InputBorder.none,
-                                                labelText: 'Text',
-                                                labelStyle: TextStyle(color: Colors.white54),
-                                                hintText: 'Kurztext zum Highlight ...',
-                                                hintStyle: TextStyle(color: Colors.white38),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  }),
-                                ),
+                              const Spacer(),
+                              IconButton(
+                                onPressed: saving ? null : () => Navigator.of(sheetCtx).pop(),
+                                icon: const Icon(Icons.close, color: _muted),
                               ),
                             ],
                           ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: saving ? null : saveAll,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _accent,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          const SizedBox(height: 10),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _infoReadOnlyCard(
+                                    title: 'Fixe Daten',
+                                    lines: [
+                                      if (barName.trim().isNotEmpty) 'Name: $barName',
+                                      if (address.trim().isNotEmpty) 'Adresse: $address',
+                                      if (city.trim().isNotEmpty || country.trim().isNotEmpty)
+                                        'Ort: ${[city, country].where((e) => e.trim().isNotEmpty).join(', ')}',
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+
+                                  _panelCard(
+                                    title: 'Beschreibung',
+                                    child: TextField(
+                                      controller: descCtrl,
+                                      maxLines: 4,
+                                      style: const TextStyle(color: _text),
+                                      decoration: InputDecoration(
+                                        filled: true,
+                                        fillColor: _panel2,
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                        enabledBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                          borderSide: const BorderSide(color: _panelBorder, width: 1),
+                                        ),
+                                        focusedBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                          borderSide: const BorderSide(color: _accentLine, width: 1.2),
+                                        ),
+                                        hintText: 'Beschreibe deine Bar ...',
+                                        hintStyle: const TextStyle(color: _muted),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+
+                                  _panelCard(
+                                    title: 'Öffnungszeiten',
+                                    subtitle: 'Zeiten wählen oder Tag schließen.',
+                                    child: Column(children: _days.map(openingRow).toList()),
+                                  ),
+                                  const SizedBox(height: 12),
+
+                                  _panelCard(
+                                    title: 'Highlights',
+                                    trailing: OutlinedButton.icon(
+                                      onPressed: saving ? null : addHighlight,
+                                      icon: const Icon(Icons.add, color: _accent),
+                                      label: const Text('Hinzufügen',
+                                          style: TextStyle(color: _accent, fontWeight: FontWeight.w900)),
+                                      style: OutlinedButton.styleFrom(
+                                        side: const BorderSide(color: _accentLine),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      children: List.generate(highlights.length, (i) {
+                                        final h = highlights[i];
+                                        final url = (h.imageUrl ?? '').trim();
+
+                                        return Container(
+                                          margin: const EdgeInsets.only(bottom: 12),
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color: _panel2,
+                                            borderRadius: BorderRadius.circular(16),
+                                            border: Border.all(color: _panelBorder, width: 1),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Text(
+                                                    'Highlight ${i + 1}',
+                                                    style: const TextStyle(
+                                                      color: _muted,
+                                                      fontSize: 12,
+                                                      fontWeight: FontWeight.w900,
+                                                    ),
+                                                  ),
+                                                  const Spacer(),
+                                                  IconButton(
+                                                    onPressed: saving ? null : () => removeHighlight(i),
+                                                    icon: const Icon(Icons.delete_outline, color: _accent),
+                                                  ),
+                                                ],
+                                              ),
+                                              InkWell(
+                                                onTap: saving ? null : () => pickHighlightImage(i),
+                                                borderRadius: BorderRadius.circular(12),
+                                                child: Container(
+                                                  height: 150,
+                                                  decoration: BoxDecoration(
+                                                    color: _panel,
+                                                    borderRadius: BorderRadius.circular(12),
+                                                    border: Border.all(color: _panelBorder, width: 1),
+                                                  ),
+                                                  child: url.isNotEmpty
+                                                      ? ClipRRect(
+                                                    borderRadius: BorderRadius.circular(12),
+                                                    child: Image.network(
+                                                      url,
+                                                      fit: BoxFit.cover,
+                                                      width: double.infinity,
+                                                    ),
+                                                  )
+                                                      : const Column(
+                                                    mainAxisAlignment: MainAxisAlignment.center,
+                                                    children: [
+                                                      Icon(Icons.add_a_photo, color: _muted),
+                                                      SizedBox(height: 8),
+                                                      Text(
+                                                        'Bild auswählen',
+                                                        style: TextStyle(color: _muted, fontWeight: FontWeight.w800),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(height: 10),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                                decoration: BoxDecoration(
+                                                  color: _panel,
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  border: Border.all(color: _panelBorder, width: 1),
+                                                ),
+                                                child: TextField(
+                                                  controller: h.textCtrl,
+                                                  maxLines: 3,
+                                                  style: const TextStyle(color: _text),
+                                                  decoration: const InputDecoration(
+                                                    border: InputBorder.none,
+                                                    hintText: 'Kurztext zum Highlight ...',
+                                                    hintStyle: TextStyle(color: _muted),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      }),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                          child: saving
-                              ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                          )
-                              : const Text('Speichern', style: TextStyle(fontWeight: FontWeight.w900)),
-                        ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              onPressed: saving ? null : saveAll,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _accent,
+                                disabledBackgroundColor: Colors.white12,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: saving
+                                  ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                                  : const Text('Speichern', style: TextStyle(fontWeight: FontWeight.w900)),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -738,13 +806,15 @@ class _MyBarBodyState extends State<_MyBarBody> {
       },
     );
 
+    // dispose
     descCtrl.dispose();
     for (final h in highlights) {
       h.textCtrl.dispose();
     }
   }
 
-  // UI helper cards
+  // ---------------- UI helper cards ----------------
+
   static Widget _panelCard({
     required String title,
     String? subtitle,
@@ -754,9 +824,12 @@ class _MyBarBodyState extends State<_MyBarBody> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: _card,
+        color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(color: _panelBorder, width: 1),
+        boxShadow: const [
+          BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 8)),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -764,14 +837,17 @@ class _MyBarBodyState extends State<_MyBarBody> {
           Row(
             children: [
               Expanded(
-                child: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+                child: Text(
+                  title,
+                  style: const TextStyle(color: _text, fontWeight: FontWeight.w900, fontSize: 16),
+                ),
               ),
               if (trailing != null) trailing,
             ],
           ),
           if (subtitle != null && subtitle.trim().isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(subtitle, style: const TextStyle(color: Colors.white60, fontSize: 12)),
+            Text(subtitle, style: const TextStyle(color: _muted, fontSize: 12, fontWeight: FontWeight.w700)),
           ],
           const SizedBox(height: 12),
           child,
@@ -785,22 +861,22 @@ class _MyBarBodyState extends State<_MyBarBody> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: _card,
+        color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(color: _panelBorder, width: 1),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+          Text(title, style: const TextStyle(color: _text, fontWeight: FontWeight.w900)),
           const SizedBox(height: 10),
           if (clean.isEmpty)
-            const Text('Keine Daten.', style: TextStyle(color: Colors.white60))
+            const Text('Keine Daten.', style: TextStyle(color: _muted, fontWeight: FontWeight.w700))
           else
             ...clean.map(
                   (t) => Padding(
                 padding: const EdgeInsets.only(bottom: 6),
-                child: Text(t, style: const TextStyle(color: Colors.white70)),
+                child: Text(t, style: const TextStyle(color: _muted, fontWeight: FontWeight.w700)),
               ),
             ),
         ],
@@ -851,199 +927,244 @@ class _MyBarBodyState extends State<_MyBarBody> {
     final upcoming = filtered.where((e) => !_isRunning(e.data)).toList();
     final hasAnyEvents = running.isNotEmpty || upcoming.isNotEmpty;
 
-    // ✅ WICHTIG: kein State-Change im build()
     final bool showEvent = hasAnyEvents ? _showEvent : false;
 
     final avatar = CircleAvatar(
       radius: 46,
-      backgroundColor: _card,
+      backgroundColor: _panel,
       backgroundImage: profileImageUrl.isNotEmpty ? NetworkImage(profileImageUrl) : null,
-      child: profileImageUrl.isEmpty ? const Icon(Icons.local_bar, color: Colors.white70, size: 36) : null,
+      child: profileImageUrl.isEmpty
+          ? const Icon(Icons.local_bar, color: _muted, size: 36)
+          : null,
     );
 
-    final redOutlined = OutlinedButton.styleFrom(
-      side: const BorderSide(color: _accent),
-      foregroundColor: _accent,
-    );
-
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: _bg,
-        elevation: 0,
-        centerTitle: true,
-        foregroundColor: Colors.white, // Icons + Text hell
-        title: const Text('Meine Bar⭐'),
-        titleTextStyle: const TextStyle(
-          color: Colors.white,
-          fontSize: 18,
-          fontWeight: FontWeight.w900,
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Bar bearbeiten',
-            onPressed: _openEditBarDetails,
-            icon: const Icon(Icons.edit, color: Colors.white),
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: _dismissKeyboard,
+      child: Scaffold(
+        backgroundColor: _bgTop,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          centerTitle: true,
+          automaticallyImplyLeading: true,
+          title: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: _accentSoft,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: _accentLine, width: 1),
+            ),
+            child: const Text(
+              'Meine Bar 🍹',
+              style: TextStyle(
+                color: _text,
+                fontWeight: FontWeight.w900,
+                fontSize: 20,
+                letterSpacing: 0.2,
+              ),
+            ),
           ),
+          actions: [
+            IconButton(
+              tooltip: 'Bar bearbeiten',
+              onPressed: _openEditBarDetails,
+              icon: const Icon(Icons.edit, color: _muted),
+            ),
+          ],
+        ),
+        body: Stack(
+          children: [
+            const Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [_bgTop, _bgBottom],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                ),
+              ),
+            ),
+            ListView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 26),
+              children: [
+                Center(child: avatar),
+                const SizedBox(height: 12),
+
+                Text(
+                  barName,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: _text,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    height: 1.1,
+                  ),
+                ),
+
+                if (ratingAvg != null && ratingCount > 0) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.star, color: Colors.amber, size: 18),
+                      const SizedBox(width: 6),
+                      Text(
+                        ratingAvg.toStringAsFixed(1),
+                        style: const TextStyle(color: _text, fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(width: 6),
+                      Text('($ratingCount)', style: const TextStyle(color: _muted, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                ],
+
+                if (fullAddress.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.location_on, color: _accent, size: 18),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          fullAddress,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: _muted, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+
+                const SizedBox(height: 16),
+
+                if (hasAnyEvents) ...[
+                  Center(child: _segmented(showEvent: showEvent)),
+                  const SizedBox(height: 14),
+                ] else ...[
+                  _sectionTitleCentered('Bar-Infos 🍹'),
+                  const SizedBox(height: 10),
+                ],
+
+                if (showEvent && hasAnyEvents)
+                  _eventsView(
+                    context: context,
+                    running: running,
+                    upcoming: upcoming,
+                    loading: widget.eventsLoading,
+                    error: widget.eventsError,
+                  )
+                else ...[
+                  _panelCard(
+                    title: 'Beschreibung 🥂',
+                    child: Text(
+                      description.trim().isNotEmpty ? description : 'Keine Beschreibung hinterlegt.',
+                      style: const TextStyle(color: _muted, height: 1.35, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  _panelCard(
+                    title: 'Öffnungszeiten ⏰',
+                    child: Column(
+                      children: _days.map((d) {
+                        final day = opening[d.key]!;
+                        final text = day.closed
+                            ? 'geschlossen'
+                            : '${_formatTimeOfDay(day.from)} – ${_formatTimeOfDay(day.to)}';
+
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            children: [
+                              SizedBox(
+                                width: 44,
+                                child: Text(
+                                  d.short,
+                                  style: const TextStyle(color: _muted, fontWeight: FontWeight.w900),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  text,
+                                  style: TextStyle(
+                                    color: day.closed ? _accent : _muted,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _openEditBarDetails,
+                      icon: const Icon(Icons.edit, color: _accent),
+                      label: const Text(
+                        'Bar-Infos bearbeiten',
+                        style: TextStyle(fontWeight: FontWeight.w900, color: _accent),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: _accentLine, width: 1),
+                        backgroundColor: _panel,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  if (highlights.isNotEmpty)
+                    _panelCard(
+                      title: 'Highlights ✨',
+                      child: Column(
+                        children: highlights.map((h) => _highlightCard(h)).toList(),
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _segmented({required bool showEvent}) {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _panelBorder, width: 1),
+        boxShadow: const [
+          BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 8)),
         ],
       ),
-
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 26),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Center(child: avatar),
-          const SizedBox(height: 12),
-          Text(
-            barName,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-              height: 1.1,
-            ),
+          _segButton(
+            selected: showEvent,
+            text: 'Events 🎉',
+            onTap: () => setState(() => _showEvent = true),
           ),
-          if (ratingAvg != null && ratingCount > 0) ...[
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.star, color: Colors.amber, size: 18),
-                const SizedBox(width: 6),
-                Text(
-                  ratingAvg.toStringAsFixed(1),
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(width: 6),
-                Text('($ratingCount)', style: const TextStyle(color: Colors.white60)),
-              ],
-            ),
-          ],
-          if (fullAddress.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.location_on, color: _accent, size: 18),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(fullAddress, textAlign: TextAlign.center, style: const TextStyle(color: _muted)),
-                ),
-              ],
-            ),
-          ],
-          const SizedBox(height: 16),
-
-          if (hasAnyEvents) ...[
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: _card,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: Colors.white12),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _segButton(
-                      selected: showEvent,
-                      text: 'Events 🎉',
-                      onTap: hasAnyEvents ? () => setState(() => _showEvent = true) : () {},
-                    ),
-                    const SizedBox(width: 6),
-                    _segButton(
-                      selected: !showEvent,
-                      text: 'Bar-Infos 🍹',
-                      onTap: () => setState(() => _showEvent = false),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-          ] else ...[
-            _sectionTitleCentered('Bar-Infos 🍹'),
-            const SizedBox(height: 10),
-          ],
-
-          if (showEvent && hasAnyEvents)
-            _eventsView(
-              context: context,
-              running: running,
-              upcoming: upcoming,
-              loading: widget.eventsLoading,
-              error: widget.eventsError,
-            )
-          else ...[
-            _panelCard(
-              title: 'Beschreibung 🥂',
-              child: Text(
-                description.trim().isNotEmpty ? description : 'Keine Beschreibung hinterlegt.',
-                style: const TextStyle(color: Colors.white70, height: 1.35),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            _panelCard(
-              title: 'Öffnungszeiten ⏰',
-              child: Column(
-                children: _days.map((d) {
-                  final day = opening[d.key]!;
-                  final text = day.closed
-                      ? 'geschlossen'
-                      : '${_formatTimeOfDay(day.from)} – ${_formatTimeOfDay(day.to)}';
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 40,
-                          child: Text(
-                            d.short,
-                            style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            text,
-                            style: TextStyle(
-                              color: day.closed ? _accent : Colors.white70,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                style: redOutlined,
-                onPressed: _openEditBarDetails,
-                icon: const Icon(Icons.edit),
-                label: const Text(
-                  'Beschreibung, Öffnungszeiten & Highlights bearbeiten',
-                  style: TextStyle(fontWeight: FontWeight.w800),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            if (highlights.isNotEmpty)
-              _panelCard(
-                title: 'Highlights ✨',
-                child: Column(
-                  children: highlights.map((h) => _highlightCard(h)).toList(),
-                ),
-              ),
-          ],
+          const SizedBox(width: 6),
+          _segButton(
+            selected: !showEvent,
+            text: 'Bar-Infos 🍹',
+            onTap: () => setState(() => _showEvent = false),
+          ),
         ],
       ),
     );
@@ -1066,7 +1187,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
         child: Text(
           text,
           style: TextStyle(
-            color: selected ? Colors.white : Colors.white70,
+            color: selected ? _text : _muted,
             fontWeight: FontWeight.w900,
             fontSize: 13,
           ),
@@ -1079,11 +1200,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
     return Text(
       title,
       textAlign: TextAlign.center,
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 16,
-        fontWeight: FontWeight.w900,
-      ),
+      style: const TextStyle(color: _text, fontSize: 16, fontWeight: FontWeight.w900),
     );
   }
 
@@ -1099,55 +1216,64 @@ class _MyBarBodyState extends State<_MyBarBody> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: _card,
+        color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _accent.withOpacity(0.35)),
+        border: Border.all(color: _accentLine, width: 1),
+        boxShadow: const [
+          BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 8)),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _sectionTitleCentered('Events 🎉'),
           const SizedBox(height: 12),
+
           if (loading) ...[
             const Center(child: CircularProgressIndicator(color: _accent)),
             const SizedBox(height: 10),
           ],
+
           if (error != null) ...[
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: _card2,
+                color: _panel2,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white12),
+                border: Border.all(color: _panelBorder, width: 1),
               ),
               child: const Text(
                 'Events konnten nicht geladen werden.',
-                style: TextStyle(color: Colors.white60),
+                style: TextStyle(color: _muted, fontWeight: FontWeight.w700),
               ),
             ),
             const SizedBox(height: 12),
           ],
+
           if (running.isNotEmpty) ...[
-            const Text('Läuft gerade 🔥', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+            const Text('Läuft gerade 🔥', style: TextStyle(color: _text, fontWeight: FontWeight.w900)),
             const SizedBox(height: 8),
             ...running.map((e) => _eventRow(context, e, running: true)),
             const SizedBox(height: 14),
           ],
+
           if (upcoming.isNotEmpty) ...[
-            const Text('Kommende Events', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+            const Text('Kommende Events', style: TextStyle(color: _text, fontWeight: FontWeight.w900)),
             const SizedBox(height: 8),
             ...upcoming.map((e) => _eventRow(context, e, running: false)),
           ],
+
           if (running.isEmpty && upcoming.isEmpty) ...[
-            const Text('Aktuell keine Events.', style: TextStyle(color: Colors.white60)),
+            const Text('Aktuell keine Events.', style: TextStyle(color: _muted, fontWeight: FontWeight.w700)),
           ],
+
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                 backgroundColor: _accent,
-                foregroundColor: Colors.white,
+                foregroundColor: _text,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
@@ -1172,25 +1298,26 @@ class _MyBarBodyState extends State<_MyBarBody> {
     final title = (item.data['title'] ?? '').toString().trim();
 
     final dt = startAt ?? DateTime.now();
-    final dateStr = '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
+    final dateStr =
+        '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
     final timeStr = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: _card2,
+        color: _panel2,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: running ? _accent.withOpacity(0.6) : Colors.white12),
+        border: Border.all(color: running ? _accentLine : _panelBorder, width: 1),
       ),
       child: Row(
         children: [
-          Icon(running ? Icons.local_fire_department : Icons.event, color: Colors.white70, size: 18),
+          Icon(running ? Icons.local_fire_department : Icons.event, color: _muted, size: 18),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               '$dateStr · $timeStr — ${title.isEmpty ? 'Event' : title}',
-              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w800),
+              style: const TextStyle(color: _muted, fontWeight: FontWeight.w900),
             ),
           ),
           IconButton(
@@ -1202,7 +1329,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
                 ),
               );
             },
-            icon: const Icon(Icons.edit, color: Colors.white70),
+            icon: const Icon(Icons.edit, color: _muted),
           ),
         ],
       ),
@@ -1216,9 +1343,9 @@ class _MyBarBodyState extends State<_MyBarBody> {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: _card2,
+        color: _panel2,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(color: _panelBorder, width: 1),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1238,8 +1365,11 @@ class _MyBarBodyState extends State<_MyBarBody> {
             ),
           if (text.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.all(10),
-              child: Text(text, style: const TextStyle(color: Colors.white70, height: 1.3)),
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                text,
+                style: const TextStyle(color: _muted, height: 1.3, fontWeight: FontWeight.w700),
+              ),
             ),
         ],
       ),
