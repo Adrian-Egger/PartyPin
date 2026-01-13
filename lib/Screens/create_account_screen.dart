@@ -3,11 +3,12 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import 'selection_screen.dart';
-import 'party_map_screen.dart';
 import 'login_screen.dart';
 import 'nutzungsbedinungen.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'home_shell.dart';
 
 class CreateAccountScreen extends StatefulWidget {
   const CreateAccountScreen({Key? key}) : super(key: key);
@@ -26,7 +27,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   final TextEditingController _barNameController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
-  final TextEditingController _availabilityController = TextEditingController(); // NEU
+  final TextEditingController _availabilityController = TextEditingController();
 
   final _vornameNode = FocusNode();
   final _nachnameNode = FocusNode();
@@ -56,17 +57,18 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   static const _accent = Color(0xFFFF3B30);
   static const _secondary = Color(0xFF00C2A8);
 
+  bool get _usernameHasUppercase =>
+      RegExp(r'[A-Z]').hasMatch(_usernameController.text);
+
   bool get _isFormFilled {
     if (_isBar) {
-      // Unternehmen / Lokal
       return _barNameController.text.trim().isNotEmpty &&
           _usernameController.text.trim().isNotEmpty &&
           _passwordController.text.trim().isNotEmpty &&
           _emailController.text.trim().isNotEmpty &&
           _phoneController.text.trim().isNotEmpty &&
-          _availabilityController.text.trim().isNotEmpty; // Erreichbarkeit Pflicht
+          _availabilityController.text.trim().isNotEmpty;
     } else {
-      // Privat
       return _vornameController.text.trim().isNotEmpty &&
           _nachnameController.text.trim().isNotEmpty &&
           _usernameController.text.trim().isNotEmpty &&
@@ -98,7 +100,6 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
 
     try {
       final collectionName = _isBar ? "bars" : "users";
-
       final query = await FirebaseFirestore.instance
           .collection(collectionName)
           .where("username", isEqualTo: trimmed)
@@ -124,8 +125,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _maybeShowRealNameHint());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowRealNameHint());
 
     _usernameController.addListener(() {
       final v = _usernameController.text;
@@ -170,6 +170,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     _emailController.dispose();
     _phoneController.dispose();
     _availabilityController.dispose();
+
     _vornameNode.dispose();
     _nachnameNode.dispose();
     _usernameNode.dispose();
@@ -189,10 +190,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
       builder: (context) {
         return AlertDialog(
           backgroundColor: _panel,
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          insetPadding:
-          const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           scrollable: true,
           title: Row(
             children: const [
@@ -201,7 +200,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
               Text(
                 "Echten Namen verwenden",
                 style: TextStyle(
-                    color: _textPrimary, fontWeight: FontWeight.w700),
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
@@ -222,13 +223,17 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                       activeColor: _accent,
                     ),
                     const Expanded(
-                      child: Text("Nicht mehr anzeigen",
-                          style: TextStyle(color: _textSecondary)),
+                      child: Text(
+                        "Nicht mehr anzeigen",
+                        style: TextStyle(color: _textSecondary),
+                      ),
                     ),
                     TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text("Verstanden",
-                          style: TextStyle(color: _textPrimary)),
+                      child: const Text(
+                        "Verstanden",
+                        style: TextStyle(color: _textPrimary),
+                      ),
                     ),
                   ],
                 );
@@ -257,9 +262,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     }
 
     final prefsAfterTerms = await SharedPreferences.getInstance();
-    String? savedLanguage = prefsAfterTerms.getString('language');
-    String? savedCountry = prefsAfterTerms.getString('country');
-    String? savedCity = prefsAfterTerms.getString('city');
+    final savedLanguage = prefsAfterTerms.getString('language');
+    final savedCountry = prefsAfterTerms.getString('country');
+    final savedCity = prefsAfterTerms.getString('city');
 
     if (savedLanguage == null || savedCountry == null || savedCity == null) {
       if (!mounted) return;
@@ -270,9 +275,11 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     }
 
     if (!mounted) return;
+
+    // ✅ HomeShell statt PartyMap, damit BottomBar da ist
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => const PartyMapScreen()),
+      MaterialPageRoute(builder: (_) => const HomeShell(initialIndex: 2)),
     );
   }
 
@@ -304,6 +311,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   String? _usernameValidator(String? v) {
     final val = v?.trim() ?? '';
     if (val.isEmpty) return "Pflichtfeld";
+    if (RegExp(r'[A-Z]').hasMatch(val)) return "Nur Kleinbuchstaben erlaubt";
     if (!RegExp(r'^[a-z0-9_.-]{3,20}$').hasMatch(val)) {
       return "3–20 Zeichen, a–z, 0–9, _ . -";
     }
@@ -385,16 +393,16 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
             value: s,
             minHeight: 6,
             backgroundColor: Colors.white12,
-            color: s < .4
-                ? _accent
-                : (s < .7 ? Colors.orangeAccent : _secondary),
+            color: s < .4 ? _accent : (s < .7 ? Colors.orangeAccent : _secondary),
           ),
         ),
         const SizedBox(height: 6),
         Text(
           "Passwort: ${_passwordLabel(s)}",
           style: const TextStyle(
-              color: _textSecondary, fontWeight: FontWeight.w600),
+            color: _textSecondary,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ],
     );
@@ -405,9 +413,13 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
 
     Widget _columnLabel(String t) => Padding(
       padding: const EdgeInsets.only(bottom: 6),
-      child: Text(t,
-          style: const TextStyle(
-              color: _textSecondary, fontWeight: FontWeight.w600)),
+      child: Text(
+        t,
+        style: const TextStyle(
+          color: _textSecondary,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
     );
 
     return Container(
@@ -420,11 +432,14 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("Geburtsdatum",
-              style: TextStyle(
-                  color: _textPrimary,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16)),
+          const Text(
+            "Geburtsdatum",
+            style: TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w700,
+              fontSize: 16,
+            ),
+          ),
           const SizedBox(height: 10),
           SizedBox(
             height: 180,
@@ -439,15 +454,17 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                           backgroundColor: _card,
                           itemExtent: 32,
                           scrollController: FixedExtentScrollController(
-                              initialItem: _selectedDay - 1),
+                            initialItem: _selectedDay - 1,
+                          ),
                           onSelectedItemChanged: (index) =>
                               setState(() => _selectedDay = index + 1),
                           children: List.generate(
                             31,
                                 (index) => Center(
-                              child: Text("${index + 1}",
-                                  style:
-                                  const TextStyle(color: _textPrimary)),
+                              child: Text(
+                                "${index + 1}",
+                                style: const TextStyle(color: _textPrimary),
+                              ),
                             ),
                           ),
                         ),
@@ -465,15 +482,17 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                           backgroundColor: _card,
                           itemExtent: 32,
                           scrollController: FixedExtentScrollController(
-                              initialItem: _selectedMonth - 1),
+                            initialItem: _selectedMonth - 1,
+                          ),
                           onSelectedItemChanged: (index) =>
                               setState(() => _selectedMonth = index + 1),
                           children: List.generate(
                             12,
                                 (index) => Center(
-                              child: Text("${index + 1}",
-                                  style:
-                                  const TextStyle(color: _textPrimary)),
+                              child: Text(
+                                "${index + 1}",
+                                style: const TextStyle(color: _textPrimary),
+                              ),
                             ),
                           ),
                         ),
@@ -491,18 +510,18 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                           backgroundColor: _card,
                           itemExtent: 32,
                           scrollController: FixedExtentScrollController(
-                              initialItem:
-                              DateTime.now().year - _selectedYear),
-                          onSelectedItemChanged: (index) =>
-                              setState(() => _selectedYear =
-                                  DateTime.now().year - index),
+                            initialItem: DateTime.now().year - _selectedYear,
+                          ),
+                          onSelectedItemChanged: (index) => setState(
+                                () => _selectedYear = DateTime.now().year - index,
+                          ),
                           children: List.generate(
                             currentYear - 1900 + 1,
                                 (index) => Center(
                               child: Text(
-                                  "${DateTime.now().year - index}",
-                                  style: const TextStyle(
-                                      color: _textPrimary)),
+                                "${DateTime.now().year - index}",
+                                style: const TextStyle(color: _textPrimary),
+                              ),
                             ),
                           ),
                         ),
@@ -553,7 +572,6 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
       }
 
       if (_isBar) {
-        // Unternehmen: kommt in barAnfragen, KEIN direkter Login
         final barName = _barNameController.text.trim();
         final email = _emailController.text.trim();
         final phone = _phoneController.text.trim();
@@ -566,7 +584,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           "username_lower": username.toLowerCase(),
           "email": email,
           "phoneNumber": phone,
-          "availabilityNote": availability, // NEU: Erreichbarkeit
+          "availabilityNote": availability,
           "requestedPassword": password,
           "status": "open",
         });
@@ -577,8 +595,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           context: context,
           builder: (_) => AlertDialog(
             backgroundColor: _panel,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: const Text(
               "Antrag eingereicht",
               style: TextStyle(color: _textPrimary),
@@ -592,10 +609,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text(
-                  "Okay",
-                  style: TextStyle(color: _textPrimary),
-                ),
+                child: const Text("Okay", style: TextStyle(color: _textPrimary)),
               )
             ],
           ),
@@ -607,20 +621,17 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           MaterialPageRoute(builder: (_) => const LoginScreen()),
         );
       } else {
-        // Privatkonto
         final prefs = await SharedPreferences.getInstance();
 
         final vorname = _vornameController.text.trim();
         final nachname = _nachnameController.text.trim();
-        final birthDate =
-        DateTime(_selectedYear, _selectedMonth, _selectedDay);
+        final birthDate = DateTime(_selectedYear, _selectedMonth, _selectedDay);
         final age = _calculateAge(birthDate);
 
         if (age < 12) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text("Du musst mindestens 12 Jahre alt sein.")),
+            const SnackBar(content: Text("Du musst mindestens 12 Jahre alt sein.")),
           );
           setState(() => _isSaving = false);
           return;
@@ -650,7 +661,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         await prefs.setString("vorname", vorname);
         await prefs.setString("nachname", nachname);
         await prefs.setString("username", username);
-        await prefs.setBool("isBar", false);
+        await prefs.setBool("isBarAccount", false); // ✅ wichtig
         await prefs.setBool("isLoggedIn", true);
         await prefs.setString("currentUsername", username);
         await prefs.setInt("authVersion", 1);
@@ -706,8 +717,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   onTap: () {
                     setState(() {
                       _isBar = false;
-                      _checkUsernameAvailability(
-                          _usernameController.text.trim());
+                      _checkUsernameAvailability(_usernameController.text.trim());
                     });
                   },
                 ),
@@ -717,8 +727,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   onTap: () {
                     setState(() {
                       _isBar = true;
-                      _checkUsernameAvailability(
-                          _usernameController.text.trim());
+                      _checkUsernameAvailability(_usernameController.text.trim());
                     });
                   },
                 ),
@@ -822,13 +831,13 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   controller: _barNameController,
                   textInputAction: TextInputAction.next,
                   inputFormatters: [
-                    FilteringTextInputFormatter.deny(RegExp(r'^\s'))
+                    FilteringTextInputFormatter.deny(RegExp(r'^\s')),
                   ],
                   style: const TextStyle(color: _textPrimary),
                   decoration: _dec(
                     label: "Name des Unternehmens / Lokals",
                     icon: Icons.storefront,
-                    hint: "z. B. Club XY",
+                    hint: "z. B. Mustermann Club",
                   ),
                   validator: _nameValidator,
                 ),
@@ -840,13 +849,13 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   textInputAction: TextInputAction.next,
                   onFieldSubmitted: (_) => _nachnameNode.requestFocus(),
                   inputFormatters: [
-                    FilteringTextInputFormatter.deny(RegExp(r'^\s'))
+                    FilteringTextInputFormatter.deny(RegExp(r'^\s')),
                   ],
                   style: const TextStyle(color: _textPrimary),
                   decoration: _dec(
                     label: "Vorname",
                     icon: Icons.person,
-                    hint: "z. B. Adrian",
+                    hint: "z. B. Max",
                   ),
                   validator: _nameValidator,
                 ),
@@ -857,13 +866,13 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   textInputAction: TextInputAction.next,
                   onFieldSubmitted: (_) => _usernameNode.requestFocus(),
                   inputFormatters: [
-                    FilteringTextInputFormatter.deny(RegExp(r'^\s'))
+                    FilteringTextInputFormatter.deny(RegExp(r'^\s')),
                   ],
                   style: const TextStyle(color: _textPrimary),
                   decoration: _dec(
                     label: "Nachname",
                     icon: Icons.person_outline,
-                    hint: "z. B. Egger",
+                    hint: "z. B. Mustermann",
                   ),
                   validator: _nameValidator,
                 ),
@@ -884,23 +893,35 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                       ? null
                       : (_usernameChecked
                       ? (_usernameTaken
-                      ? const Icon(Icons.close_rounded,
-                      color: _accent)
-                      : const Icon(Icons.check_circle,
-                      color: _secondary))
+                      ? const Icon(Icons.close_rounded, color: _accent)
+                      : const Icon(Icons.check_circle, color: _secondary))
                       : const SizedBox(
                     width: 18,
                     height: 18,
                     child: Padding(
                       padding: EdgeInsets.all(2.0),
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                      ),
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   )),
                 ),
                 validator: _usernameValidator,
               ),
+
+              if (_usernameHasUppercase) ...[
+                const SizedBox(height: 6),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    "Usernames dürfen nur Kleinbuchstaben enthalten.",
+                    style: TextStyle(
+                      color: _accent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+
               const SizedBox(height: 12),
 
               TextFormField(
@@ -915,12 +936,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   hint: "mind. 6 Zeichen",
                   suffix: IconButton(
                     tooltip: _pwVisible ? "Verbergen" : "Anzeigen",
-                    onPressed: () =>
-                        setState(() => _pwVisible = !_pwVisible),
+                    onPressed: () => setState(() => _pwVisible = !_pwVisible),
                     icon: Icon(
-                      _pwVisible
-                          ? Icons.visibility_off
-                          : Icons.visibility,
+                      _pwVisible ? Icons.visibility_off : Icons.visibility,
                       color: Colors.white70,
                     ),
                   ),
@@ -938,7 +956,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   decoration: _dec(
                     label: "Geschäfts-E-Mail",
                     icon: Icons.email,
-                    hint: "mail@club.at",
+                    hint: "kontakt@mustermann.at",
                   ),
                   validator: _emailValidator,
                 ),
@@ -950,7 +968,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   decoration: _dec(
                     label: "Telefonnummer",
                     icon: Icons.phone,
-                    hint: "+43 ...",
+                    hint: "+43 660 123456",
                   ),
                   validator: _phoneValidator,
                 ),
@@ -980,24 +998,28 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                   onPressed: _canSubmit ? _onSubmit : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _accent,
-                    disabledBackgroundColor:
-                    _accent.withOpacity(0.4),
+                    disabledBackgroundColor: _accent.withOpacity(0.4),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                   child: _isSaving
                       ? const SizedBox(
                     width: 22,
                     height: 22,
                     child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2),
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
                   )
                       : Text(
                     _isBar ? "Antrag erstellen" : "Account erstellen",
                     style: const TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.bold),
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ),
@@ -1019,14 +1041,15 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
                     : () {
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(
-                        builder: (_) => const LoginScreen()),
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
                   );
                 },
                 child: const Text(
                   "Ich habe bereits einen Account",
                   style: TextStyle(
-                      color: _textSecondary, fontWeight: FontWeight.w600),
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -1046,8 +1069,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         centerTitle: true,
         title: const Text(
           "Account erstellen",
-          style:
-          TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
+          style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
         ),
       ),
       body: Container(
@@ -1060,8 +1082,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
         ),
         child: Center(
           child: SingleChildScrollView(
-            padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 560),
               child: _cardForm(),

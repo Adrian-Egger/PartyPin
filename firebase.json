@@ -2,7 +2,6 @@
   "firestore": {
     "rules": "firestore.rules"
   },
-
   "flutter": {
     "platforms": {
       "android": {
@@ -26,7 +25,6 @@
       }
     }
   },
-
   "functions": [
     {
       "codebase": "default",
@@ -41,9 +39,8 @@
       ]
     }
   ],
-
   "hosting": {
-    "public": "public",
+    "public": "build/web",
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -51,12 +48,8 @@
     ],
     "rewrites": [
       {
-        "source": "/paypal-return",
-        "destination": "/paypal-return/index.html"
-      },
-      {
-        "source": "/paypal-cancel",
-        "destination": "/paypal-cancel/index.html"
+        "source": "**",
+        "destination": "/index.html"
       }
     ]
   }
