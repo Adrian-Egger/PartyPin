@@ -2355,17 +2355,16 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             if (_isPremium) ...[
-              const Icon(Icons.workspace_premium, color: Colors.amber, size: 22),
-              const SizedBox(width: 6),
               const Text(
                 "Premium Map",
                 style: TextStyle(
-                  color: Colors.amber,
+                  color: _text, // oder Colors.white
                   fontSize: 24,
                   fontWeight: FontWeight.w900,
                 ),
               ),
-            ] else ...[
+            ]
+            else ...[
               const Text(
                 "Party Map",
                 style: TextStyle(

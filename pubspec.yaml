@@ -1,7 +1,7 @@
 name: party_pin
 description: App for Partypeople
 publish_to: "none"
-version: 4.2.0+12
+version: 4.3.0+13
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -37,12 +37,12 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - lib/Pics/PartyPinLogo.png
+    - lib/Pics/Logo.png
 
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "lib/Pics/PartyPinLogo.png"
+  image_path: "lib/Pics/Logo.png"
   adaptive_icon_background: "#000000"
-  adaptive_icon_foreground: "lib/Pics/PartyPinLogo.png"
+  adaptive_icon_foreground: "lib/Pics/Logo.png"
   remove_alpha_ios: true
