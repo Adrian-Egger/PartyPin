@@ -245,213 +245,13 @@ class PartyBottomSheet extends StatelessWidget {
   Widget _friendsGoingPremiumSection(BuildContext context) {
     if ((currentUsername ?? '').trim().isEmpty) return const SizedBox.shrink();
 
-    Widget lockedCard() {
-      return _boxed(
-        InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const PremiumScreen()),
-            );
-          },
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Colors.grey[900],
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.redAccent.withOpacity(.55)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: Colors.redAccent.withOpacity(.15),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.redAccent.withOpacity(.6)),
-                  ),
-                  child: const Icon(Icons.lock_outline, color: Colors.redAccent),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "🔒 Premium Feature",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        "Sieh, welche deiner Freunde bei dieser Party hingehen.",
-                        style: TextStyle(color: Colors.white70, height: 1.25),
-                      ),
-                      SizedBox(height: 6),
-                      Text(
-                        "Tippe hier, um Premium zu holen →",
-                        style: TextStyle(
-                          color: Colors.redAccent,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
+    // ✅ Premium-Gate entfernt: immer "freigeschaltet"
+    return FutureBuilder<Set<String>>(
+      future: _loadFriendUsernames(),
+      builder: (context, friendSnap) {
+        final friends = friendSnap.data ?? <String>{};
 
-    Widget premiumContent(bool isPremium) {
-      if (!isPremium) return lockedCard();
-
-      return FutureBuilder<Set<String>>(
-        future: _loadFriendUsernames(),
-        builder: (context, friendSnap) {
-          final friends = friendSnap.data ?? <String>{};
-
-          if (friendSnap.connectionState == ConnectionState.waiting) {
-            return _boxed(
-              Row(
-                children: const [
-                  SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2)),
-                  SizedBox(width: 10),
-                  Text("Lade Freunde…", style: TextStyle(color: Colors.white70)),
-                ],
-              ),
-            );
-          }
-
-          if (friends.isEmpty) {
-            return _boxed(
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text(
-                    "👀 Freunde bei dieser Party",
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800),
-                  ),
-                  SizedBox(height: 8),
-                  Text(
-                    "Du hast aktuell keine Freunde, die angezeigt werden können.",
-                    style: TextStyle(color: Colors.white70),
-                  ),
-                ],
-              ),
-            );
-          }
-
-          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: comingStream(),
-            builder: (context, comingSnap) {
-              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: maybeStream(),
-                builder: (context, maybeSnap) {
-                  final comingDocs = comingSnap.data?.docs ?? const [];
-                  final maybeDocs = maybeSnap.data?.docs ?? const [];
-
-                  final comingFriends = <String>[];
-                  for (final d in comingDocs) {
-                    final u = d.id.trim();
-                    if (friends.contains(u)) comingFriends.add(u);
-                  }
-
-                  final maybeFriends = <String>[];
-                  for (final d in maybeDocs) {
-                    final u = d.id.trim();
-                    if (friends.contains(u)) maybeFriends.add(u);
-                  }
-
-                  comingFriends.sort();
-                  maybeFriends.sort();
-
-                  return _boxed(
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: const [
-                            Icon(Icons.groups_rounded,
-                                color: Colors.redAccent, size: 20),
-                            SizedBox(width: 8),
-                            Text(
-                              "👀 Freunde bei dieser Party",
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w800),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        if (comingFriends.isEmpty && maybeFriends.isEmpty)
-                          const Text(
-                            "Keine deiner Freunde sind hier aktuell in „Ich komme“ oder „Vielleicht“.",
-                            style: TextStyle(color: Colors.white70),
-                          )
-                        else ...[
-                          if (comingFriends.isNotEmpty) ...[
-                            const Text("✅ Kommen",
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w800)),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: comingFriends
-                                  .map((u) => _friendChip(
-                                  u, Colors.greenAccent))
-                                  .toList(),
-                            ),
-                            const SizedBox(height: 12),
-                          ],
-                          if (maybeFriends.isNotEmpty) ...[
-                            const Text("🤔 Vielleicht",
-                                style: TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w800)),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: maybeFriends
-                                  .map((u) =>
-                                  _friendChip(u, Colors.orangeAccent))
-                                  .toList(),
-                            ),
-                          ],
-                        ],
-                      ],
-                    ),
-                  );
-                },
-              );
-            },
-          );
-        },
-      );
-    }
-
-    // 1) users/{uid}
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: _userDocByUidStream(),
-      builder: (context, uidSnap) {
-        if (uidSnap.connectionState == ConnectionState.waiting) {
+        if (friendSnap.connectionState == ConnectionState.waiting) {
           return _boxed(
             Row(
               children: const [
@@ -460,55 +260,117 @@ class PartyBottomSheet extends StatelessWidget {
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2)),
                 SizedBox(width: 10),
-                Text("Lade Premium-Status…",
-                    style: TextStyle(color: Colors.white70)),
+                Text("Lade Freunde…", style: TextStyle(color: Colors.white70)),
               ],
             ),
           );
         }
 
-        // Wenn UID-DOC existiert -> entscheidet es (premium true/false)
-        if (uidSnap.data?.exists == true) {
-          final d = uidSnap.data?.data() ?? {};
-          final isPremium = _parsePremium(d['premium']);
-          return premiumContent(isPremium);
+        if (friends.isEmpty) {
+          return _boxed(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  "👀 Freunde bei dieser Party",
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  "Du hast aktuell keine Freunde, die angezeigt werden können.",
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ],
+            ),
+          );
         }
 
-        // 2) users/{username}
-        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: _userDocByUsernameStream(),
-          builder: (context, userSnap) {
-            if (userSnap.connectionState == ConnectionState.waiting) {
-              return _boxed(
-                Row(
-                  children: const [
-                    SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2)),
-                    SizedBox(width: 10),
-                    Text("Lade Premium-Status…",
-                        style: TextStyle(color: Colors.white70)),
-                  ],
-                ),
-              );
-            }
-
-            if (userSnap.data?.exists == true) {
-              final d = userSnap.data?.data() ?? {};
-              final isPremium = _parsePremium(d['premium']);
-              return premiumContent(isPremium);
-            }
-
-            // 3) Query fallback
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: comingStream(),
+          builder: (context, comingSnap) {
             return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: _userByUsernameQueryStream(),
-              builder: (context, qSnap) {
-                final docs = qSnap.data?.docs ?? const [];
-                final isPremium = docs.isNotEmpty
-                    ? _parsePremium(docs.first.data()['premium'])
-                    : false;
-                return premiumContent(isPremium);
+              stream: maybeStream(),
+              builder: (context, maybeSnap) {
+                final comingDocs = comingSnap.data?.docs ?? const [];
+                final maybeDocs = maybeSnap.data?.docs ?? const [];
+
+                final comingFriends = <String>[];
+                for (final d in comingDocs) {
+                  final u = d.id.trim();
+                  if (friends.contains(u)) comingFriends.add(u);
+                }
+
+                final maybeFriends = <String>[];
+                for (final d in maybeDocs) {
+                  final u = d.id.trim();
+                  if (friends.contains(u)) maybeFriends.add(u);
+                }
+
+                comingFriends.sort();
+                maybeFriends.sort();
+
+                return _boxed(
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: const [
+                          Icon(Icons.groups_rounded,
+                              color: Colors.redAccent, size: 20),
+                          SizedBox(width: 8),
+                          Text(
+                            "👀 Freunde bei dieser Party",
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      if (comingFriends.isEmpty && maybeFriends.isEmpty)
+                        const Text(
+                          "Keine deiner Freunde sind hier aktuell in „Ich komme“ oder „Vielleicht“.",
+                          style: TextStyle(color: Colors.white70),
+                        )
+                      else ...[
+                        if (comingFriends.isNotEmpty) ...[
+                          const Text("✅ Kommen",
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: comingFriends
+                                .map((u) => _friendChip(u, Colors.greenAccent))
+                                .toList(),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (maybeFriends.isNotEmpty) ...[
+                          const Text("🤔 Vielleicht",
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800)),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: maybeFriends
+                                .map((u) =>
+                                _friendChip(u, Colors.orangeAccent))
+                                .toList(),
+                          ),
+                        ],
+                      ],
+                    ],
+                  ),
+                );
               },
             );
           },
@@ -516,6 +378,7 @@ class PartyBottomSheet extends StatelessWidget {
       },
     );
   }
+
 
   static Widget _friendChip(String username, Color c) {
     return Container(

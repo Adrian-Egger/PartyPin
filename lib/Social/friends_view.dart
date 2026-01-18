@@ -50,6 +50,15 @@ class _FriendsScreenState extends State<FriendsScreen> {
   // ✅ Cache: damit „Freunde durchsuchen“ auch nach Vorname/Nachname/Voller Name/Username geht
   final Map<String, _FriendVM> _friendVmCache = {};
 
+  // ✅ Blocked: users/{me}/blocked/{other}
+  Set<String> _blockedIds = <String>{};
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _blockedSub;
+
+  // ✅ Cache: check ob OTHER mich blockt (users/{other}/blocked/{me}) nur für Disable
+  final Map<String, bool> _blockedByOtherCache = {};
+
+  String get _me => widget.currentUsername.trim();
+
   // ✅ Tastatur überall schließen
   void _dismissKeyboard() {
     FocusManager.instance.primaryFocus?.unfocus();
@@ -63,10 +72,13 @@ class _FriendsScreenState extends State<FriendsScreen> {
     _model.loadMyDocId(widget.currentUsername.trim()).then((_) {
       if (mounted) setState(() {});
     });
+
+    _bindBlocked();
   }
 
   @override
   void dispose() {
+    _blockedSub?.cancel();
     _debounce?.cancel();
     _friendsDebounce?.cancel();
     _searchCtrl.removeListener(_onSearchChanged);
@@ -74,6 +86,26 @@ class _FriendsScreenState extends State<FriendsScreen> {
     _searchCtrl.dispose();
     _friendsFilterCtrl.dispose();
     super.dispose();
+  }
+
+  void _bindBlocked() {
+    _blockedSub?.cancel();
+    final me = _me;
+    if (me.isEmpty) return;
+
+    _blockedSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(me)
+        .collection('blocked')
+        .snapshots()
+        .listen((qs) {
+      final ids = qs.docs.map((d) => d.id).toSet();
+      if (!mounted) return;
+      setState(() {
+        _blockedIds = ids;
+        _blockedByOtherCache.clear();
+      });
+    });
   }
 
   void _onSearchChanged() {
@@ -160,6 +192,32 @@ class _FriendsScreenState extends State<FriendsScreen> {
     return null;
   }
 
+  // ✅ check ob OTHER mich blockt: users/{other}/blocked/{me}
+  Future<bool> _isBlockedByOther(String otherUsername) async {
+    final me = _me;
+    final other = otherUsername.trim();
+    if (me.isEmpty || other.isEmpty) return false;
+
+    final key = other.toLowerCase();
+    final cached = _blockedByOtherCache[key];
+    if (cached != null) return cached;
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(other)
+          .collection('blocked')
+          .doc(me)
+          .get();
+      final res = snap.exists;
+      _blockedByOtherCache[key] = res;
+      return res;
+    } catch (_) {
+      _blockedByOtherCache[key] = false;
+      return false;
+    }
+  }
+
   Future<void> _sendFriendRequest(String targetRaw) async {
     final me = widget.currentUsername.trim();
     if (me.isEmpty) {
@@ -179,6 +237,20 @@ class _FriendsScreenState extends State<FriendsScreen> {
           color: _warn, icon: Icons.warning_amber);
       return;
     }
+
+    // ✅ block check (beide Richtungen)
+    if (_blockedIds.contains(toUsername)) {
+      _showSnack('Nicht möglich: du hast den User blockiert.',
+          color: _warn, icon: Icons.block);
+      return;
+    }
+    final otherBlocksMe = await _isBlockedByOther(toUsername);
+    if (otherBlocksMe) {
+      _showSnack('Nicht möglich: der User hat dich blockiert.',
+          color: _warn, icon: Icons.block);
+      return;
+    }
+
     if (await _model.areFriends(me, toUsername)) {
       _showSnack('Ihr seid bereits Freunde.',
           color: _warn, icon: Icons.check_circle_outline);
@@ -213,6 +285,19 @@ class _FriendsScreenState extends State<FriendsScreen> {
   }
 
   Future<void> _accept(String fromUsername, String toUsername) async {
+    // ✅ block check (beide Richtungen)
+    if (_blockedIds.contains(fromUsername)) {
+      _showSnack('Nicht möglich: du hast den User blockiert.',
+          color: _warn, icon: Icons.block);
+      return;
+    }
+    final otherBlocksMe = await _isBlockedByOther(fromUsername);
+    if (otherBlocksMe) {
+      _showSnack('Nicht möglich: der User hat dich blockiert.',
+          color: _warn, icon: Icons.block);
+      return;
+    }
+
     final err = await _model.accept(fromUsername, toUsername);
     if (err == null) {
       _showSnack('Anfrage angenommen', color: _ok, icon: Icons.check_circle);
@@ -269,6 +354,209 @@ class _FriendsScreenState extends State<FriendsScreen> {
     } else {
       _showSnack('Fehler: $err', color: _err, icon: Icons.error_outline);
     }
+  }
+
+  // ✅ Report/Block/Unblock: gleiche Firebase-Docs wie Feedback
+  Future<void> _reportUser(String reportedUsername) async {
+    final reason = await _pickReasonBottomSheet();
+    if (reason == null) return;
+
+    final details = await _optionalDetailsDialog();
+    if (!mounted) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('reports').add({
+        'createdAt': FieldValue.serverTimestamp(),
+        'status': 'open',
+        'reporterUsername': _me,
+        'reportedUsername': reportedUsername,
+        'targetType': 'user',
+        'targetId': reportedUsername,
+        'reason': reason,
+        'details': details,
+      });
+      _showSnack('Gemeldet ✅', color: _ok, icon: Icons.check_circle_rounded);
+    } catch (e) {
+      _showSnack('Melden fehlgeschlagen: $e', color: _err, icon: Icons.error_outline);
+    }
+  }
+
+  Future<void> _blockUser(String otherUsername) async {
+    final me = _me;
+    final other = otherUsername.trim();
+    if (me.isEmpty || other.isEmpty) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('Blockieren?', style: TextStyle(color: _text, fontWeight: FontWeight.w900)),
+        content: Text('„$other“ blockieren? Danach siehst du nichts mehr von ihm.',
+            style: const TextStyle(color: _muted)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Abbrechen', style: TextStyle(color: _muted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: _accent, foregroundColor: Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Blockieren', style: TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(me)
+          .collection('blocked')
+          .doc(other)
+          .set({
+        'blockedUsername': other,
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      _showSnack('User blockiert ✅', color: _ok, icon: Icons.check_circle_rounded);
+    } catch (e) {
+      _showSnack('Blockieren fehlgeschlagen: $e', color: _err, icon: Icons.error_outline);
+    }
+  }
+
+  Future<void> _unblockUser(String otherUsername) async {
+    final me = _me;
+    final other = otherUsername.trim();
+    if (me.isEmpty || other.isEmpty) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(me)
+          .collection('blocked')
+          .doc(other)
+          .delete();
+
+      _showSnack('User entblockt ✅', color: _ok, icon: Icons.lock_open_rounded);
+    } catch (e) {
+      _showSnack('Entblocken fehlgeschlagen: $e', color: _err, icon: Icons.error_outline);
+    }
+  }
+
+  Future<String?> _pickReasonBottomSheet() async {
+    const reasons = <String>[
+      'Hate Speech',
+      'Belästigung',
+      'Nacktheit/Sexuell',
+      'Gewalt',
+      'Spam',
+      'Sonstiges',
+    ];
+
+    return showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: reasons.length,
+            separatorBuilder: (_, __) => const Divider(height: 1, color: _border),
+            itemBuilder: (_, i) => ListTile(
+              title: Text(reasons[i], style: const TextStyle(color: _text, fontWeight: FontWeight.w800)),
+              onTap: () => Navigator.of(ctx).pop(reasons[i]),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<String> _optionalDetailsDialog() async {
+    final ctrl = TextEditingController();
+    final res = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('Details (optional)', style: TextStyle(color: _text)),
+        content: TextField(
+          controller: ctrl,
+          maxLines: 3,
+          style: const TextStyle(color: _text),
+          decoration: const InputDecoration(
+            hintText: 'Kurz erklären…',
+            hintStyle: TextStyle(color: _muted),
+            enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: _border)),
+            focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: _accentLine)),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(""),
+            child: const Text('Überspringen', style: TextStyle(color: _muted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: _accent),
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('OK', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
+          ),
+        ],
+      ),
+    );
+    return (res ?? '').trim();
+  }
+
+  Widget _userMenu({
+    required String username,
+    required bool isBlockedByMe,
+  }) {
+    return PopupMenuButton<String>(
+      color: const Color(0xFF242833), // ✅ helleres schwarz
+      icon: const Icon(Icons.more_vert, color: _muted),
+      onSelected: (v) {
+        if (v == 'report') _reportUser(username);
+        if (v == 'block') _blockUser(username);
+        if (v == 'unblock') _unblockUser(username);
+      },
+      itemBuilder: (_) => [
+        const PopupMenuItem(
+          value: 'report',
+          child: Row(
+            children: [
+              Icon(Icons.flag_outlined, size: 18, color: _accent),
+              SizedBox(width: 10),
+              Text(
+                'Melden',
+                style: TextStyle(color: _accent, fontWeight: FontWeight.w900),
+              ),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: isBlockedByMe ? 'unblock' : 'block',
+          child: Row(
+            children: [
+              Icon(
+                isBlockedByMe ? Icons.lock_open_rounded : Icons.block,
+                size: 18,
+                color: _accent,
+              ),
+              const SizedBox(width: 10),
+              Text(
+                isBlockedByMe ? 'Entblocken' : 'Blockieren',
+                style: const TextStyle(color: _accent, fontWeight: FontWeight.w900),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   // ✅ Such-Blob: Username + @username + Vorname + Nachname + voller Name (alles lower)
@@ -570,8 +858,11 @@ class _FriendsScreenState extends State<FriendsScreen> {
           return members.first == me ? members.last : members.first;
         }).toList();
 
+        // ✅ Freunde-Liste: blockierte nicht anzeigen
+        final cleaned = others.where((u) => !_blockedIds.contains(u)).toList();
+
         return FutureBuilder<List<_FriendVM>>(
-          future: _getFriendVMs(others),
+          future: _getFriendVMs(cleaned),
           builder: (ctx2, fSnap) {
             if (fSnap.hasError) return _ErrorHint(err: fSnap.error.toString());
             if (!fSnap.hasData) {
@@ -593,11 +884,14 @@ class _FriendsScreenState extends State<FriendsScreen> {
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (_, i) {
                 final vm = filtered[i];
+                final isBlockedByMe = _blockedIds.contains(vm.username);
+
                 return _FriendCard(
                   photoUrl: vm.photoUrl,
                   title: vm.displayName,
                   subtitle: '@${vm.username}',
                   onRemove: () => _confirmAndUnfriend(vm.username),
+                  menu: _userMenu(username: vm.username, isBlockedByMe: isBlockedByMe),
                 );
               },
             );
@@ -633,198 +927,267 @@ class _FriendsScreenState extends State<FriendsScreen> {
           itemBuilder: (ctx, i) {
             final uname = users[i];
 
-            return FutureBuilder<RelStatus>(
-              future: _model.relationWith(me, uname),
-              builder: (ctx2, rSnap) {
-                final rel = rSnap.data;
+            // ✅ WICHTIG: in der Suche blockierte NICHT wegfiltern -> sonst “Millisekunde Bug”
+            final isBlockedByMe = _blockedIds.contains(uname);
 
-                Widget shell(Widget child) => Card(
-                  color: _panel,
-                  elevation: 6,
-                  shadowColor: Colors.black54,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    side: BorderSide(color: _accent.withOpacity(0.22), width: 1),
-                  ),
-                  child: child,
-                );
+            return FutureBuilder<bool>(
+              future: _isBlockedByOther(uname),
+              builder: (ctxB, bSnap) {
+                final blockedByOther = bSnap.data == true;
 
-                final titleText = Text(
-                  uname,
-                  softWrap: true,
-                  maxLines: null,
-                  overflow: TextOverflow.visible,
-                  style: const TextStyle(
-                    color: _text,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 15,
-                    height: 1.15,
-                  ),
-                );
+                return FutureBuilder<RelStatus>(
+                  future: _model.relationWith(me, uname),
+                  builder: (ctx2, rSnap) {
+                    final rel = rSnap.data;
 
-                final subtitleText = Text(
-                  '@$uname',
-                  softWrap: true,
-                  maxLines: null,
-                  overflow: TextOverflow.visible,
-                  style: const TextStyle(
-                    color: _muted,
-                    fontWeight: FontWeight.w800,
-                    height: 1.15,
-                  ),
-                );
-
-                if (rel == null) {
-                  return shell(
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Icon(Icons.person, color: _text),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                titleText,
-                                const SizedBox(height: 4),
-                                subtitleText,
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ],
+                    Widget shell(Widget child) => Card(
+                      color: _panel,
+                      elevation: 6,
+                      shadowColor: Colors.black54,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: BorderSide(color: _accent.withOpacity(0.22), width: 1),
                       ),
-                    ),
-                  );
-                }
+                      child: child,
+                    );
 
-                if (rel == RelStatus.friends) return const SizedBox.shrink();
+                    final titleText = Text(
+                      uname,
+                      softWrap: true,
+                      maxLines: null,
+                      overflow: TextOverflow.visible,
+                      style: const TextStyle(
+                        color: _text,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 15,
+                        height: 1.15,
+                      ),
+                    );
 
-                if (rel == RelStatus.incomingPending) {
-                  return shell(
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Icon(Icons.person, color: _text),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
+                    final subtitleText = Text(
+                      '@$uname',
+                      softWrap: true,
+                      maxLines: null,
+                      overflow: TextOverflow.visible,
+                      style: const TextStyle(
+                        color: _muted,
+                        fontWeight: FontWeight.w800,
+                        height: 1.15,
+                      ),
+                    );
+
+                    // ✅ FIX: Block-UI hat PRIORITÄT – auch wenn rel später friends wird
+                    if (isBlockedByMe || blockedByOther) {
+                      return shell(
+                        Opacity(
+                          opacity: 0.45,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                titleText,
-                                const SizedBox(height: 4),
-                                subtitleText,
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              ElevatedButton(
-                                onPressed: () {
-                                  _dismissKeyboard();
-                                  _accept(uname, me);
-                                },
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: _ok,
-                                  foregroundColor: Colors.white,
-                                  padding:
-                                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(10)),
+                                const Icon(Icons.block, color: _warn),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      titleText,
+                                      const SizedBox(height: 4),
+                                      subtitleText,
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        isBlockedByMe ? 'Von dir blockiert' : 'Blockiert',
+                                        style: const TextStyle(
+                                          color: _warn,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                                child: const Text(
-                                  'AKZEPTIEREN',
-                                  style: TextStyle(fontWeight: FontWeight.w900),
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              IconButton(
-                                tooltip: 'Ablehnen',
-                                onPressed: () {
-                                  _dismissKeyboard();
-                                  _decline(uname, me);
-                                },
-                                icon: const Icon(Icons.close_rounded, color: _err, size: 26),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }
-
-                if (rel == RelStatus.outgoingPending) {
-                  return shell(
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Icon(Icons.person, color: _text),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                titleText,
-                                const SizedBox(height: 4),
-                                subtitleText,
+                                const SizedBox(width: 10),
+                                if (isBlockedByMe)
+                                  FilledButton.tonalIcon(
+                                    onPressed: () {
+                                      _dismissKeyboard();
+                                      _unblockUser(uname);
+                                    },
+                                    icon: const Icon(Icons.lock_open_rounded),
+                                    label: const Text('Entblocken'),
+                                  ),
+                                _userMenu(username: uname, isBlockedByMe: isBlockedByMe),
                               ],
                             ),
                           ),
-                          const SizedBox(width: 10),
-                          const Text(
-                            'pending',
-                            style: TextStyle(color: _muted, fontWeight: FontWeight.w900),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }
+                        ),
+                      );
+                    }
 
-                return shell(
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.person, color: _text),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
+                    if (rel == null) {
+                      return shell(
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              titleText,
-                              const SizedBox(height: 4),
-                              subtitleText,
+                              const Icon(Icons.person, color: _text),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    titleText,
+                                    const SizedBox(height: 4),
+                                    subtitleText,
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
                             ],
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        FilledButton.tonalIcon(
-                          onPressed: () {
-                            _dismissKeyboard();
-                            _sendFriendRequest(uname);
-                          },
-                          icon: const Icon(Icons.person_add_alt_1),
-                          label: const Text('Add'),
+                      );
+                    }
+
+                    // ✅ bleibt: Freunde in Suche ausblenden (aber Block-UI hat schon vorher returned)
+                    if (rel == RelStatus.friends) return const SizedBox.shrink();
+
+                    if (rel == RelStatus.incomingPending) {
+                      return shell(
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.person, color: _text),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    titleText,
+                                    const SizedBox(height: 4),
+                                    subtitleText,
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      _dismissKeyboard();
+                                      _accept(uname, me);
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _ok,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 10,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                    child: const Text(
+                                      'AKZEPTIEREN',
+                                      style: TextStyle(fontWeight: FontWeight.w900),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  IconButton(
+                                    tooltip: 'Ablehnen',
+                                    onPressed: () {
+                                      _dismissKeyboard();
+                                      _decline(uname, me);
+                                    },
+                                    icon: const Icon(
+                                      Icons.close_rounded,
+                                      color: _err,
+                                      size: 26,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              _userMenu(username: uname, isBlockedByMe: isBlockedByMe),
+                            ],
+                          ),
                         ),
-                      ],
-                    ),
-                  ),
+                      );
+                    }
+
+                    if (rel == RelStatus.outgoingPending) {
+                      return shell(
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.person, color: _text),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    titleText,
+                                    const SizedBox(height: 4),
+                                    subtitleText,
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              const Text(
+                                'pending',
+                                style: TextStyle(color: _muted, fontWeight: FontWeight.w900),
+                              ),
+                              _userMenu(username: uname, isBlockedByMe: isBlockedByMe),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
+
+                    return shell(
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.person, color: _text),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  titleText,
+                                  const SizedBox(height: 4),
+                                  subtitleText,
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            FilledButton.tonalIcon(
+                              onPressed: () {
+                                _dismissKeyboard();
+                                _sendFriendRequest(uname);
+                              },
+                              icon: const Icon(Icons.person_add_alt_1),
+                              label: const Text('Add'),
+                            ),
+                            _userMenu(username: uname, isBlockedByMe: isBlockedByMe),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 );
               },
             );
@@ -931,6 +1294,9 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                 final fromDoc = (m['fromDocId'] ?? '').toString();
                                 final toU = (m['to'] ?? '').toString();
 
+                                // ✅ Wenn ich den blockiert hab -> nicht anzeigen
+                                if (_blockedIds.contains(fromU)) return const SizedBox.shrink();
+
                                 return FutureBuilder<Map<String, dynamic>?>(
                                   future: _model.getUser(
                                     docId: fromDoc.isNotEmpty ? fromDoc : null,
@@ -945,6 +1311,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                         : ('$first $last').trim();
                                     final photo = (user['photoUrl'] ?? '').toString().trim();
 
+                                    final isBlockedByMe = _blockedIds.contains(fromU);
+
                                     return _RequestCard(
                                       photoUrl: photo,
                                       title: full,
@@ -957,6 +1325,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                         _dismissKeyboard();
                                         _decline(fromU, toU);
                                       },
+                                      menu: _userMenu(username: fromU, isBlockedByMe: isBlockedByMe),
                                     );
                                   },
                                 );
@@ -996,12 +1365,14 @@ class _FriendCard extends StatelessWidget {
   final String title;
   final String subtitle;
   final VoidCallback onRemove;
+  final Widget menu;
 
   const _FriendCard({
     required this.photoUrl,
     required this.title,
     required this.subtitle,
     required this.onRemove,
+    required this.menu,
   });
 
   @override
@@ -1056,6 +1427,7 @@ class _FriendCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
+            menu,
             IconButton(
               tooltip: 'Entfernen',
               onPressed: onRemove,
@@ -1074,6 +1446,7 @@ class _RequestCard extends StatelessWidget {
   final String subtitle;
   final VoidCallback onAccept;
   final VoidCallback onDecline;
+  final Widget menu;
 
   const _RequestCard({
     required this.photoUrl,
@@ -1081,6 +1454,7 @@ class _RequestCard extends StatelessWidget {
     required this.subtitle,
     required this.onAccept,
     required this.onDecline,
+    required this.menu,
   });
 
   @override
@@ -1155,6 +1529,7 @@ class _RequestCard extends StatelessWidget {
               icon: const Icon(Icons.close_rounded,
                   color: _FriendsScreenState._accent, size: 26),
             ),
+            menu,
           ],
         ),
       ),

@@ -50,6 +50,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
   final ImagePicker _picker = ImagePicker();
 
+  // ✅ Coming soon Toggle: Profilbild-Funktion komplett deaktiviert
+  final bool _avatarComingSoon = true;
+
   @override
   void initState() {
     super.initState();
@@ -202,6 +205,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   Future<void> _pickFromSource(ImageSource source) async {
     if (_busyAvatar) return;
 
+    // ✅ Coming soon: komplette Avatar-Funktion deaktiviert (kein Picker/Permissions/Upload)
+    if (_avatarComingSoon) {
+      _showSnack("Profilbild: Coming soon");
+      return;
+    }
+
     final okPerm = await _ensurePermissionForSource(source);
     if (!okPerm) return;
 
@@ -268,6 +277,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   Future<void> _pickAvatar() async {
+    // ✅ Coming soon: BottomSheet gar nicht mehr öffnen
+    if (_avatarComingSoon) {
+      _showSnack("Profilbild: Coming soon");
+      return;
+    }
+
     await showModalBottomSheet(
       context: context,
       backgroundColor: _panel,
@@ -431,8 +446,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Abbrechen",
-                style: TextStyle(color: _textSecondary)),
+            child:
+            const Text("Abbrechen", style: TextStyle(color: _textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
@@ -497,8 +512,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child:
-            const Text("Abbrechen", style: TextStyle(color: _textSecondary)),
+            child: const Text("Abbrechen",
+                style: TextStyle(color: _textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
@@ -571,7 +586,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
             child: Column(
               children: [
                 GestureDetector(
-                  onTap: _busyAvatar ? null : _pickAvatar,
+                  // ✅ Coming soon: nicht mehr editierbar
+                  onTap: () => _showSnack("Profilbild: Coming soon"),
                   child: Stack(
                     alignment: Alignment.bottomRight,
                     children: [
@@ -587,13 +603,16 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                           backgroundImage: _buildAvatarImageProvider(),
                         ),
                       ),
+
+                      // ✅ Coming soon Badge statt Edit Icon
                       Container(
                         decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _accent,
-                          border: Border.all(color: _panel, width: 2),
+                          color: _panel,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: _panelBorder, width: 1),
                         ),
-                        padding: const EdgeInsets.all(6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
                         child: _busyAvatar
                             ? const SizedBox(
                           width: 14,
@@ -604,10 +623,13 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                                 Colors.white),
                           ),
                         )
-                            : const Icon(
-                          Icons.edit,
-                          color: Colors.white,
-                          size: 18,
+                            : const Text(
+                          "Coming soon",
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ],

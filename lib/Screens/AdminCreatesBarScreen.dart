@@ -263,7 +263,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           _pickedImageFile = f; // Desktop preview
         }
 
-        fileName = 'barInfos/profile_${DateTime.now().millisecondsSinceEpoch}_${file.name}';
+        fileName =
+        'barInfos/profile_${DateTime.now().millisecondsSinceEpoch}_${file.name}';
       } else {
         // Android/iOS: ImagePicker
         final picker = ImagePicker();
@@ -277,7 +278,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         }
         final file = File(picked.path);
         bytes = await file.readAsBytes();
-        fileName = 'barInfos/profile_${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
+        fileName =
+        'barInfos/profile_${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
         _pickedImageFile = file;
       }
 
@@ -347,7 +349,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           _barHighlights[index].imageFile = f;
         }
 
-        fileName = 'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_${file.name}';
+        fileName =
+        'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_${file.name}';
       } else {
         final picker = ImagePicker();
         final picked = await picker.pickImage(
@@ -357,7 +360,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         if (picked == null) return;
         final f = File(picked.path);
         bytes = await f.readAsBytes();
-        fileName = 'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
+        fileName =
+        'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
         _barHighlights[index].imageFile = f;
       }
 
@@ -392,7 +396,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       String? imageUrl = h.imageUrl;
 
       if (h.imageFile != null && (imageUrl == null || imageUrl.isEmpty)) {
-        final fileName = 'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
+        final fileName =
+            'barInfos/highlight_${DateTime.now().millisecondsSinceEpoch}_$i.jpg';
         final ref = storage.ref().child(fileName);
         await ref.putFile(h.imageFile!);
         imageUrl = await ref.getDownloadURL();
@@ -438,7 +443,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                     const Spacer(),
                     IconButton(
                       onPressed: _isSaving ? null : () => _removeHighlightRow(i),
-                      icon: const Icon(Icons.delete_outline, color: _accent, size: 18),
+                      icon: const Icon(Icons.delete_outline,
+                          color: _accent, size: 18),
                       tooltip: 'Highlight entfernen',
                     ),
                   ],
@@ -471,7 +477,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           fit: BoxFit.cover,
         ),
       );
-    } else if (highlight.imageUrl != null && highlight.imageUrl!.trim().isNotEmpty) {
+    } else if (highlight.imageUrl != null &&
+        highlight.imageUrl!.trim().isNotEmpty) {
       child = ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: Image.network(
@@ -487,7 +494,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         children: const [
           Icon(Icons.add_a_photo, color: Colors.white70),
           SizedBox(height: 4),
-          Text('Bild hinzufügen', style: TextStyle(color: Colors.white54, fontSize: 12)),
+          Text('Bild hinzufügen',
+              style: TextStyle(color: Colors.white54, fontSize: 12)),
         ],
       );
     }
@@ -663,7 +671,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           if (closed)
             Expanded(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
                   color: Colors.redAccent.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(999),
@@ -686,7 +695,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _isSaving ? null : () => _pickOpeningTime(dayMeta.key, true),
+                      onPressed: _isSaving
+                          ? null
+                          : () => _pickOpeningTime(dayMeta.key, true),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.white24),
                         backgroundColor: const Color(0xFF141A22),
@@ -694,14 +705,17 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                       ),
                       child: Text(
                         "von ${_formatTimeOfDay(day.from)}",
-                        style: const TextStyle(color: _textPrimary, fontSize: 12),
+                        style: const TextStyle(
+                            color: _textPrimary, fontSize: 12),
                       ),
                     ),
                   ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _isSaving ? null : () => _pickOpeningTime(dayMeta.key, false),
+                      onPressed: _isSaving
+                          ? null
+                          : () => _pickOpeningTime(dayMeta.key, false),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.white24),
                         backgroundColor: const Color(0xFF141A22),
@@ -709,7 +723,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                       ),
                       child: Text(
                         "bis ${_formatTimeOfDay(day.to)}",
-                        style: const TextStyle(color: _textPrimary, fontSize: 12),
+                        style: const TextStyle(
+                            color: _textPrimary, fontSize: 12),
                       ),
                     ),
                   ),
@@ -723,7 +738,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: closed ? Colors.redAccent.withOpacity(0.14) : Colors.transparent,
+                color:
+                closed ? Colors.redAccent.withOpacity(0.14) : Colors.transparent,
                 borderRadius: BorderRadius.circular(999),
                 border: Border.all(
                   color: closed ? Colors.redAccent : Colors.white24,
@@ -765,7 +781,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       if (locations.isEmpty) {
         if (!mounted) return null;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Adresse konnte nicht gefunden werden. Bitte prüfen.')),
+          const SnackBar(
+              content: Text('Adresse konnte nicht gefunden werden. Bitte prüfen.')),
         );
         return null;
       }
@@ -920,8 +937,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         "lng": geo.longitude,
         "city_lower": city.toLowerCase(),
         "barName_lower": barName.toLowerCase(),
-        if (_profileImageUrl != null && _profileImageUrl!.isNotEmpty)
-          "profileImageUrl": _profileImageUrl,
+        if (_profileImageUrl != null && _profileImageUrl!.isNotEmpty) "profileImageUrl": _profileImageUrl,
         if (!existing.exists) "createdAt": FieldValue.serverTimestamp(),
       };
 
@@ -1281,7 +1297,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // ✅ USERS: Suche + Detailansicht + Aktionen (Account löschen / Premium an/aus)
+  // ✅ USERS: Suche + Detailansicht + Aktionen
   // ---------------------------------------------------------------------------
 
   String _lower(String s) => s.trim().toLowerCase();
@@ -1391,7 +1407,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         'premiumUpdatedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         if (value) 'premiumSince': FieldValue.serverTimestamp(),
-        if (!value) 'premiumUntil': FieldValue.serverTimestamp(), // optional: Ende markieren
+        if (!value) 'premiumUntil': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
       if (!mounted) return;
@@ -1402,6 +1418,99 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Fehler: $e")),
+      );
+    }
+  }
+
+  // ✅ FIX: Ban + Feedbacks hidden=true (Batch/Paging) => weniger "connection lost"
+  Future<void> _banUserAndHideFeedbacks(
+      DocumentReference<Map<String, dynamic>> userRef,
+      Map<String, dynamic> userData,
+      ) async {
+    final ok = await _doubleConfirm(
+      title1: "User bannen + Inhalte ausblenden?",
+      msg1: "Willst du diesen User bannen (banned=true) UND alle seine Feedbacks ausblenden (hidden=true)?",
+      title2: "Wirklich durchführen?",
+      msg2: "Diese Aktion wird sofort in Firebase gespeichert und kann viele Dokumente ändern.",
+      okText: "Bannen",
+    );
+    if (!ok) return;
+
+    final userDocId = userRef.id;
+    final username = (userData['username'] ?? userData['currentUsername'] ?? userData['userName'] ?? '')
+        .toString()
+        .trim();
+
+    // Falls deine Feedback-Collection anders heißt: hier ergänzen
+    const feedbackCollections = <String>[
+      'feedback',
+      'Feedback',
+      'feedbacks',
+      'Feedbacks',
+    ];
+
+    // Typische Felder, die in Feedbacks den User referenzieren könnten
+    final userKeys = <String, String>{
+      'username': username,
+      'currentUsername': username,
+      'userName': username,
+      'userId': userDocId,
+      'uid': userDocId,
+    };
+
+    try {
+      // 1) User bannen
+      await userRef.set({
+        'banned': true,
+        'bannedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      // 2) Feedbacks paged laden & in WriteBatch hidden setzen (stabil)
+      int totalHidden = 0;
+
+      for (final colName in feedbackCollections) {
+        final col = FirebaseFirestore.instance.collection(colName);
+
+        for (final entry in userKeys.entries) {
+          final field = entry.key;
+          final value = entry.value;
+
+          if (value.isEmpty) continue;
+
+          Query<Map<String, dynamic>> q = col.where(field, isEqualTo: value).limit(400);
+
+          while (true) {
+            final snap = await q.get();
+            if (snap.docs.isEmpty) break;
+
+            WriteBatch batch = FirebaseFirestore.instance.batch();
+            for (final d in snap.docs) {
+              batch.set(d.reference, {
+                'hidden': true,
+                'hiddenAt': FieldValue.serverTimestamp(),
+                'hiddenBy': kAdminUsername,
+                'hiddenReason': 'user_banned',
+              }, SetOptions(merge: true));
+              totalHidden++;
+            }
+
+            await batch.commit();
+
+            if (snap.docs.length < 400) break;
+            q = col.where(field, isEqualTo: value).startAfterDocument(snap.docs.last).limit(400);
+          }
+        }
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("User gebannt. Feedbacks ausgeblendet: $totalHidden")),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Fehler beim Bannen/Hidden: $e")),
       );
     }
   }
@@ -1421,7 +1530,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     try {
       await ref.delete();
       if (!mounted) return;
-      Navigator.of(context).pop(); // Detail schließen
+      Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("User-Dokument gelöscht.")),
       );
@@ -1436,7 +1545,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   void _openUserDetails(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final ref = doc.reference;
 
-    // ---------- Helpers (nur für diese BottomSheet-Ansicht) ----------
     String two(int n) => n.toString().padLeft(2, '0');
 
     String _fmtTs(dynamic v) {
@@ -1473,7 +1581,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       final s = v.toString().trim();
       if (s.isEmpty) return "";
 
-      // ISO yyyy-mm-dd
       final iso = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(s);
       if (iso != null) {
         final yy = iso.group(1)!;
@@ -1482,7 +1589,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         return "$dd.$mm.$yy";
       }
 
-      return s; // fallback
+      return s;
     }
 
     dynamic _getNested(Map<String, dynamic> data, String key1, String key2) {
@@ -1611,6 +1718,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                 final createdAtStr = _fmtTs(data['createdAt']);
 
                 final premium = data['premium'] == true;
+                final banned = data['banned'] == true;
 
                 final title = username.isNotEmpty ? username : (fullName.isNotEmpty ? fullName : doc.id);
 
@@ -1641,7 +1749,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                         ],
                       ),
                       const SizedBox(height: 10),
-
                       Expanded(
                         child: SingleChildScrollView(
                           child: Column(
@@ -1656,15 +1763,14 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                               row("Geburtsdatum", birthdayStr),
                               row("Passwort", password),
                               row("Premium", premium ? "true" : "false"),
+                              row("Banned", banned ? "true" : "false"),
                               row("Created at", createdAtStr),
                             ],
                           ),
                         ),
                       ),
-
                       const SizedBox(height: 10),
 
-                      // Aktionen unten
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -1685,6 +1791,26 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
+
+                          // ✅ FIX: statt nur banned=true => banned + alle Feedbacks hidden=true
+                          ElevatedButton.icon(
+                            onPressed: banned ? null : () => _banUserAndHideFeedbacks(ref, data),
+                            icon: const Icon(Icons.gpp_bad),
+                            label: Text(
+                              banned ? "Bereits gebannt" : "Banned",
+                              style: const TextStyle(fontWeight: FontWeight.w800),
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.redAccent,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+
                           if (!premium)
                             ElevatedButton.icon(
                               onPressed: () => _setUserPremium(ref, true),
@@ -1731,12 +1857,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       },
     );
   }
-
-
-
-
-
-
 
   Widget _buildUsersSection() {
     return Container(
@@ -2102,7 +2222,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Liste aller Bars
         Container(
           decoration: BoxDecoration(
             color: _panel,
@@ -2206,7 +2325,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         ),
         const SizedBox(height: 18),
 
-        // Formular
         Container(
           decoration: BoxDecoration(
             color: _panel,
@@ -2230,7 +2348,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                 ),
                 const SizedBox(height: 20),
 
-                // Profilbild
                 Row(
                   children: [
                     CircleAvatar(
@@ -2247,7 +2364,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                       })(),
                       child: (() {
                         final hasImage =
-                            (!kIsWeb && _pickedImageFile != null) || (_profileImageUrl != null && _profileImageUrl!.isNotEmpty);
+                            (!kIsWeb && _pickedImageFile != null) ||
+                                (_profileImageUrl != null && _profileImageUrl!.isNotEmpty);
                         if (hasImage) return null;
                         return const Icon(Icons.local_bar, color: _textSecondary, size: 32);
                       })(),

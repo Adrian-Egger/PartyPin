@@ -10,12 +10,9 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geocoding/geocoding.dart' as geo;
 
-// ✅ Premium Bilder
+// ✅ (Coming soon) Bilder-Funktionalität bleibt im Code,
+// aber UI ist komplett deaktiviert und es gibt keinen Premium-/Payment-Flow.
 import 'package:image_picker/image_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-
-// ✅ Premium Screen (Pfad ggf. anpassen)
-import '../Screens/premium_screen.dart';
 
 import '../Services/geocoding_services.dart';
 import 'map_picker_screen.dart';
@@ -107,13 +104,13 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   void _unfocus() => FocusManager.instance.primaryFocus?.unfocus();
 
   // ===========================
-  // ✅ Premium Bilder (Blöcke)
+  // ✅ Coming soon: Party Bilder
   // ===========================
-  final ImagePicker _picker = ImagePicker();
-  bool _isPremium = false;
+  // Premium/Payment ist komplett deaktiviert. Der Code bleibt,
+  // aber UI ist gesperrt und es gibt keinen Link zu PremiumScreen.
+  static const bool _partyImagesComingSoon = true;
 
-  // ✅ LIVE Premium aus Firestore
-  StreamSubscription? _premiumSub;
+  final ImagePicker _picker = ImagePicker();
 
   static const int _maxImageBlocks = 5; // max 5 Blöcke
   static const int _maxImagesPerBlock = 5; // max 5 Bilder je Block
@@ -128,9 +125,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     _loadHostData();
     _preloadExisting();
     _wireListeners();
-
-    // ✅ Premium live aus Firestore
-    _bindPremiumStatusFromFirestore();
 
     _deleteDraftSilently();
 
@@ -154,8 +148,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
 
   @override
   void dispose() {
-    _premiumSub?.cancel();
-
     _scrollCtrl.dispose();
 
     _nameNode.dispose();
@@ -178,80 +170,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     }
 
     super.dispose();
-  }
-
-  // ===========================
-  // ✅ Premium Status live aus FIRESTORE (users.premium)
-  // ===========================
-  Future<void> _bindPremiumStatusFromFirestore() async {
-    _premiumSub?.cancel();
-
-    final prefs = await SharedPreferences.getInstance();
-    final me = (prefs.getString('username') ?? '').trim();
-
-    if (me.isEmpty) {
-      if (!mounted) return;
-      setState(() => _isPremium = false);
-      return;
-    }
-
-    final fs = FirebaseFirestore.instance;
-
-    // 1) Versuch: DocId == username
-    final directRef = fs.collection('users').doc(me);
-
-    try {
-      final directSnap = await directRef.get();
-
-      if (directSnap.exists) {
-        final initial = (directSnap.data() ?? {})['premium'] == true;
-        if (mounted) setState(() => _isPremium = initial);
-
-        _premiumSub = directRef.snapshots().listen((snap) async {
-          final data = snap.data() ?? {};
-          final p = data['premium'] == true;
-
-          // optional cache
-          try {
-            final sp = await SharedPreferences.getInstance();
-            await sp.setBool('is_premium', p);
-          } catch (_) {}
-
-          if (!mounted) return;
-          setState(() => _isPremium = p);
-        });
-
-        return;
-      }
-    } catch (_) {
-      // fallback weiter unten
-    }
-
-    // 2) Fallback: DocId ist NICHT username -> Query auf Feld username
-    final q = fs.collection('users').where('username', isEqualTo: me).limit(1);
-
-    try {
-      final qs = await q.get();
-      final p = qs.docs.isNotEmpty ? (qs.docs.first.data()['premium'] == true) : false;
-      if (mounted) setState(() => _isPremium = p);
-    } catch (_) {
-      if (mounted) setState(() => _isPremium = false);
-    }
-
-    _premiumSub = q.snapshots().listen((qs) async {
-      bool p = false;
-      if (qs.docs.isNotEmpty) {
-        p = qs.docs.first.data()['premium'] == true;
-      }
-
-      try {
-        final sp = await SharedPreferences.getInstance();
-        await sp.setBool('is_premium', p);
-      } catch (_) {}
-
-      if (!mounted) return;
-      setState(() => _isPremium = p);
-    });
   }
 
   Future<void> _deleteDraftSilently() async {
@@ -825,7 +743,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   }
 
   // ===========================
-  // ✅ Premium Bilder: Blöcke + Upload + UI
+  // Coming soon: Bilder UI (gesperrt)
   // ===========================
 
   Widget _xfileThumb(XFile f) {
@@ -885,48 +803,13 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     });
   }
 
-  Future<List<Map<String, dynamic>>> _uploadImageBlocks({required String partyDocId}) async {
-    final List<Map<String, dynamic>> uploadedBlocks = [];
-
-    for (var i = 0; i < _imageBlocks.length; i++) {
-      final block = _imageBlocks[i];
-      final caption = block.caption.text.trim();
-
-      // komplett leere Blöcke überspringen
-      if (block.images.isEmpty && caption.isEmpty) continue;
-
-      final List<Map<String, dynamic>> uploadedImages = [];
-
-      for (final x in block.images) {
-        final bytes = await x.readAsBytes();
-        final fileName = '${DateTime.now().millisecondsSinceEpoch}_${x.name}';
-
-        final ref = FirebaseStorage.instance
-            .ref()
-            .child('party_images')
-            .child(partyDocId)
-            .child('block_$i')
-            .child(fileName);
-
-        await ref.putData(bytes, SettableMetadata(contentType: 'image/jpeg'));
-        final url = await ref.getDownloadURL();
-
-        uploadedImages.add({'url': url, 'createdAt': FieldValue.serverTimestamp()});
-      }
-
-      uploadedBlocks.add({
-        'caption': caption,
-        'images': uploadedImages,
-        'createdAt': FieldValue.serverTimestamp(),
-        'index': i,
-      });
-    }
-
-    return uploadedBlocks;
-  }
+  // ===========================
+// Coming soon: Bilder UI (gesperrt, aber “leicht sehbar” + Teaser)
+// ===========================
 
   Widget _partyImagesSection() {
-    final locked = !_isPremium;
+    // ✅ dauerhaft gesperrt (kein Premium, kein Redirect)
+    final locked = _partyImagesComingSoon;
 
     Widget plusRow() {
       return Row(
@@ -997,7 +880,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
               style: const TextStyle(color: _textPrimary),
               decoration: _dec(
                 "Text zu diesem Block",
-                hint: "z. B. Dresscode, Thema, Infos…",
+                hint: locked ? "Bald verfügbar…" : "z. B. Dresscode, Thema, Infos…",
                 icon: Icons.short_text_rounded,
                 maxLength: 80,
               ),
@@ -1017,16 +900,13 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                       Positioned(
                         top: 4,
                         right: 4,
-                        child: InkWell(
-                          onTap: locked ? null : () => setState(() => b.images.removeAt(imgIndex)),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.55),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            padding: const EdgeInsets.all(4),
-                            child: const Icon(Icons.close, size: 16, color: Colors.white),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.55),
+                            borderRadius: BorderRadius.circular(999),
                           ),
+                          padding: const EdgeInsets.all(4),
+                          child: const Icon(Icons.lock, size: 16, color: Colors.white),
                         ),
                       ),
                     ],
@@ -1048,55 +928,75 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       ],
     );
 
-    if (!locked) {
-      return _section(
-        title: "Party Bilder (Premium)",
-        icon: Icons.photo_camera_back_outlined,
-        child: content,
-      );
-    }
+    // ✅ “Verschlossen”, aber noch sichtbar:
+    // - leichte Abdunkelung
+    // - klares Lock + Coming soon + Mini-Werbetext
+    // - KEIN onTap, KEIN Premium-Screen
+    return _section(
+      title: "Party Bilder 🔒",
+      icon: Icons.photo_camera_back_outlined,
+      child: Stack(
+        children: [
+          // leicht sichtbar, aber klar “locked”
+          Opacity(
+            opacity: 0.75,
+            child: IgnorePointer(
+              ignoring: true, // komplett nicht bedienbar
+              child: content,
+            ),
+          ),
 
-    // Locked: verblasst + tap -> Premium
-    return GestureDetector(
-      onTap: () {
-        _unfocus();
-        Navigator.push(context, MaterialPageRoute(builder: (_) => const PremiumScreen()));
-      },
-      child: Opacity(
-        opacity: 0.45,
-        child: _section(
-          title: "Party Bilder (Premium)",
-          icon: Icons.photo_camera_back_outlined,
-          child: Stack(
-            children: [
-              content,
-              Positioned.fill(
-                child: Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    color: Colors.black.withOpacity(0.10),
-                  ),
-                  alignment: Alignment.center,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: Colors.black.withOpacity(0.18),
+              ),
+              alignment: Alignment.center,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.55),
+                      color: Colors.black.withOpacity(0.62),
                       borderRadius: BorderRadius.circular(999),
                       border: Border.all(color: _panelBorder),
                     ),
-                    child: const Text(
-                      "Premium Feature – Tippen zum Freischalten",
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.lock_rounded, color: Colors.white, size: 18),
+                        SizedBox(width: 8),
+                        Text(
+                          "Coming soon",
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+                        ),
+                      ],
                     ),
                   ),
-                ),
+                  const SizedBox(height: 10),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 10),
+                    child: Text(
+                      "Bald kannst du Party-Bilder in Blöcken hinzufügen.\nMehr Aufmerksamkeit. Mehr Gäste. 🔥",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w700,
+                        height: 1.25,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
+
 
   // ===========================
 
@@ -1223,12 +1123,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
         await ref.set({'docId': savedDocId}, SetOptions(merge: true));
       }
 
-      // ✅ Premium: Blocks hochladen + speichern
-      if (_isPremium) {
-        final uploadedBlocks = await _uploadImageBlocks(partyDocId: savedDocId);
-        final ref = FirebaseFirestore.instance.collection('Party').doc(savedDocId);
-        await ref.set({'imageBlocks': uploadedBlocks}, SetOptions(merge: true));
-      }
+      // ✅ Coming soon: kein Upload / kein Premium speichern
 
       await _deleteDraftSilently();
 
@@ -1476,7 +1371,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                                         icon: Icons.euro,
                                         errorText: (!_isFreeEntry &&
                                             _triedSubmit &&
-                                            (double.tryParse(_priceController.text.replaceAll(',', '.').trim()) ==
+                                            (double.tryParse(
+                                                _priceController.text.replaceAll(',', '.').trim()) ==
                                                 null))
                                             ? "Preis muss eine Zahl sein."
                                             : null,
@@ -1611,7 +1507,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                               if (_triedSubmit && _selectedTime == null)
                                 const Padding(
                                   padding: EdgeInsets.only(top: 4),
-                                  child: Text("Bitte eine Uhrzeit wählen.", style: TextStyle(color: Colors.orangeAccent)),
+                                  child:
+                                  Text("Bitte eine Uhrzeit wählen.", style: TextStyle(color: Colors.orangeAccent)),
                                 ),
                             ],
                           ),
@@ -1638,7 +1535,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                                   onPressed: _openExcludeFriendsDialog,
                                   icon: const Icon(Icons.person_off, size: 18, color: _secondary),
                                   label: Text(
-                                    _excludedFriends.isEmpty ? "Freunde ausschließen" : "Ausgeschlossen (${_excludedFriends.length})",
+                                    _excludedFriends.isEmpty
+                                        ? "Freunde ausschließen"
+                                        : "Ausgeschlossen (${_excludedFriends.length})",
                                     style: const TextStyle(color: Colors.white),
                                   ),
                                   style: OutlinedButton.styleFrom(
@@ -1660,7 +1559,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                         ),
                         const SizedBox(height: 14),
 
-                        // ✅ Premium Bilder Sektion (Blöcke)
+                        // ✅ Coming soon: Party Bilder (gesperrt + Schloss + Coming soon)
                         _partyImagesSection(),
 
                         const SizedBox(height: 28),

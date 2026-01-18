@@ -2,11 +2,11 @@
 <project version="4">
   <component name="CompilerConfiguration">
     <bytecodeTargetLevel>
-      <module name="android.flutter_plugin_android_lifecycle" target="21" />
-      <module name="android.google_maps_flutter_android" target="21" />
-      <module name="android.image_picker_android" target="21" />
-      <module name="android.shared_preferences_android" target="21" />
-      <module name="android.url_launcher_android" target="21" />
+      <module name="io.flutter.plugins.flutter_plugin_android_lifecycle.android.flutter_plugin_android_lifecycle" target="21" />
+      <module name="io.flutter.plugins.googlemaps.android.google_maps_flutter_android" target="21" />
+      <module name="io.flutter.plugins.imagepicker.android.image_picker_android" target="21" />
+      <module name="io.flutter.plugins.sharedpreferences.android.shared_preferences_android" target="21" />
+      <module name="io.flutter.plugins.urllauncher.android.url_launcher_android" target="21" />
     </bytecodeTargetLevel>
   </component>
 </project>

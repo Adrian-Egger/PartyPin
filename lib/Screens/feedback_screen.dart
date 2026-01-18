@@ -73,6 +73,24 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   // ✅ damit niemals "Anonym" geschrieben wird:
   String _usernameFallback = "Unbekannt";
 
+  // ✅ ECHTER Username (für Block/Reports) – aus SharedPreferences
+  String _myUsername = "";
+
+  // ✅ ECHTE users/{docId} – damit Ban/Blocked immer das richtige Doc trifft
+  String _myUserDocId = "";
+
+  // ✅ ID, die wir für Block-Liste verwenden (users/{docId})
+  String _myBlockOwnerId = "";
+
+  // ✅ Blockliste (aus Firestore)
+  Set<String> _blockedIds = <String>{};
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _blockedSub;
+
+  // ✅ BAN-Status (Admin setzt users/{docId}.banned = true)
+  bool _isBanned = false;
+  String _banReason = "";
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _banSub;
+
   // Hints
   static const List<String> _hints = [
     "Hast du einen Vorschlag?",
@@ -98,6 +116,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   Future<void> _init() async {
     await _loadUserNameAndFallback();
     await _ensureUserKey();
+    await _ensureMyUsernameAndBlockOwnerId();
+
+    _bindBlockedUsers(); // ✅ Blockliste live
+    _bindBanStatus(); // ✅ Ban live
 
     await Future.wait([
       _refreshQuota24h(force: true),
@@ -107,6 +129,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   @override
   void dispose() {
+    _banSub?.cancel();
+    _blockedSub?.cancel();
     _ticker?.cancel();
     _remainingVN.dispose();
     _isLockedVN.dispose();
@@ -198,6 +222,103 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     _userKey = key;
   }
 
+  // ✅ users/{docId} sicher auflösen (Admin nutzt doc.id aus Search)
+  Future<void> _resolveMyUserDocId() async {
+    // Wenn kein Username: fallback auf userKey
+    if (_myUsername.isEmpty) {
+      _myUserDocId = _userKey.isNotEmpty ? _userKey : "unknown";
+      return;
+    }
+
+    try {
+      final q = await FirebaseFirestore.instance
+          .collection('users')
+          .where('username', isEqualTo: _myUsername)
+          .limit(1)
+          .get();
+
+      if (q.docs.isNotEmpty) {
+        _myUserDocId = q.docs.first.id; // ✅ echte DocId
+      } else {
+        // Fallback (falls eure alte Struktur docId == username war)
+        _myUserDocId = _myUsername;
+      }
+    } catch (_) {
+      _myUserDocId = _myUsername;
+    }
+
+    if (_myUserDocId.isEmpty) _myUserDocId = "unknown";
+  }
+
+  Future<void> _ensureMyUsernameAndBlockOwnerId() async {
+    final prefs = await SharedPreferences.getInstance();
+    _myUsername = (prefs.getString("username") ?? "").trim();
+
+    await _resolveMyUserDocId();
+
+    // Für Blockliste/Ban: nimm users/{docId}
+    _myBlockOwnerId = _myUserDocId;
+
+    if (_myBlockOwnerId.isEmpty) {
+      _myBlockOwnerId = "unknown";
+    }
+  }
+
+  void _bindBlockedUsers() {
+    _blockedSub?.cancel();
+
+    if (_myUserDocId.isEmpty || _myUserDocId == "unknown") {
+      setState(() => _blockedIds = <String>{});
+      return;
+    }
+
+    // ✅ users/{meDocId}/blocked/{blockedId}
+    _blockedSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_myUserDocId)
+        .collection('blocked')
+        .snapshots()
+        .listen((qs) {
+      final ids = qs.docs.map((d) => d.id).toSet();
+      if (!mounted) return;
+      setState(() => _blockedIds = ids);
+    });
+  }
+
+  void _bindBanStatus() {
+    _banSub?.cancel();
+
+    if (_myUserDocId.isEmpty || _myUserDocId == "unknown") {
+      setState(() {
+        _isBanned = false;
+        _banReason = "";
+      });
+      return;
+    }
+
+    // ✅ Admin setzt: users/{docId}.banned = true
+    _banSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_myUserDocId)
+        .snapshots()
+        .listen((snap) {
+      final data = snap.data() ?? {};
+      final banned = data['banned'] == true;
+      final reason = (data['banReason'] ?? '').toString().trim();
+
+      if (!mounted) return;
+      setState(() {
+        _isBanned = banned;
+        _banReason = reason;
+      });
+
+      if (banned) {
+        _feedbackController.clear();
+        _sendingVN.value = false;
+      }
+    });
+  }
+
   // ✅ niemals "Anonym"
   String _displayName() {
     final name = _nameController.text.trim();
@@ -225,6 +346,29 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     } catch (_) {
       // ignorieren
     }
+  }
+
+  // ✅ ermittelt eine stabile "Author ID" fürs Blocken/Reports:
+  // bevorzugt: authorUsername -> username -> userKey -> userName(lower)
+  String _authorIdFromDoc(Map<String, dynamic> raw) {
+    final a = (raw['authorUsername'] as String?)?.trim();
+    if (a != null && a.isNotEmpty) return a;
+
+    final u = (raw['username'] as String?)?.trim();
+    if (u != null && u.isNotEmpty) return u;
+
+    final k = (raw['userKey'] as String?)?.trim();
+    if (k != null && k.isNotEmpty) return "userKey:$k";
+
+    final n = (raw['userName'] as String?)?.trim().toLowerCase();
+    if (n != null && n.isNotEmpty) return "name:$n";
+
+    return "unknown";
+  }
+
+  String _authorLabel(Map<String, dynamic> raw) {
+    final user = (raw["userName"] as String?) ?? "Unbekannt";
+    return user;
   }
 
   // ✅ 10 zufällige Feedbacks + eigenes letztes Feedback zusätzlich oben rein (falls vorhanden)
@@ -269,17 +413,19 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         docs.addAll(fallback.take(10));
       }
 
-      // 3) Eigenes letztes Feedback (falls existiert)
+      // 3) Eigenes letztes Feedback (falls existiert) – NUR wenn nicht gebannt
       QueryDocumentSnapshot<Map<String, dynamic>>? mine;
-      try {
-        final qMine = await FirebaseFirestore.instance
-            .collection("feedbacks")
-            .where("userKey", isEqualTo: _userKey)
-            .orderBy("timestamp", descending: true)
-            .limit(1)
-            .get();
-        if (qMine.docs.isNotEmpty) mine = qMine.docs.first;
-      } catch (_) {}
+      if (!_isBanned) {
+        try {
+          final qMine = await FirebaseFirestore.instance
+              .collection("feedbacks")
+              .where("userKey", isEqualTo: _userKey)
+              .orderBy("timestamp", descending: true)
+              .limit(1)
+              .get();
+          if (qMine.docs.isNotEmpty) mine = qMine.docs.first;
+        } catch (_) {}
+      }
 
       // 4) rand nachschreiben für Zukunft (nur die geladenen)
       await _ensureRandForDocs(docs);
@@ -293,9 +439,17 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       docs.shuffle();
       result.addAll(docs.take(10));
 
+      // ✅ Block-Filter + Hidden-Filter (Admin setzt hidden=true)
+      final filtered = result.where((d) {
+        final raw = d.data();
+        if (raw['hidden'] == true) return false; // ✅ content removed/hidden
+        final authorId = _authorIdFromDoc(raw);
+        return !_blockedIds.contains(authorId);
+      }).toList();
+
       if (!mounted) return;
       setState(() {
-        _feedbackDocs = result;
+        _feedbackDocs = filtered;
         _isLoadingFeedback = false;
       });
     } catch (_) {
@@ -408,10 +562,18 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   Future<void> _sendFeedback() async {
     if (_sendingVN.value) return;
 
+    // ✅ gebannte User dürfen nichts posten
+    if (_isBanned) {
+      HapticFeedback.heavyImpact();
+      _toast("Dein Account ist gesperrt.", color: _err, icon: Icons.block);
+      return;
+    }
+
     final feedbackText = _feedbackController.text.trim();
     if (feedbackText.isEmpty) {
       HapticFeedback.heavyImpact();
-      _toast("Bitte Text eingeben.", color: _warn, icon: Icons.warning_amber_rounded);
+      _toast("Bitte Text eingeben.",
+          color: _warn, icon: Icons.warning_amber_rounded);
       return;
     }
 
@@ -425,7 +587,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
     if (_userKey.isEmpty) {
       HapticFeedback.heavyImpact();
-      _toast("UserKey fehlt (App neu starten).", color: _err, icon: Icons.error_outline);
+      _toast("UserKey fehlt (App neu starten).",
+          color: _err, icon: Icons.error_outline);
       return;
     }
 
@@ -460,7 +623,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         subsUtc = subsUtc.where((t) => t.isAfter(windowStartUtc)).toList()..sort();
 
         if (subsUtc.length >= kWindowLimit) {
-          throw FirebaseException(plugin: 'cloud_firestore', code: 'resource-exhausted');
+          throw FirebaseException(
+              plugin: 'cloud_firestore', code: 'resource-exhausted');
         }
 
         final newSubs = [...subsUtc, nowUtc];
@@ -476,14 +640,22 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         );
 
         // Feedback schreiben
+        // ✅ WICHTIG für Block/Reports: authorUsername + username mitschreiben
+        // ✅ WICHTIG für Admin-Ban: authorUserDocId mitschreiben
         tx.set(
           feedbackRef,
           {
             "userKey": _userKey,
             "userName": _displayName(),
+            "username": _myUsername,
+            "authorUsername": _myUsername,
+            "authorUserDocId": _myUserDocId, // ✅ neu
             "message": feedbackText,
             "timestamp": FieldValue.serverTimestamp(),
             "rand": Random().nextDouble(),
+
+            // ✅ Admin-MODERATION: content removal
+            "hidden": false,
           },
         );
       });
@@ -505,7 +677,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       }
     } on FirebaseException catch (e) {
       HapticFeedback.heavyImpact();
-      _toast("Firestore Fehler: ${e.code}", color: _err, icon: Icons.error_outline);
+      _toast("Firestore Fehler: ${e.code}",
+          color: _err, icon: Icons.error_outline);
       await _refreshQuota24h(force: true);
     } catch (e) {
       HapticFeedback.heavyImpact();
@@ -514,6 +687,228 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     } finally {
       _sendingVN.value = false;
     }
+  }
+
+  // ===========================
+  // ✅ MELDEN + BLOCKIEREN
+  // ===========================
+
+  Future<void> _reportFeedback({
+    required String feedbackDocId,
+    required Map<String, dynamic> raw,
+  }) async {
+    final authorId = _authorIdFromDoc(raw);
+    final authorLabel = _authorLabel(raw);
+
+    final reason = await _pickReportReason();
+    if (reason == null) return;
+
+    final details = await _optionalReportDetails();
+    if (!mounted) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('reports').add({
+        'createdAt': FieldValue.serverTimestamp(),
+        'status': 'open',
+
+        // wer meldet
+        'reporterId': _myUserDocId,
+        'reporterUsername':
+        _myUsername.isNotEmpty ? _myUsername : _usernameFallback,
+        'reporterUserKey': _userKey,
+
+        // wen/was
+        'reportedUserId': authorId,
+        'reportedUsername': authorLabel,
+        'targetType': 'feedback',
+        'targetId': feedbackDocId,
+        'reason': reason,
+        'details': details,
+      });
+
+      HapticFeedback.lightImpact();
+      _toast("Gemeldet ✅", color: _ok, icon: Icons.check_circle_rounded);
+    } catch (e) {
+      HapticFeedback.heavyImpact();
+      _toast("Melden fehlgeschlagen: $e",
+          color: _err, icon: Icons.error_outline);
+    }
+  }
+
+  Future<void> _blockUser({
+    required Map<String, dynamic> raw,
+  }) async {
+    final authorId = _authorIdFromDoc(raw);
+    final authorLabel = _authorLabel(raw);
+
+    if (authorId == "unknown") {
+      _toast("Blockieren nicht möglich (User unbekannt).",
+          color: _warn, icon: Icons.warning_amber_rounded);
+      return;
+    }
+
+    // sich selbst nicht blocken
+    if (authorId == _myUserDocId) {
+      _toast("Du kannst dich nicht selbst blockieren.",
+          color: _warn, icon: Icons.warning_amber_rounded);
+      return;
+    }
+
+    final ok = await _confirm(
+      title: "User blockieren?",
+      msg:
+      "Willst du \"$authorLabel\" blockieren?\nDanach siehst du nichts mehr von diesem User (z.B. Feedbacks).",
+      okText: "Blockieren",
+    );
+    if (!ok) return;
+
+    try {
+      // ✅ users/{meDocId}/blocked/{authorId}
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_myUserDocId)
+          .collection('blocked')
+          .doc(authorId)
+          .set({
+        'blockedUserId': authorId,
+        'blockedUsername': authorLabel,
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      // ✅ sofort aus UI entfernen
+      if (mounted) {
+        setState(() {
+          _blockedIds.add(authorId);
+          _feedbackDocs = _feedbackDocs.where((d) {
+            final a = _authorIdFromDoc(d.data());
+            return a != authorId;
+          }).toList();
+        });
+      }
+
+      HapticFeedback.lightImpact();
+      _toast("User blockiert ✅", color: _ok, icon: Icons.check_circle_rounded);
+    } catch (e) {
+      HapticFeedback.heavyImpact();
+      _toast("Blockieren fehlgeschlagen: $e",
+          color: _err, icon: Icons.error_outline);
+    }
+  }
+
+  Future<String?> _pickReportReason() async {
+    const reasons = <String>[
+      'Hate Speech',
+      'Belästigung',
+      'Nacktheit/Sexuell',
+      'Gewalt',
+      'Spam',
+      'Sonstiges',
+    ];
+
+    return showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: reasons.length,
+            separatorBuilder: (_, __) =>
+            const Divider(height: 1, color: _panelBorder),
+            itemBuilder: (_, i) {
+              return ListTile(
+                title: Text(reasons[i],
+                    style: const TextStyle(
+                        color: _text, fontWeight: FontWeight.w700)),
+                onTap: () => Navigator.of(ctx).pop(reasons[i]),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Future<String> _optionalReportDetails() async {
+    final ctrl = TextEditingController();
+    final res = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: _panel,
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          title: const Text("Details (optional)",
+              style: TextStyle(color: _text)),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 3,
+            style: const TextStyle(color: _text),
+            decoration: const InputDecoration(
+              hintText: "Kurz erklären…",
+              hintStyle: TextStyle(color: _muted),
+              enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: _panelBorder)),
+              focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: _accentLine)),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(""),
+              child: const Text("Überspringen",
+                  style: TextStyle(color: _muted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: _accent),
+              onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+              child: const Text("OK",
+                  style: TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w800)),
+            ),
+          ],
+        );
+      },
+    );
+    return (res ?? "").trim();
+  }
+
+  Future<bool> _confirm({
+    required String title,
+    required String msg,
+    required String okText,
+  }) async {
+    final res = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: _panel,
+          shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          title: Text(title, style: const TextStyle(color: _text)),
+          content: Text(msg,
+              style: const TextStyle(color: _muted, height: 1.25)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text("Abbrechen",
+                  style: TextStyle(color: _muted)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: _accent),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(okText,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w800)),
+            ),
+          ],
+        );
+      },
+    );
+    return res == true;
   }
 
   // UI
@@ -534,7 +929,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       )
           : null,
       automaticallyImplyLeading: false,
-      // ✅ Emojis + etwas größer + rot-akzent via Chip
       title: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
@@ -613,12 +1007,69 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     );
   }
 
+  // ✅ Menü (3 Punkte) pro Feedback
+  Widget _moreMenu({
+    required String feedbackDocId,
+    required Map<String, dynamic> raw,
+    required bool isMine,
+  }) {
+    final authorId = _authorIdFromDoc(raw);
+
+    return PopupMenuButton<String>(
+      color: const Color(0xFF1C1F26),
+      icon: const Icon(Icons.more_vert, color: _muted),
+      onSelected: (v) async {
+        HapticFeedback.selectionClick();
+        if (v == 'report') {
+          await _reportFeedback(feedbackDocId: feedbackDocId, raw: raw);
+        } else if (v == 'block') {
+          if (authorId == _myUserDocId || isMine) {
+            _toast("Du kannst dich nicht selbst blockieren.",
+                color: _warn, icon: Icons.warning_amber_rounded);
+            return;
+          }
+          await _blockUser(raw: raw);
+        }
+      },
+      itemBuilder: (ctx) {
+        return <PopupMenuEntry<String>>[
+          PopupMenuItem(
+            value: 'report',
+            child: Row(
+              children: const [
+                Icon(Icons.flag_outlined, size: 18, color: _accent),
+                SizedBox(width: 10),
+                Text("Melden",
+                    style: TextStyle(
+                        color: _accent, fontWeight: FontWeight.w800)),
+              ],
+            ),
+          ),
+          PopupMenuItem(
+            value: 'block',
+            child: Row(
+              children: const [
+                Icon(Icons.block, size: 18, color: _accent),
+                SizedBox(width: 10),
+                Text("Blockieren",
+                    style: TextStyle(
+                        color: _accent, fontWeight: FontWeight.w800)),
+              ],
+            ),
+          ),
+        ];
+      },
+    );
+  }
+
   // ✅ nur dünn umranden (kein linker Streifen mehr)
   Widget _messageTile({
     required String message,
     required String user,
     required String date,
     required bool isMine,
+    required String feedbackDocId,
+    required Map<String, dynamic> raw,
   }) {
     final borderColor = isMine ? _ok : _accentLine;
 
@@ -627,12 +1078,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: borderColor, width: 1), // ✅ dünn, clean
+        border: Border.all(color: borderColor, width: 1),
         boxShadow: const [
-          BoxShadow(
-              color: Color(0x33000000),
-              blurRadius: 12,
-              offset: Offset(0, 8)),
+          BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 8)),
         ],
       ),
       child: ListTile(
@@ -647,23 +1095,26 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         ),
         title: Text(
           message,
-          style: const TextStyle(
-              color: _text, fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(color: _text, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         subtitle: Text(
           isMine ? "Von: $user (du)" : "Von: $user",
           style: const TextStyle(color: _muted),
         ),
-        trailing: Text(
-          date,
-          style: const TextStyle(color: _muted, fontSize: 12),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(date, style: const TextStyle(color: _muted, fontSize: 12)),
+            const SizedBox(width: 6),
+            _moreMenu(feedbackDocId: feedbackDocId, raw: raw, isMine: isMine),
+          ],
         ),
       ),
     );
   }
 
   Widget _inputBar() {
-    final borderColor = _sentFlash ? _ok : _accentLine; // ✅ immer leichter rot
+    final borderColor = _sentFlash ? _ok : _accentLine;
     final sendColor = _sentFlash ? _ok : _accent;
 
     return SafeArea(
@@ -679,13 +1130,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                 builder: (_, locked, __) => TextField(
                   controller: _feedbackController,
                   maxLines: null,
-                  enabled: !locked,
+                  enabled: !locked && !_isBanned,
                   style: const TextStyle(color: _text),
                   decoration: InputDecoration(
-                    hintText: locked ? "Gesperrt …" : _hint,
+                    hintText: _isBanned ? "Account gesperrt" : (locked ? "Gesperrt …" : _hint),
                     hintStyle: const TextStyle(color: _muted),
-                    contentPadding: const EdgeInsets.symmetric(
-                        vertical: 14, horizontal: 12),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
                     filled: true,
                     fillColor: _panel,
                     enabledBorder: OutlineInputBorder(
@@ -694,8 +1144,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                          color: _sentFlash ? _ok : _accent, width: 1.2),
+                      borderSide: BorderSide(color: _sentFlash ? _ok : _accent, width: 1.2),
                     ),
                   ),
                   textInputAction: TextInputAction.newline,
@@ -715,29 +1164,25 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                         return ValueListenableBuilder<bool>(
                           valueListenable: _canSendVN,
                           builder: (_, canSend, __) {
-                            final disabled = locked || sending || !canSend;
+                            final disabled = _isBanned || locked || sending || !canSend;
                             return ElevatedButton(
                               onPressed: disabled ? null : _sendFeedback,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: sendColor,
                                 disabledBackgroundColor: Colors.white12,
                                 foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                    vertical: 14, horizontal: 18),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12)),
+                                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                               ),
                               child: sending
                                   ? const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: Colors.white),
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                               )
                                   : Text(
                                 locked ? _fmtDur(rem) : "Senden",
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700),
+                                style: const TextStyle(fontWeight: FontWeight.w700),
                               ),
                             );
                           },
@@ -765,8 +1210,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     }
     if (_feedbackDocs.isEmpty) {
       return const Center(
-        child: Text("Noch kein Feedback vorhanden",
-            style: TextStyle(color: _muted)),
+        child: Text("Noch kein Feedback vorhanden", style: TextStyle(color: _muted)),
       );
     }
 
@@ -777,10 +1221,18 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 100, top: 8),
       itemCount: _feedbackDocs.length,
-      // ✅ Bonus: auch beim Scrollen weg (optional, schadet nicht)
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       itemBuilder: (context, i) {
-        final raw = _feedbackDocs[i].data();
+        final doc = _feedbackDocs[i];
+        final raw = doc.data();
+
+        // ✅ Admin-MODERATION: ausgeblendetes content nie anzeigen
+        if (raw['hidden'] == true) return const SizedBox.shrink();
+
+        // ✅ Block-Filter
+        final authorId = _authorIdFromDoc(raw);
+        if (_blockedIds.contains(authorId)) return const SizedBox.shrink();
+
         final msg = (raw["message"] as String?) ?? "";
         final user = (raw["userName"] as String?) ?? "Unbekannt";
         final key = (raw["userKey"] as String?) ?? "";
@@ -788,20 +1240,70 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         final ts = raw["timestamp"] as Timestamp?;
         final date = ts == null ? "—" : _fmt(ts.toDate());
 
-        // ✅ IMMER als "mein" erkennen, wenn:
-        // - userKey passt ODER
-        // - userName passt (Fallback)
-        final isMine = (myKey.isNotEmpty && key == myKey) ||
-            (myName.isNotEmpty && user.trim().toLowerCase() == myName);
+        final isMine =
+            (myKey.isNotEmpty && key == myKey) || (myName.isNotEmpty && user.trim().toLowerCase() == myName);
 
-        return _messageTile(message: msg, user: user, date: date, isMine: isMine);
+        return _messageTile(
+          message: msg,
+          user: user,
+          date: date,
+          isMine: isMine,
+          feedbackDocId: doc.id,
+          raw: raw,
+        );
       },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // ✅ WICHTIG: GestureDetector um ALLES, damit Tap überall die Tastatur schließt
+    // ✅ Wenn gebannt: klare Sperr-Ansicht
+    if (_isBanned) {
+      return Scaffold(
+        backgroundColor: _bgTop,
+        appBar: _appBar(),
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [_bgTop, _bgBottom],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+          ),
+          child: Center(
+            child: Container(
+              margin: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: _panel,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: _accentLine, width: 1),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.block, color: _err, size: 42),
+                  const SizedBox(height: 10),
+                  const Text(
+                    "Account gesperrt",
+                    style: TextStyle(color: _text, fontWeight: FontWeight.w900, fontSize: 18),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _banReason.isNotEmpty ? "Grund: $_banReason" : "Du kannst diese Funktion nicht mehr nutzen.",
+                    style: const TextStyle(color: _muted, height: 1.25),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // ✅ normal
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: _dismissKeyboard,
