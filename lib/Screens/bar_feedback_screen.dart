@@ -192,6 +192,10 @@ class _FeedbackContent extends StatelessWidget {
 
             for (final d in docs) {
               final data = d.data();
+
+              // 🔒 gemeldete Inhalte ausblenden
+              if (data['isHidden'] == true) continue;
+
               final r = _parseRating(data['rating']);
               if (r != null && r > 0) {
                 sum += r;
@@ -199,6 +203,7 @@ class _FeedbackContent extends StatelessWidget {
                 distribution[r] = (distribution[r] ?? 0) + 1;
               }
             }
+
 
             final double? overallAvg = count > 0 ? sum / count : null;
 
@@ -217,8 +222,19 @@ class _FeedbackContent extends StatelessWidget {
                   );
                 }
 
-                final data = docs[index - 1].data();
-                return _buildFeedbackCard(data);
+                final doc = docs[index - 1];
+                final data = doc.data();
+
+// 🔒 gemeldete Inhalte ausblenden
+                if (data['isHidden'] == true) {
+                  return const SizedBox.shrink();
+                }
+
+                return _buildFeedbackCard(
+                  context,
+                  doc.reference,
+                  data,
+                );
               },
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemCount: docs.length + 1,
@@ -381,13 +397,16 @@ class _FeedbackContent extends StatelessWidget {
     );
   }
 
-  static Widget _buildFeedbackCard(Map<String, dynamic> data) {
-    final eventTitle = (data['eventTitle'] ?? 'Unbekanntes Event').toString().trim();
+  static Widget _buildFeedbackCard(
+      BuildContext context,
+      DocumentReference feedbackRef,
+      Map<String, dynamic> data,
+      ) {
+    final eventTitle =
+    (data['eventTitle'] ?? 'Unbekanntes Event').toString().trim();
 
-    // ✅ anonym richtig auslesen
     final bool anonymous = data['anonymous'] == true;
 
-    // ✅ Username korrekt: wenn anonym -> "Anonym", sonst userName (Fallback)
     final String userName = anonymous
         ? 'Anonym'
         : ((data['userName'] ?? '').toString().trim().isNotEmpty
@@ -396,25 +415,6 @@ class _FeedbackContent extends StatelessWidget {
 
     final comment = (data['comment'] ?? '').toString().trim();
     final rating = _parseRating(data['rating']) ?? 0;
-
-    DateTime? eventDate;
-    final rawEventDate = data['eventDate'];
-    if (rawEventDate is Timestamp) {
-      eventDate = rawEventDate.toDate();
-    } else if (rawEventDate is String) {
-      eventDate = DateTime.tryParse(rawEventDate);
-    }
-
-    DateTime? createdAt;
-    final rawCreated = data['createdAt'];
-    if (rawCreated is Timestamp) {
-      createdAt = rawCreated.toDate();
-    } else if (rawCreated is String) {
-      createdAt = DateTime.tryParse(rawCreated);
-    }
-
-    final eventLine = eventDate != null ? '$eventTitle · ${_formatDate(eventDate)}' : eventTitle;
-    final createdLine = createdAt != null ? _formatDateTime(createdAt) : null;
 
     return Container(
       width: double.infinity,
@@ -427,60 +427,47 @@ class _FeedbackContent extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            eventLine,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-              fontSize: 15,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'von $userName',
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 13,
-            ),
-          ),
-          const SizedBox(height: 6),
           Row(
             children: [
-              _buildStars(rating),
-              if (createdLine != null) ...[
-                const SizedBox(width: 8),
-                Text(
-                  createdLine,
+              Expanded(
+                child: Text(
+                  eventTitle,
                   style: const TextStyle(
-                    color: Colors.white38,
-                    fontSize: 11,
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
                   ),
                 ),
-              ]
+              ),
+              IconButton(
+                icon: const Icon(Icons.flag_rounded, color: Colors.redAccent),
+                tooltip: 'Inhalt melden',
+                onPressed: () => _showReportDialog(
+                  context,
+                  feedbackRef,
+                ),
+              ),
             ],
           ),
+          Text(
+            'von $userName',
+            style: const TextStyle(color: Colors.white70),
+          ),
+          const SizedBox(height: 6),
+          _buildStars(rating),
           const SizedBox(height: 10),
-          if (comment.isNotEmpty)
-            Text(
-              comment,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 13,
-                height: 1.35,
-              ),
-            )
-          else
-            const Text(
-              'Kein Text-Feedback angegeben.',
-              style: TextStyle(
-                color: Colors.white38,
-                fontSize: 12,
-              ),
-            ),
+          Text(
+            comment.isNotEmpty
+                ? comment
+                : 'Kein Text-Feedback angegeben.',
+            style: const TextStyle(color: Colors.white70),
+          ),
         ],
       ),
     );
   }
+
+
 
   // ---------- Helper ----------
 
@@ -522,5 +509,118 @@ class _FeedbackContent extends StatelessWidget {
     final hh = d.hour.toString().padLeft(2, '0');
     final mm = d.minute.toString().padLeft(2, '0');
     return '$date · $hh:$mm';
+  }
+  static void _showReportDialog(
+      BuildContext context,
+      DocumentReference feedbackRef,
+      ) {
+    String reason = 'Belästigung';
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F26), // dunkel / schwarz
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text(
+          'Feedback melden',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        content: DropdownButtonFormField<String>(
+          dropdownColor: const Color(0xFF1C1F26),
+          value: reason,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            enabledBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Colors.white24),
+            ),
+            focusedBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Colors.white54),
+            ),
+          ),
+          items: const [
+            DropdownMenuItem(
+              value: 'Belästigung',
+              child: Text(
+                'Belästigung',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+            DropdownMenuItem(
+              value: 'Hass',
+              child: Text(
+                'Hass / Diskriminierung',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+            DropdownMenuItem(
+              value: 'Sexuell',
+              child: Text(
+                'Sexueller Inhalt',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+            DropdownMenuItem(
+              value: 'Gewalt',
+              child: Text(
+                'Gewalt',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+            DropdownMenuItem(
+              value: 'Spam',
+              child: Text(
+                'Spam / Werbung',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+          onChanged: (v) => reason = v ?? reason,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text(
+              'Abbrechen',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF3B30), // Accent
+              foregroundColor: Colors.white,            // Text weiß
+            ),
+            onPressed: () async {
+              await FirebaseFirestore.instance
+                  .collection('reportedFeedback')
+                  .add({
+                'feedbackRef': feedbackRef,
+                'reason': reason,
+                'reportedAt': FieldValue.serverTimestamp(),
+                'status': 'pending',
+              });
+
+              await feedbackRef.set(
+                {'isHidden': true},
+                SetOptions(merge: true),
+              );
+
+              Navigator.pop(context);
+            },
+            child: const Text(
+              'Melden',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

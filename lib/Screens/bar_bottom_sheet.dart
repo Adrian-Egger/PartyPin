@@ -565,15 +565,31 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                   Center(child: avatar),
                   const SizedBox(height: 14),
 
-                  Text(
-                    barName,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w800,
-                    ),
+                  Row(
+                    children: [
+                      const SizedBox(width: 40), // Balance links/rechts
+                      Expanded(
+                        child: Text(
+                          barName,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Bar melden',
+                        icon: const Icon(Icons.flag, color: Colors.redAccent, size: 22),
+
+                        onPressed: () {
+                          _openBarReportSheet(context);
+                        },
+                      ),
+                    ],
                   ),
+
 
                   if (ratingAvg != null && ratingCount > 0) ...[
                     const SizedBox(height: 6),
@@ -755,6 +771,141 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
       },
     );
   }
+  void _openBarReportSheet(BuildContext context) {
+    String? reason;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.6),
+      builder: (ctx) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(ctx).padding.bottom,
+            ),
+            child: Container(
+              height: MediaQuery.of(ctx).size.height * 0.55,
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+              decoration: const BoxDecoration(
+                color: Color(0xFF090B10),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 46,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  const Text(
+                    'Bar melden 🚩',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.redAccent,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  const Text(
+                    'Bitte einen Grund auswählen.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  DropdownButtonFormField<String>(
+                    dropdownColor: const Color(0xFF141A22),
+                    style: const TextStyle(color: Colors.white),
+                    items: const [
+                      DropdownMenuItem(value: 'hate', child: Text('Hass / Diskriminierung')),
+                      DropdownMenuItem(value: 'harassment', child: Text('Belästigung')),
+                      DropdownMenuItem(value: 'sexual', child: Text('Sexueller Inhalt')),
+                      DropdownMenuItem(value: 'violence', child: Text('Gewalt')),
+                      DropdownMenuItem(value: 'spam', child: Text('Spam / Fake-Bar')),
+                    ],
+                    onChanged: (v) => reason = v,
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: const Color(0xFF141A22),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  const Text(
+                    '⬆️ Hoch wischen, um zu melden',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+
+                  const Spacer(),
+
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.redAccent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    onPressed: reason == null
+                        ? null
+                        : () async {
+                      await FirebaseFirestore.instance
+                          .collection('reports')
+                          .add({
+                        'type': 'bar',
+                        'barId': widget.barId,
+                        'reason': reason,
+                        'createdAt': FieldValue.serverTimestamp(),
+                      });
+
+                      if (!ctx.mounted) return;
+
+                      Navigator.pop(ctx);
+                      _showReportSuccessDialog(context);
+                    },
+                    child: const Text(
+                      'Melden',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+
+
+      },
+    );
+  }
+
 
   // ----------------- Helpers -----------------
 
@@ -1281,6 +1432,41 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
 
     return parts.join(' ');
   }
+  void _showReportSuccessDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF0F1B12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          title: const Text(
+            'Erfolgreich gemeldet',
+            style: TextStyle(
+              color: Colors.greenAccent,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: const Text(
+            'Danke. Deine Meldung wurde übermittelt.',
+            style: TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text(
+                'OK',
+                style: TextStyle(color: Colors.greenAccent),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
 }
 
 class _UpcomingEventItem {
@@ -2357,4 +2543,5 @@ class BarFeedbackStream extends StatelessWidget {
       },
     );
   }
+
 }

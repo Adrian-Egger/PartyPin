@@ -803,6 +803,24 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     return t == 'closed' || b == true;
   }
 
+  Future<bool> _partyIsBlockedByReports(String partyId) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('Meldungen')
+          .where('type', isEqualTo: 'party')
+          .where('partyId', isEqualTo: partyId)
+          .where('status', isEqualTo: 'open')
+          .limit(3)
+          .get();
+
+      // >= 3 offene Meldungen → Party ausblenden
+      return snap.docs.length >= 3;
+    } catch (_) {
+      return false;
+    }
+  }
+
+
   LatLng? _parseLatLng(Map<String, dynamic> d) {
     try {
       if (d['lat'] != null && d['lng'] != null) {
@@ -987,77 +1005,78 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
         if (!_showParties) continue;
 
-        // Alter-Filter
+        // 🔒 Host-Erkennung (NUR EINMAL!)
+        final bool isHostForThisParty = _isHostForPartyData(data);
+
+        // 🚨 Moderationsstatus (Apple 1.2-konform)
+        final String moderationStatus =
+        (data['moderationStatus'] ?? 'active').toString();
+
+        if (moderationStatus == 'blocked' && !isHostForThisParty) {
+          continue; // ⛔ sauber ausgeblendet
+        }
+
+        // =============================
+        // 🎂 Altersfilter
+        // =============================
         if (_minAgeFilter != null) {
           int partyAge = 0;
           if (data['minAge'] is int) {
             partyAge = data['minAge'] as int;
           } else {
-            final ageStr =
-            (data['minAge'] ?? data['age'] ?? data['eventAge'] ?? '')
+            final ageStr = (data['minAge'] ??
+                data['age'] ??
+                data['eventAge'] ??
+                '')
                 .toString()
                 .toLowerCase()
                 .trim();
             final digits = RegExp(r'\d+').stringMatch(ageStr);
-            if (digits != null) partyAge = int.tryParse(digits) ?? 0;
+            if (digits != null) {
+              partyAge = int.tryParse(digits) ?? 0;
+            }
           }
-          if (partyAge > _minAgeFilter! && partyAge > 0) continue;
+          if (partyAge > 0 && partyAge > _minAgeFilter!) continue;
         }
 
-        // Eintritt
-        final dynamic rawEntry = data['entryFee'] ?? data['price'];
+        // =============================
+        // 💰 Eintritt
+        // =============================
+        final rawEntry = data['entryFee'] ?? data['price'];
         double? entryFee;
+
         if (rawEntry is num) {
           entryFee = rawEntry.toDouble();
-        } else {
-          final String? entryStr = rawEntry == null ? null : rawEntry.toString();
-          if (entryStr != null && entryStr.isNotEmpty) {
-            final cleaned = entryStr.replaceAll(',', '.');
-            entryFee = double.tryParse(cleaned);
-          }
+        } else if (rawEntry != null) {
+          entryFee = double.tryParse(
+            rawEntry.toString().replaceAll(',', '.'),
+          );
         }
 
-        if (_onlyFree) {
-          final fee = entryFee ?? 0.0;
-          if (fee > 0.0) continue;
-        }
-        if (_maxEntryFilter != null && entryFee != null) {
-          if (entryFee > _maxEntryFilter!) continue;
-        }
+        if (_onlyFree && (entryFee ?? 0) > 0) continue;
+        if (_maxEntryFilter != null &&
+            entryFee != null &&
+            entryFee > _maxEntryFilter!) continue;
 
-        // abgelaufen
+        // =============================
+        // ⏰ abgelaufen
+        // =============================
         if (_isExpiredWithGrace(data)) continue;
 
-        // Position
+        // =============================
+        // 📍 Position
+        // =============================
         final pos = _parseLatLng(data);
         if (pos == null) continue;
 
-        // (optional) Event-Kreis
-        if (data['eventActive'] == true && data['eventDate'] is Timestamp) {
-          final eventStart = (data['eventDate'] as Timestamp).toDate();
-          final eventEnd = eventStart.add(const Duration(days: 7));
-          if (DateTime.now().isBefore(eventEnd)) {
-            _circles.add(
-              Circle(
-                circleId: CircleId('event_circle_${doc.id}'),
-                center: pos,
-                radius: 180,
-                fillColor: Colors.greenAccent.withOpacity(0.20),
-                strokeColor: Colors.greenAccent,
-                strokeWidth: 2,
-                zIndex: 0,
-              ),
-            );
-          }
-        }
-
-        // friends-only Sichtbarkeit
+        // =============================
+        // 🌍 friends-only Sichtbarkeit
+        // =============================
         final visibility = (data['visibility'] ?? 'public').toString();
         final excluded =
-            (data['excludedFriends'] as List?)?.cast<String>() ?? const <String>[];
+            (data['excludedFriends'] as List?)?.cast<String>() ?? const [];
         final isFriendOnly = visibility == 'friends';
 
-        final isHostForThisParty = _isHostForPartyData(data);
         final hostUsername =
         ((data['hostId'] ?? data['hostUid']) ?? '').toString().trim();
 
@@ -1066,20 +1085,22 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           final isFriend =
               me != null && me.isNotEmpty && _myFriendsSet.contains(hostUsername);
           final isExcluded = me != null && excluded.contains(me);
+
           if (!isFriend || isExcluded) continue;
         }
 
-        // open/closed filter
+        // =============================
+        // 🔓 / 🔒 open / closed Filter
+        // =============================
         final isClosed = _isClosedDoc(data);
         if (_onlyClosedParties && !isClosed) continue;
         if (_onlyOpenParties && isClosed) continue;
 
+        // =================================================
+        // 🔒 CLOSED PARTY
+        // =================================================
         if (isClosed) {
-          // ---------------------------
-          // 🔒 CLOSED PARTY (verschoben)
-          // ---------------------------
           final rng = Random(doc.id.hashCode);
-
           final fakeCenter = _offsetWithinRadiusMeters(
             center: pos,
             minMeters: 400,
@@ -1087,96 +1108,65 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             rng: rng,
           );
 
-          final markerPos = fakeCenter;
-
           String? myStatus;
-
-          if (!_isBarAccount && _currentUsername != null && !isHostForThisParty) {
+          if (!_isBarAccount &&
+              _currentUsername != null &&
+              !isHostForThisParty) {
             myStatus = await _myRequestStatus(doc.id, _currentUsername!);
           }
 
           _closedPartyStatus[doc.id] = myStatus;
 
-          _circles.add(Circle(
-            circleId: CircleId(doc.id),
-            center: fakeCenter,
-            radius: 1000,
-            fillColor: Colors.grey.withOpacity(0.22),
-            strokeColor: Colors.grey.shade500,
-            strokeWidth: 2,
-            zIndex: 1,
-            onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
-          ));
-
-          _markers.add(Marker(
-            markerId: MarkerId('hit_${doc.id}'),
-            position: markerPos,
-            icon: _hitboxIcon ??
-                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-            anchor: const Offset(0.5, 0.5),
-            zIndex: 9,
-            consumeTapEvents: true,
-            onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
-          ));
-
           BitmapDescriptor icon;
           if (isHostForThisParty) {
-            icon = _lockIconBlue ?? BitmapDescriptor.defaultMarker;
+            icon = _lockIconBlue!;
           } else if (myStatus == 'approved') {
-            icon = _lockIconGreen ?? BitmapDescriptor.defaultMarker;
+            icon = _lockIconGreen!;
           } else if (myStatus == 'declined') {
-            icon = _lockIconRed ?? BitmapDescriptor.defaultMarker;
+            icon = _lockIconRed!;
           } else {
-            icon = _lockIconGrey ?? BitmapDescriptor.defaultMarker;
+            icon = _lockIconGrey!;
           }
 
           _markers.add(Marker(
             markerId: MarkerId('lock_${doc.id}'),
-            position: markerPos,
+            position: fakeCenter,
             icon: icon,
-            anchor: const Offset(0.5, 0.5),
-            zIndex: 10,
-            consumeTapEvents: true,
-            onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
+            onTap: () => _openPartySheet(data, doc.id),
           ));
-        } else {
-          // ---------------------------
-          // 🎉 OPEN PARTY (echter Ort)
-          // ---------------------------
+        }
+        // =================================================
+        // 🎉 OPEN PARTY
+        // =================================================
+        else {
           String? myStatus;
-
-          if (!_isBarAccount && _currentUsername != null && !isHostForThisParty) {
-            // 1) rsvps
-            myStatus = await _myOpenRsvpStatus(doc.id);
-
-            // 2) wenn nicht gesetzt, requests (pending -> orange)
-            myStatus ??= await _myOpenRequestStatus(doc.id);
+          if (!_isBarAccount &&
+              _currentUsername != null &&
+              !isHostForThisParty) {
+            myStatus = await _myOpenRsvpStatus(doc.id) ??
+                await _myOpenRequestStatus(doc.id);
           }
 
-          _openPartyStatus[doc.id] = myStatus; // going/maybe/pending/null
+          _openPartyStatus[doc.id] = myStatus;
           _openPartyIsHost[doc.id] = isHostForThisParty;
 
           final icon = isFriendOnly
               ? _iconForFriendsPartyMarker(doc.id)
               : _iconForOpenPartyMarker(doc.id);
 
-          _markers.add(
-            Marker(
-              markerId: MarkerId(doc.id),
-              position: pos,
-              icon: icon,
-              anchor: const Offset(0.5, 0.5),
-              zIndex: 5,
-              consumeTapEvents: true,
-              onTap: () => _openPartySheet(_partyCache[doc.id]!, doc.id),
-            ),
-          );
+          _markers.add(Marker(
+            markerId: MarkerId(doc.id),
+            position: pos,
+            icon: icon,
+            onTap: () => _openPartySheet(data, doc.id),
+          ));
         }
       } catch (_) {
         continue;
       }
     }
   }
+
 
   Future<void> _loadBarsFromFirebase() async {
     try {
