@@ -4,7 +4,9 @@ import 'package:geocoding/geocoding.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import 'party_map_screen.dart';
+import 'home_shell.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 class SelectionScreen extends StatefulWidget {
   const SelectionScreen({super.key});
@@ -15,14 +17,13 @@ class SelectionScreen extends StatefulWidget {
 
 class _SelectionScreenState extends State<SelectionScreen> {
   // --- Farben ---
-  static const _gradTop = Color(0xFF0E0F12);
-  static const _gradBottom = Color(0xFF141A22);
+  static const _gradTop = AppColors.bgTop;
+  static const _gradBottom = AppColors.bgBottom;
   static const _panel = Color(0xFF15171C);
-  static const _panelBorder = Color(0xFF2A2F38);
-  static const _card = Color(0xFF1C1F26);
-  static const _textPrimary = Colors.white;
-  static const _textSecondary = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30); // Rot
+  static const _card = AppColors.panel;
+  static const _textPrimary = AppColors.text;
+  static const _textSecondary = AppColors.muted;
+  static const _accent = AppColors.accent;
 
   String _selectedLanguage = 'de';
   String _selectedCountry = 'Austria';
@@ -48,7 +49,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
   Future<void> _loadSavedData() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _selectedLanguage = 'de';
+      _selectedLanguage = prefs.getString('language') ?? 'de';
       _selectedCountry = prefs.getString('country') ?? 'Austria';
       _enteredCity = prefs.getString('city') ?? '';
       _cityController.text = _enteredCity;
@@ -65,7 +66,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
 
     // lokal
     await prefs.setString('city', city);
-    await prefs.setString('language', 'de');
+    await prefs.setString('language', _selectedLanguage);
     await prefs.setString('country', country);
     await prefs.setDouble('selectedLat', lat);
     await prefs.setDouble('selectedLng', lng);
@@ -89,7 +90,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
 
     await query.docs.first.reference.set(
       {
-        'language': 'de',
+        'language': _selectedLanguage,
         'country': country,
         'city': city,
         'selectedLat': lat,
@@ -103,7 +104,12 @@ class _SelectionScreenState extends State<SelectionScreen> {
   Future<void> _goToPartyMap() async {
     if (_enteredCity.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Bitte eine Stadt eingeben")),
+        SnackBar(
+          content: Text(Lang.t('selection_city_missing')),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
       return;
     }
@@ -129,7 +135,12 @@ class _SelectionScreenState extends State<SelectionScreen> {
       final locations = await locationFromAddress("$city, $_selectedCountry");
       if (locations.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Stadt nicht gefunden")),
+          SnackBar(
+          content: Text(Lang.t('selection_city_not_found')),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
         );
         setState(() => _isSearching = false);
         return;
@@ -143,12 +154,20 @@ class _SelectionScreenState extends State<SelectionScreen> {
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const PartyMapScreen()),
+        MaterialPageRoute(builder: (_) => const HomeShell()),
       );
+      // Set language AFTER navigation so ValueListenableBuilder doesn't
+      // rebuild SelectionScreen while it is still visible
+      await Lang.set(_selectedLanguage);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Stadt nicht gefunden")),
+        SnackBar(
+          content: Text(Lang.t('selection_city_not_found')),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isSearching = false);
@@ -194,9 +213,22 @@ class _SelectionScreenState extends State<SelectionScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
-        title: const Text(
-          "Welcome",
-          style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.panel,
+            borderRadius: AppRadius.fullBr,
+            border: Border.all(color: AppColors.accentBorder2, width: 1),
+          ),
+          child: Text(
+            Lang.tLang(_selectedLanguage, 'selection_title'),
+            style: const TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              letterSpacing: -0.2,
+            ),
+          ),
         ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: _accent),
@@ -221,7 +253,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
                 decoration: BoxDecoration(
                   color: _panel,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: _panelBorder),
+                  border: Border.all(color: AppColors.accentBorder),
                   boxShadow: const [
                     BoxShadow(
                         color: Color(0x24000000),
@@ -234,34 +266,40 @@ class _SelectionScreenState extends State<SelectionScreen> {
                   children: [
                     const Icon(Icons.public, size: 56, color: _accent),
                     const SizedBox(height: 10),
-                    const Text(
-                      "App-Sprache, Land & Stadt",
-                      style: TextStyle(
+                    Text(
+                      Lang.tLang(_selectedLanguage, 'selection_heading'),
+                      style: const TextStyle(
                           color: _textPrimary,
                           fontWeight: FontWeight.w800,
                           fontSize: 18),
                     ),
                     const SizedBox(height: 16),
 
-                    // Sprache (fest auf Deutsch)
-                    AbsorbPointer(
-                      absorbing: true,
-                      child: DropdownButtonFormField<String>(
-                        value: _selectedLanguage,
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'de',
-                            child: Text("Deutsch",
-                                style: TextStyle(color: _textPrimary)),
-                          ),
-                        ],
-                        onChanged: (_) {},
-                        decoration:
-                        _dec(label: "Sprache", icon: Icons.language),
-                        dropdownColor: _card,
-                        style: const TextStyle(color: _textPrimary),
-                        iconEnabledColor: _textSecondary,
-                      ),
+                    // Sprache
+                    DropdownButtonFormField<String>(
+                      value: _selectedLanguage,
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'de',
+                          child: Text('Deutsch 🇩🇪',
+                              style: TextStyle(color: _textPrimary)),
+                        ),
+                        DropdownMenuItem(
+                          value: 'en',
+                          child: Text('English 🇬🇧',
+                              style: TextStyle(color: _textPrimary)),
+                        ),
+                      ],
+                      onChanged: (val) {
+                        if (val == null) return;
+                        setState(() => _selectedLanguage = val);
+                      },
+                      decoration: _dec(
+                          label: Lang.tLang(_selectedLanguage, 'selection_language'),
+                          icon: Icons.language),
+                      dropdownColor: _card,
+                      style: const TextStyle(color: _textPrimary),
+                      iconEnabledColor: _textSecondary,
                     ),
                     const SizedBox(height: 12),
 
@@ -269,19 +307,18 @@ class _SelectionScreenState extends State<SelectionScreen> {
                     DropdownButtonFormField<String>(
                       value: _selectedCountry,
                       items: _countries
-                          .map(
-                            (c) => DropdownMenuItem(
-                          value: c,
-                          child: Text(c,
-                              style: const TextStyle(
-                                  color: _textPrimary)),
-                        ),
-                      )
+                          .map((c) => DropdownMenuItem(
+                                value: c,
+                                child: Text(c,
+                                    style: const TextStyle(
+                                        color: _textPrimary)),
+                              ))
                           .toList(),
                       onChanged: (val) =>
                           setState(() => _selectedCountry = val!),
-                      decoration:
-                      _dec(label: "Land", icon: Icons.flag_outlined),
+                      decoration: _dec(
+                          label: Lang.tLang(_selectedLanguage, 'selection_country'),
+                          icon: Icons.flag_outlined),
                       dropdownColor: _card,
                       style: const TextStyle(color: _textPrimary),
                       iconEnabledColor: _textSecondary,
@@ -294,9 +331,9 @@ class _SelectionScreenState extends State<SelectionScreen> {
                       onChanged: (val) => _enteredCity = val,
                       style: const TextStyle(color: _textPrimary),
                       decoration: _dec(
-                        label: "Stadt",
+                        label: Lang.tLang(_selectedLanguage, 'selection_city'),
                         icon: Icons.location_city_outlined,
-                        hint: "z. B. Vienna / Linz / Graz",
+                        hint: Lang.tLang(_selectedLanguage, 'selection_city_hint'),
                       ),
                       textInputAction: TextInputAction.done,
                     ),
@@ -305,14 +342,15 @@ class _SelectionScreenState extends State<SelectionScreen> {
 
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      children: const [
-                        Icon(Icons.info_outline,
+                      children: [
+                        const Icon(Icons.info_outline,
                             size: 16, color: _textSecondary),
-                        SizedBox(width: 6),
+                        const SizedBox(width: 6),
                         Flexible(
                           child: Text(
-                            "Die Karte startet in deiner gewählten Stadt.",
-                            style: TextStyle(color: _textSecondary),
+                            Lang.tLang(_selectedLanguage, 'selection_map_info'),
+                            style:
+                                const TextStyle(color: _textSecondary),
                           ),
                         ),
                       ],
@@ -326,21 +364,22 @@ class _SelectionScreenState extends State<SelectionScreen> {
                         onPressed: _isSearching ? null : _goToPartyMap,
                         icon: _isSearching
                             ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2),
-                        )
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2),
+                              )
                             : const Icon(Icons.map_outlined),
-                        label:
-                        Text(_isSearching ? "Suche…" : "Zur Karte"),
+                        label: Text(_isSearching
+                            ? Lang.tLang(_selectedLanguage, 'searching')
+                            : Lang.tLang(_selectedLanguage, 'selection_go')),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _accent,
                           disabledBackgroundColor:
-                          _accent.withOpacity(0.4),
+                              _accent.withValues(alpha: 0.4),
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 16),
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 16),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12)),
                         ),

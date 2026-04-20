@@ -2,15 +2,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
-const _gradTop = Color(0xFF0E0F12);
-const _gradBottom = Color(0xFF141A22);
+const _gradTop = AppColors.bgTop;
+const _gradBottom = AppColors.bgBottom;
 const _panel = Color(0xFF15171C);
-const _panelBorder = Color(0xFF2A2F38);
-const _card = Color(0xFF1C1F26);
-const _textPrimary = Colors.white;
-const _textSecondary = Color(0xFFB6BDC8);
-const _accent = Color(0xFFFF3B30);
+const _card = AppColors.panel;
+const _textPrimary = AppColors.text;
+const _textSecondary = AppColors.muted;
+const _accent = AppColors.accent;
 
 class MapPickerScreen extends StatefulWidget {
   final LatLng initial;
@@ -32,6 +33,13 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
     final markers = <Marker>{
       if (_selected != null)
         Marker(
@@ -44,16 +52,27 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
       backgroundColor: _gradTop,
       appBar: AppBar(
         backgroundColor: _panel,
-        elevation: 0.5,
+        elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: _accent),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text(
-          "Standort wählen",
-          style: TextStyle(
-            color: _textPrimary,
-            fontWeight: FontWeight.bold,
+        centerTitle: true,
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.panel,
+            borderRadius: AppRadius.fullBr,
+            border: Border.all(color: AppColors.accentBorder2, width: 1),
+          ),
+          child: Text(
+            Lang.t('map_picker_header'),
+            style: const TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              letterSpacing: -0.2,
+            ),
           ),
         ),
       ),
@@ -88,7 +107,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
               decoration: BoxDecoration(
                 color: _panel,
                 border: const Border(
-                  top: BorderSide(color: _panelBorder),
+                  top: BorderSide(color: AppColors.accentBorder),
                 ),
               ),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -115,7 +134,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
                             style: TextStyle(color: Colors.white70),
                           ),
                           style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: _panelBorder),
+                            side: const BorderSide(color: AppColors.accentBorder),
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),

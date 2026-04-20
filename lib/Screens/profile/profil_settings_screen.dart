@@ -8,17 +8,18 @@ import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../Screens/login_screen.dart';
+import '../auth/login_screen.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 // ---------- Farben wie bei PartyMap / NewParty ----------
-const _gradTop = Color(0xFF0E0F12);
-const _gradBottom = Color(0xFF141A22);
+const _gradTop = AppColors.bgTop;
+const _gradBottom = AppColors.bgBottom;
 const _panel = Color(0xFF15171C);
-const _panelBorder = Color(0xFF2A2F38);
-const _card = Color(0xFF1C1F26);
-const _textPrimary = Colors.white;
-const _textSecondary = Color(0xFFB6BDC8);
-const _accent = Color(0xFFFF3B30); // Rot
+const _card = AppColors.panel;
+const _textPrimary = AppColors.text;
+const _textSecondary = AppColors.muted;
+const _accent = AppColors.accent;
 
 class ProfileSettingsScreen extends StatefulWidget {
   const ProfileSettingsScreen({super.key});
@@ -434,24 +435,23 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: _panel,
+        backgroundColor: AppColors.panel,
         title: const Text(
           "Logout bestätigen",
-          style: TextStyle(color: _textPrimary),
+          style: TextStyle(color: AppColors.text),
         ),
         content: const Text(
           "Willst du dich wirklich ausloggen?",
-          style: TextStyle(color: _textSecondary),
+          style: TextStyle(color: AppColors.muted),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child:
-            const Text("Abbrechen", style: TextStyle(color: _textSecondary)),
+            child: const Text("Abbrechen", style: TextStyle(color: AppColors.muted)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Ja", style: TextStyle(color: _accent)),
+            child: const Text("Ja", style: TextStyle(color: AppColors.success)),
           ),
         ],
       ),
@@ -473,23 +473,23 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final confirm1 = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: _panel,
+        backgroundColor: AppColors.panel,
         title: const Text(
           "Account löschen",
-          style: TextStyle(color: _textPrimary),
+          style: TextStyle(color: AppColors.text),
         ),
         content: const Text(
           "Bist du sicher, dass du deinen Account löschen willst?",
-          style: TextStyle(color: _textSecondary),
+          style: TextStyle(color: AppColors.muted),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Nein", style: TextStyle(color: _textSecondary)),
+            child: const Text("Nein", style: TextStyle(color: AppColors.muted)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Ja", style: TextStyle(color: _accent)),
+            child: const Text("Ja", style: TextStyle(color: AppColors.accent)),
           ),
         ],
       ),
@@ -500,26 +500,25 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final confirm2 = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: _panel,
+        backgroundColor: AppColors.panel,
         title: const Text(
           "Letzte Warnung",
-          style: TextStyle(color: _accent),
+          style: TextStyle(color: AppColors.accent),
         ),
         content: const Text(
           "Dieser Vorgang ist endgültig und alle Daten werden gelöscht. Willst du wirklich fortfahren?",
-          style: TextStyle(color: _textSecondary),
+          style: TextStyle(color: AppColors.muted),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Abbrechen",
-                style: TextStyle(color: _textSecondary)),
+            child: const Text("Abbrechen", style: TextStyle(color: AppColors.muted)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text(
               "Ja, löschen",
-              style: TextStyle(color: Colors.redAccent),
+              style: TextStyle(color: AppColors.accent),
             ),
           ),
         ],
@@ -542,12 +541,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
   }
 
-  void _showSnack(String msg) {
+  void _showSnack(String msg, {Color? color}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
+        backgroundColor: color ?? AppColors.panel,
         behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
     );
   }
@@ -555,21 +556,38 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
     return Scaffold(
       backgroundColor: _gradTop,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0A0B0D),
-        elevation: 0.5,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         centerTitle: true,
-        title: const Text(
-          "Profil",
-          style: TextStyle(
-            color: _textPrimary,
-            fontWeight: FontWeight.bold,
-            fontSize: 22,
+        iconTheme: const IconThemeData(color: _accent),
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.panel,
+            borderRadius: AppRadius.fullBr,
+            border: Border.all(color: AppColors.accentBorder2, width: 1),
+          ),
+          child: Text(
+            Lang.t('profile_header'),
+            style: const TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              letterSpacing: -0.2,
+            ),
           ),
         ),
-        iconTheme: const IconThemeData(color: _accent),
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -609,7 +627,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         decoration: BoxDecoration(
                           color: _panel,
                           borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: _panelBorder, width: 1),
+                          border: Border.all(color: AppColors.accentBorder, width: 1),
                         ),
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 6),
@@ -798,7 +816,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
         boxShadow: const [
           BoxShadow(
             color: Color(0x33000000),

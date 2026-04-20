@@ -23,10 +23,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-
-import '../Screens/new_party.dart';
-import '../Services/app_draggable_sheet.dart';
-import '../Screens/premium_screen.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
+import 'new_party.dart';
+import '../../Services/app_draggable_sheet.dart';
+import '../profile/premium_screen.dart';
 
 typedef VoidAsync = Future<void> Function();
 typedef StringAsync = Future<void> Function(String value);
@@ -1029,22 +1031,45 @@ class PartyBottomSheet extends StatelessWidget {
                   ],
                 ),
               ),
-            ] else ...[
+            ]
+            else ...[
+
+              // 🔥 1️⃣ Ticket kaufen Button (nur wenn Preis > 0)
+              if ((data['price'] ?? 0) > 0 && (!isClosed || canSeeFull)) ...[
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52),
+                    backgroundColor: Colors.blueAccent,
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: const Icon(Icons.payment),
+                  label: Text("Ticket kaufen – ${(data['price']).toString()}€"),
+                  onPressed: () => _buyTicket(context),
+                ),
+                const SizedBox(height: 14),
+              ],
+
+              // 🔥 2️⃣ RSVP / Closed Logik bleibt darunter
               if (!isClosed || isFriendsOnly)
                 _guestOpenActions(context)
               else if (canSeeFull)
                 const SizedBox.shrink()
               else
                 _guestClosedActions(context),
+
               const SizedBox(height: 12),
+
               _ratingGate(context),
+
               if (isActive) ...[
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: onReport,
                   icon: const Icon(Icons.flag, color: Colors.redAccent),
-                  label: const Text("Party melden",
-                      style: TextStyle(color: Colors.redAccent)),
+                  label: const Text(
+                    "Party melden",
+                    style: TextStyle(color: Colors.redAccent),
+                  ),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: Colors.redAccent),
                     minimumSize: const Size.fromHeight(44),
@@ -1593,6 +1618,38 @@ class PartyBottomSheet extends StatelessWidget {
           },
         ),
       ],
+    );
+  }
+
+
+  Future<void> _buyTicket(BuildContext context) async {
+    final stripeAccountId = data['stripeAccountId'];
+
+    if (stripeAccountId == null) {
+      showStatusSnack(context, "Host hat kein Stripe aktiviert.", positive: false);
+      return;
+    }
+
+    final response = await http.post(
+      Uri.parse("http://192.168.1.5:3000/create-checkout-session"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "stripeAccountId": stripeAccountId,
+        "price": data['price'],
+        "partyId": partyId,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      showStatusSnack(context, "Zahlungsfehler.", positive: false);
+      return;
+    }
+
+    final url = jsonDecode(response.body)["url"];
+
+    await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
     );
   }
 

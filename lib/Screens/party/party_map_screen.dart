@@ -10,12 +10,13 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../Screens/menu_screen.dart';
-import '../Screens/profil_settings_screen.dart';
-import '../Services/geocoding_services.dart';
-import '../Social/friends_model.dart';
-import '../Screens/bar_bottom_sheet.dart';
-import '../widgets/party_bottom_sheet.dart';
+import '../home/menu_screen.dart';
+import '../profile/profil_settings_screen.dart';
+import '../../Services/geocoding_services.dart';
+import '../../Social/friends_model.dart';
+import '../bar/bar_bottom_sheet.dart';
+import '../../Theme/app_theme.dart';
+import 'party_bottom_sheet.dart';
 
 class PartyMapScreen extends StatefulWidget {
   final String? initialOpenPartyId;
@@ -29,12 +30,12 @@ class PartyMapScreen extends StatefulWidget {
 class _PartyMapScreenState extends State<PartyMapScreen>
     with SingleTickerProviderStateMixin {
   // Farbschema
-  static const _bgTop = Color(0xFF0E0F12);
-  static const _bgBottom = Color(0xFF141A22);
-  static const _panel = Color(0xFF1C1F26);
-  static const _text = Colors.white;
-  static const _muted = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30);
+  static const _bgTop = AppColors.bgTop;
+  static const _bgBottom = AppColors.bgBottom;
+  static const _panel = AppColors.panel;
+  static const _text = AppColors.text;
+  static const _muted = AppColors.muted;
+  static const _accent = AppColors.accent;
 
   // ✅ öffentliche POIs ausblenden
   static const String _mapStyleHidePublicPois = r'''
@@ -192,9 +193,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     await _maybePromptForRating();
   }
 
-  double _searchTop(BuildContext ctx) => 8;
-
-  String _safeDocId(String input) => input
+String _safeDocId(String input) => input
       .trim()
       .replaceAll('/', '_')
       .replaceAll('#', '_')
@@ -352,9 +351,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF141A22),
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: AppColors.panel,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Row(
             children: [
               Icon(Icons.workspace_premium, color: Colors.amber),
@@ -741,7 +739,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       canvas.drawCircle(
         center,
         imageRadius,
-        Paint()..color = const Color(0xFF2A2F3A),
+        Paint()..color = AppColors.accentBorder,
       );
     }
 
@@ -997,13 +995,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   Future<void> _loadPartiesFromFirebase() async {
     final snapshot = await FirebaseFirestore.instance.collection('Party').get();
+    debugPrint('🎉 Party docs loaded: ${snapshot.docs.length}');
 
     for (final doc in snapshot.docs) {
       try {
         final data = doc.data();
         _partyCache[doc.id] = data;
 
-        if (!_showParties) continue;
+        if (!_showParties) { debugPrint('⛔ ${doc.id}: showParties=false'); continue; }
 
         // 🔒 Host-Erkennung (NUR EINMAL!)
         final bool isHostForThisParty = _isHostForPartyData(data);
@@ -1013,7 +1012,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         (data['moderationStatus'] ?? 'active').toString();
 
         if (moderationStatus == 'blocked' && !isHostForThisParty) {
-          continue; // ⛔ sauber ausgeblendet
+          debugPrint('⛔ ${doc.id}: blocked moderation'); continue;
         }
 
         // =============================
@@ -1036,7 +1035,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
               partyAge = int.tryParse(digits) ?? 0;
             }
           }
-          if (partyAge > 0 && partyAge > _minAgeFilter!) continue;
+          if (partyAge > 0 && partyAge > _minAgeFilter!) { debugPrint('⛔ ${doc.id}: age filter'); continue; }
         }
 
         // =============================
@@ -1053,21 +1052,21 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           );
         }
 
-        if (_onlyFree && (entryFee ?? 0) > 0) continue;
+        if (_onlyFree && (entryFee ?? 0) > 0) { debugPrint('⛔ ${doc.id}: onlyFree filter'); continue; }
         if (_maxEntryFilter != null &&
             entryFee != null &&
-            entryFee > _maxEntryFilter!) continue;
+            entryFee > _maxEntryFilter!) { debugPrint('⛔ ${doc.id}: maxEntry filter'); continue; }
 
         // =============================
         // ⏰ abgelaufen
         // =============================
-        if (_isExpiredWithGrace(data)) continue;
+        if (_isExpiredWithGrace(data)) { debugPrint('⛔ ${doc.id}: expired. date=${data['date']}, time=${data['time']}'); continue; }
 
         // =============================
         // 📍 Position
         // =============================
         final pos = _parseLatLng(data);
-        if (pos == null) continue;
+        if (pos == null) { debugPrint('⛔ ${doc.id}: no position. lat=${data['lat']}, lng=${data['lng']}, location=${data['location']}'); continue; }
 
         // =============================
         // 🌍 friends-only Sichtbarkeit
@@ -1086,7 +1085,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
               me != null && me.isNotEmpty && _myFriendsSet.contains(hostUsername);
           final isExcluded = me != null && excluded.contains(me);
 
-          if (!isFriend || isExcluded) continue;
+          if (!isFriend || isExcluded) { debugPrint('⛔ ${doc.id}: friends-only, not friend of $hostUsername'); continue; }
         }
 
         // =============================
@@ -1117,17 +1116,18 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
           _closedPartyStatus[doc.id] = myStatus;
 
-          BitmapDescriptor icon;
+          final BitmapDescriptor icon;
           if (isHostForThisParty) {
-            icon = _lockIconBlue!;
+            icon = _lockIconBlue ?? BitmapDescriptor.defaultMarker;
           } else if (myStatus == 'approved') {
-            icon = _lockIconGreen!;
+            icon = _lockIconGreen ?? BitmapDescriptor.defaultMarker;
           } else if (myStatus == 'declined') {
-            icon = _lockIconRed!;
+            icon = _lockIconRed ?? BitmapDescriptor.defaultMarker;
           } else {
-            icon = _lockIconGrey!;
+            icon = _lockIconGrey ?? BitmapDescriptor.defaultMarker;
           }
 
+          debugPrint('✅ ${doc.id}: CLOSED party marker added');
           _markers.add(Marker(
             markerId: MarkerId('lock_${doc.id}'),
             position: fakeCenter,
@@ -1154,6 +1154,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
               ? _iconForFriendsPartyMarker(doc.id)
               : _iconForOpenPartyMarker(doc.id);
 
+          debugPrint('✅ ${doc.id}: OPEN party marker added at $pos');
           _markers.add(Marker(
             markerId: MarkerId(doc.id),
             position: pos,
@@ -1161,7 +1162,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             onTap: () => _openPartySheet(data, doc.id),
           ));
         }
-      } catch (_) {
+      } catch (e, st) {
+        debugPrint('💥 ${doc.id}: exception $e\n$st');
         continue;
       }
     }
@@ -1381,11 +1383,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       barrierDismissible: true,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF141A22),
+          backgroundColor: AppColors.panel,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Row(
             children: [
-              Icon(Icons.report_gmailerrorred_rounded, color: Colors.redAccent),
+              Icon(Icons.report_gmailerrorred_rounded, color: AppColors.accent),
               SizedBox(width: 10),
               Text(
                 'Party melden',
@@ -1406,17 +1408,17 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
                     value: selected,
-                    dropdownColor: const Color(0xFF1C1F26),
+                    dropdownColor: AppColors.panel,
                     decoration: InputDecoration(
                       filled: true,
-                      fillColor: const Color(0xFF1C1F26),
+                      fillColor: AppColors.panel,
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: const BorderSide(color: Colors.white24),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.redAccent),
+                        borderSide: const BorderSide(color: AppColors.accent),
                       ),
                     ),
                     items: reasons
@@ -1436,14 +1438,14 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                       hintText: 'Optional: kurze Info dazu…',
                       hintStyle: const TextStyle(color: Colors.white54),
                       filled: true,
-                      fillColor: const Color(0xFF1C1F26),
+                      fillColor: AppColors.panel,
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: const BorderSide(color: Colors.white24),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.redAccent),
+                        borderSide: const BorderSide(color: AppColors.accent),
                       ),
                     ),
                   ),
@@ -1454,11 +1456,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Abbrechen', style: TextStyle(color: Colors.white70)),
+              child: const Text('Abbrechen', style: TextStyle(color: AppColors.muted)),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
+                backgroundColor: AppColors.accent,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
@@ -1486,7 +1488,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Meldung wurde gesendet. Danke.')),
+      SnackBar(
+        content: const Text('Meldung wurde gesendet. Danke.'),
+        backgroundColor: AppColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
     );
   }
 
@@ -2278,8 +2285,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       },
     );
 
-    ageCtrl.dispose();
-    entryCtrl.dispose();
+    // Dismiss-Animation abwarten bevor dispose — sonst crash während Swipe
+    Future.delayed(const Duration(milliseconds: 400), () {
+      ageCtrl.dispose();
+      entryCtrl.dispose();
+    });
 
     if (result == null) return;
 
@@ -2335,101 +2345,20 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       );
     }
 
+    final topPad = MediaQuery.of(context).padding.top;
+
     return Scaffold(
-      backgroundColor: _bgBottom,
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor: const Color(0xFF141A22),
-        centerTitle: true,
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_isPremium) ...[
-              const Text(
-                "Premium Map",
-                style: TextStyle(
-                  color: _text, // oder Colors.white
-                  fontSize: 24,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ]
-            else ...[
-              const Text(
-                "Party Map",
-                style: TextStyle(
-                  color: _text,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
-          ],
-        ),
-        leadingWidth: 96,
-        leading: Row(
-          mainAxisAlignment: MainAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.menu, color: _accent),
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const MenuScreen()),
-              ),
-            ),
-            IconButton(
-              tooltip: 'Filter',
-              onPressed: _openFilterSheet,
-              icon: const Icon(Icons.filter_list, color: Colors.white),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Neu laden',
-            onPressed: _isReloading ? null : _reload,
-            icon: _isReloading
-                ? const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-            )
-                : const Icon(Icons.refresh, color: Colors.white),
-          ),
-          IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ProfileSettingsScreen()),
-            ),
-            icon: const CircleAvatar(
-              radius: 16,
-              backgroundColor: _accent,
-              child: Icon(Icons.person, color: Colors.white, size: 18),
-            ),
-          ),
-          const SizedBox(width: 6),
-        ],
-      ),
+      backgroundColor: AppColors.bgTop,
+      extendBodyBehindAppBar: true,
       body: Stack(
         children: [
-          const Positioned.fill(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [_bgTop, _bgBottom],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-              ),
-            ),
-          ),
+          // ── Map fullscreen ──────────────────────────────────────────────
           Positioned.fill(
             child: GoogleMap(
               initialCameraPosition: _startPos!,
               markers: _markers,
               circles: _circles,
-              padding: const EdgeInsets.only(top: 140, bottom: 90),
+              padding: EdgeInsets.only(top: topPad + 130, bottom: 80),
               onMapCreated: (controller) async {
                 mapController = controller;
                 try {
@@ -2440,58 +2369,134 @@ class _PartyMapScreenState extends State<PartyMapScreen>
               onCameraIdle: _onCameraIdle,
             ),
           ),
+
+          // ── Top gradient fade ───────────────────────────────────────────
           Positioned(
-            left: 12,
-            right: 12,
-            top: _searchTop(context),
+            top: 0, left: 0, right: 0,
+            height: topPad + 140,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    AppColors.bgTop.withValues(alpha: 0.92),
+                    AppColors.bgTop.withValues(alpha: 0.0),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // ── Top row: menu + title + profile ────────────────────────────
+          Positioned(
+            top: topPad + 10,
+            left: 14,
+            right: 14,
+            child: Row(
+              children: [
+                // Menu button
+                _FloatingMapButton(
+                  icon: Icons.menu_rounded,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const MenuScreen()),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // Filter button
+                _FloatingMapButton(
+                  icon: Icons.tune_rounded,
+                  onTap: _openFilterSheet,
+                ),
+                const Spacer(),
+                // Title pill
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: AppColors.panel.withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: AppColors.accentBorder2, width: 1),
+                  ),
+                  child: Text(
+                    _isPremium ? "Premium Map" : "PartyPin",
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ),
+                const Spacer(),
+                // Reload button
+                _FloatingMapButton(
+                  icon: Icons.refresh_rounded,
+                  loading: _isReloading,
+                  onTap: _isReloading ? null : _reload,
+                ),
+                const SizedBox(width: 10),
+                // Profile button
+                GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ProfileSettingsScreen()),
+                  ),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: AppColors.accent,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.accentBorder2,
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.person_rounded, color: Colors.white, size: 20),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // ── Search bar ──────────────────────────────────────────────────
+          Positioned(
+            left: 14,
+            right: 14,
+            top: topPad + 62,
             child: _SearchCard(
               controller: _searchCtrl,
               onSearch: (input) async {
                 final query = input.trim();
-                if (query.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Bitte eine Adresse eingeben.")),
-                  );
-                  return;
-                }
+                if (query.isEmpty) return;
 
                 final cc = await _getSelectedCountryCode();
-                final withCity =
-                    "$query, ${_currentCity.trim().isNotEmpty ? _currentCity.trim() : 'Wien'}";
+                final withCity = "$query, ${_currentCity.trim().isNotEmpty ? _currentCity.trim() : 'Wien'}";
 
-                GeocodedLocation? location = await GeocodingService.getLocationFromAddress(
-                  withCity,
-                  countryCode: cc,
-                );
-
-                location ??= await GeocodingService.getLocationFromAddress(
-                  query,
-                  countryCode: cc,
-                );
+                GeocodedLocation? location = await GeocodingService.getLocationFromAddress(withCity, countryCode: cc);
+                location ??= await GeocodingService.getLocationFromAddress(query, countryCode: cc);
 
                 if (!mounted) return;
-
                 if (location != null) {
-                  final pos = LatLng(location.latitude, location.longitude);
-                  mapController?.animateCamera(CameraUpdate.newLatLngZoom(pos, 19));
+                  mapController?.animateCamera(
+                    CameraUpdate.newLatLngZoom(LatLng(location.latitude, location.longitude), 19),
+                  );
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Adresse nicht gefunden.")),
+                    const SnackBar(
+                      content: Text("Adresse nicht gefunden."),
+                      backgroundColor: AppColors.accent,
+                    ),
                   );
                 }
               },
-              onClear: () {
-                _searchCtrl.clear();
-              },
+              onClear: () => _searchCtrl.clear(),
             ),
           ),
-          if (!_legalWarnDismissed && !_isBarAccount)
-            Positioned(
-              left: 12,
-              right: 12,
-              top: _searchTop(context) + 64,
-              child: _legalWarningBanner(),
-            ),
         ],
       ),
     );
@@ -2668,53 +2673,89 @@ class _SearchCardState extends State<_SearchCard> {
   Widget build(BuildContext context) {
     final hasText = widget.controller.text.trim().isNotEmpty;
 
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.grey[850],
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.redAccent.withOpacity(.85), width: 1.2),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(.5),
-              blurRadius: 16,
-              offset: const Offset(0, 8),
-            )
-          ],
-        ),
-        child: Row(
-          children: [
-            const SizedBox(width: 12),
-            const Icon(Icons.search, color: Colors.redAccent),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                style: const TextStyle(color: Colors.white),
-                textInputAction: TextInputAction.search,
-                onSubmitted: widget.onSearch,
-                decoration: const InputDecoration(
-                  hintText: "Adresse eingeben",
-                  hintStyle: TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
-                  border: InputBorder.none,
-                ),
+    return Container(
+      height: 46,
+      decoration: BoxDecoration(
+        color: AppColors.panel.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.accentBorder.withValues(alpha: 0.7)),
+        boxShadow: const [
+          BoxShadow(color: Color(0x40000000), blurRadius: 20, offset: Offset(0, 6)),
+        ],
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 14),
+          const Icon(Icons.search_rounded, color: AppColors.muted, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: widget.controller,
+              style: const TextStyle(color: AppColors.text, fontSize: 14, fontWeight: FontWeight.w500),
+              textInputAction: TextInputAction.search,
+              onSubmitted: widget.onSearch,
+              decoration: const InputDecoration(
+                hintText: "Adresse suchen...",
+                hintStyle: TextStyle(color: AppColors.subtle, fontSize: 14),
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: EdgeInsets.zero,
               ),
             ),
-            if (hasText)
-              IconButton(
-                onPressed: widget.onClear,
-                icon: const Icon(Icons.close, color: Colors.white70, size: 18),
-                tooltip: 'Löschen',
-              )
-            else
-              IconButton(
-                onPressed: () => widget.onSearch(widget.controller.text),
-                icon: const Icon(Icons.arrow_forward_rounded, color: Colors.white),
-                tooltip: 'Suchen',
+          ),
+          if (hasText)
+            GestureDetector(
+              onTap: widget.onClear,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: Icon(Icons.close_rounded, color: AppColors.muted, size: 18),
               ),
+            )
+          else
+            const SizedBox(width: 14),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Floating map button ─────────────────────────────────────────────────────
+
+class _FloatingMapButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback? onTap;
+  final bool loading;
+
+  const _FloatingMapButton({
+    required this.icon,
+    this.onTap,
+    this.loading = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppColors.panel.withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.accentBorder.withValues(alpha: 0.6)),
+          boxShadow: const [
+            BoxShadow(color: Color(0x33000000), blurRadius: 10, offset: Offset(0, 4)),
           ],
         ),
+        child: loading
+            ? const Center(
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.muted),
+                ),
+              )
+            : Icon(icon, color: AppColors.muted, size: 20),
       ),
     );
   }

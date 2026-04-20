@@ -1,5 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../Screens/bar_event.dart';
+import '../Screens/bar/bar_event.dart';
 
 class EventRepository {
   final FirebaseFirestore _db;

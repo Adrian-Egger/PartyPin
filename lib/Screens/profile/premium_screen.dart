@@ -8,17 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-
-// =======================
-// THEME (gleich wie bei dir)
-// =======================
-const _gradTop = Color(0xFF0E0F12);
-const _gradBottom = Color(0xFF141A22);
-const _panel = Color(0xFF15171C);
-const _panelBorder = Color(0xFF2A2F38);
-const _textPrimary = Colors.white;
-const _textSecondary = Color(0xFFB6BDC8);
-const _accent = Color(0xFFFF3B30);
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 // =======================
 // PAYPAL PLANS
@@ -72,7 +63,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
       onPressed: () => Navigator.pop(context),
       icon: const Icon(
         Icons.arrow_back,
-        color: _accent,
+        color: AppColors.accent,
         size: 26,
       ),
       tooltip: 'Zurück',
@@ -87,12 +78,21 @@ class _PremiumScreenState extends State<PremiumScreen> {
       elevation: 0,
       centerTitle: true,
       leading: _backArrow(context),
-      title: const Text(
-        '⭐ Premium ⭐',
-        style: TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w800,
-          fontSize: 20,
+      title: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+        decoration: BoxDecoration(
+          color: AppColors.panel,
+          borderRadius: AppRadius.fullBr,
+          border: Border.all(color: AppColors.accentBorder2, width: 1),
+        ),
+        child: Text(
+          Lang.t('premium_header'),
+          style: const TextStyle(
+            color: AppColors.text,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
+            letterSpacing: -0.2,
+          ),
         ),
       ),
     );
@@ -236,11 +236,13 @@ class _PremiumScreenState extends State<PremiumScreen> {
     if (u.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: _panel,
-          content: Text(
+        SnackBar(
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          content: const Text(
             'Kein Username gefunden. Bitte neu einloggen.',
-            style: TextStyle(color: _textPrimary),
+            style: TextStyle(color: Colors.white),
           ),
         ),
       );
@@ -275,10 +277,12 @@ class _PremiumScreenState extends State<PremiumScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: _panel,
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           content: Text(
             'Fehler beim Öffnen von PayPal: $e',
-            style: const TextStyle(color: _textPrimary),
+            style: const TextStyle(color: Colors.white),
           ),
         ),
       );
@@ -289,15 +293,12 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
   // ✅ Ersetze NUR diese Funktion in deinem Code:
   Widget _premiumFeaturesCard() {
-    const panel = Color(0xFF141A22);
-    const accentRed = Color(0xFFFF3B30);
-
     Widget row(IconData ic, String text) => Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(ic, color: accentRed, size: 18),
+          Icon(ic, color: AppColors.accent, size: 18),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -316,7 +317,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: panel,
+        color: AppColors.bgBottom,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: Colors.white12),
       ),
@@ -343,15 +344,18 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const bg = Color(0xFF090B10);
-    const panel = Color(0xFF141A22);
-    const accentRed = Color(0xFFFF3B30);
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => _buildContent(context),
+    );
+  }
 
+  Widget _buildContent(BuildContext context) {
     final username = (_currentUsername ?? '').trim();
 
     if (username.isEmpty) {
       return Scaffold(
-        backgroundColor: bg,
+        backgroundColor: AppColors.bgTop,
         appBar: _appBar(context),
         body: const Center(
           child: Text(
@@ -371,7 +375,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
         // ✅ Premium aktiv
         if (isPremium) {
           return Scaffold(
-            backgroundColor: bg,
+            backgroundColor: AppColors.bgTop,
             appBar: _appBar(context),
             body: Center(
               child: Padding(
@@ -380,12 +384,12 @@ class _PremiumScreenState extends State<PremiumScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: panel,
+                    color: AppColors.bgBottom,
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: accentRed.withOpacity(0.9), width: 1.2),
+                    border: Border.all(color: AppColors.accent.withOpacity(0.9), width: 1.2),
                     boxShadow: [
                       BoxShadow(
-                        color: accentRed.withOpacity(0.12),
+                        color: AppColors.accent.withOpacity(0.12),
                         blurRadius: 18,
                         spreadRadius: 2,
                       )
@@ -397,14 +401,14 @@ class _PremiumScreenState extends State<PremiumScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                         decoration: BoxDecoration(
-                          color: accentRed.withOpacity(0.12),
+                          color: AppColors.accent.withOpacity(0.12),
                           borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: accentRed),
+                          border: Border.all(color: AppColors.accent),
                         ),
                         child: const Text(
                           '⭐ PREMIUM AKTIV ⭐',
                           style: TextStyle(
-                            color: accentRed,
+                            color: AppColors.accent,
                             fontWeight: FontWeight.w900,
                             letterSpacing: 0.6,
                           ),
@@ -447,7 +451,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                             ),
                           ),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: accentRed,
+                            backgroundColor: AppColors.accent,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -464,7 +468,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
 
         // ✅ NICHT Premium
         return Scaffold(
-          backgroundColor: bg,
+          backgroundColor: AppColors.bgTop,
           appBar: _appBar(context),
           body: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
@@ -474,7 +478,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: panel,
+                    color: AppColors.bgBottom,
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(color: Colors.white12),
                   ),
@@ -530,7 +534,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
                 ElevatedButton(
                   onPressed: _isLoading ? null : _openSubscriptionCheckout,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: accentRed,
+                    backgroundColor: AppColors.accent,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -586,18 +590,16 @@ class _PremiumScreenState extends State<PremiumScreen> {
     required VoidCallback onTap,
     String? highlight,
   }) {
-    const accentRed = Color(0xFFFF3B30);
-
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(18),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF1E2230) : const Color(0xFF141824),
+          color: selected ? AppColors.panelAlt : AppColors.bgBottom,
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: selected ? accentRed : Colors.white12,
+            color: selected ? AppColors.accent : Colors.white12,
             width: selected ? 1.4 : 1.0,
           ),
         ),
@@ -605,7 +607,7 @@ class _PremiumScreenState extends State<PremiumScreen> {
           children: [
             Icon(
               selected ? Icons.check_circle : Icons.circle_outlined,
-              color: selected ? accentRed : Colors.white38,
+              color: selected ? AppColors.accent : Colors.white38,
               size: 20,
             ),
             const SizedBox(width: 12),
@@ -628,14 +630,14 @@ class _PremiumScreenState extends State<PremiumScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
-                            color: accentRed.withOpacity(0.12),
+                            color: AppColors.accent.withOpacity(0.12),
                             borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: accentRed),
+                            border: Border.all(color: AppColors.accent),
                           ),
                           child: Text(
                             highlight,
                             style: const TextStyle(
-                              color: accentRed,
+                              color: AppColors.accent,
                               fontSize: 10,
                               fontWeight: FontWeight.w800,
                             ),

@@ -1,23 +1,26 @@
 // lib/Screens/home_shell.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'feedback_screen.dart';
-import 'party_map_screen.dart';
-import 'new_party.dart';
-import '../Social/friends_view.dart';
+import '../profile/feedback_screen.dart';
+import '../party/party_map_screen.dart';
+import '../party/new_party.dart';
+import '../../Social/friends_view.dart';
 
 // Gate Screens
-import 'create_account_screen.dart';
-import 'nutzungsbedinungen.dart';
+import '../auth/create_account_screen.dart';
+import '../auth/nutzungsbedinungen.dart';
 import 'selection_screen.dart';
 
 // Bar Tabs
-import 'bar_event_screen.dart';
-import 'bar_feedback_screen.dart';
+import '../bar/bar_event_screen.dart';
+import '../bar/bar_feedback_screen.dart';
 
 // ✅ MyBarTab
-import 'my_bar_tab.dart';
+import '../bar/my_bar_tab.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 enum _GateState { loading, login, terms, selection, ready }
 
@@ -38,9 +41,7 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  static const _panel = Color(0xFF1C1F26);
-  static const _muted = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30);
+  static const _accent = AppColors.accent;
 
   _GateState _gate = _GateState.loading;
 
@@ -179,10 +180,12 @@ class _HomeShellState extends State<HomeShell> {
   void _onBottomNavTapped(int i) {
     if (!_isTabsReady) return;
 
+    HapticFeedback.lightImpact();
+
     // ✅ Für "Meine Bar" soll bei erneutem Tap wieder öffnen
     if (_isBarAccount && i == 3) {
       if (_tabIndex.value == 3) {
-        final fallback = _currentIndex == 3 ? 1 : _currentIndex; // meist Map
+        final fallback = _currentIndex == 3 ? 1 : _currentIndex;
         _tabIndex.value = fallback;
       }
       setState(() => _currentIndex = 3);
@@ -198,6 +201,13 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
     if (_gate != _GateState.ready) {
       return Scaffold(body: _buildGateBody());
     }
@@ -210,31 +220,54 @@ class _HomeShellState extends State<HomeShell> {
 
     return Scaffold(
       body: IndexedStack(index: _currentIndex, children: _pages),
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: _panel,
-        selectedItemColor: _accent,
-        unselectedItemColor: _muted,
-        currentIndex: _currentIndex,
-        onTap: _onBottomNavTapped,
-        type: BottomNavigationBarType.fixed,
-        items: _isBarAccount
-            ? const [
-          BottomNavigationBarItem(
-              icon: Icon(Icons.celebration), label: "Event"),
-          BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.feedback), label: "Feedback"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.store), label: "Meine Bar"),
-        ]
-            : const [
-          BottomNavigationBarItem(
-              icon: Icon(Icons.feedback), label: "Feedback"),
-          BottomNavigationBarItem(
-              icon: Icon(Icons.people), label: "Freunde"),
-          BottomNavigationBarItem(icon: Icon(Icons.map), label: "Map"),
-          BottomNavigationBarItem(icon: Icon(Icons.add), label: "Neu"),
-        ],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentIndex,
+        onDestinationSelected: _onBottomNavTapped,
+        destinations: _isBarAccount
+            ? [
+                NavigationDestination(
+                  icon: const Icon(Icons.celebration_outlined),
+                  selectedIcon: const Icon(Icons.celebration),
+                  label: Lang.t('nav_event'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.map_outlined),
+                  selectedIcon: const Icon(Icons.map),
+                  label: Lang.t('nav_map'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.star_outline),
+                  selectedIcon: const Icon(Icons.star),
+                  label: Lang.t('nav_bar_feedback'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.store_outlined),
+                  selectedIcon: const Icon(Icons.store),
+                  label: Lang.t('nav_my_bar'),
+                ),
+              ]
+            : [
+                NavigationDestination(
+                  icon: const Icon(Icons.chat_bubble_outline),
+                  selectedIcon: const Icon(Icons.chat_bubble),
+                  label: Lang.t('nav_feedback'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.people_outline),
+                  selectedIcon: const Icon(Icons.people),
+                  label: Lang.t('nav_friends'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.map_outlined),
+                  selectedIcon: const Icon(Icons.map),
+                  label: Lang.t('nav_map'),
+                ),
+                NavigationDestination(
+                  icon: const Icon(Icons.add_circle_outline),
+                  selectedIcon: const Icon(Icons.add_circle),
+                  label: Lang.t('nav_new'),
+                ),
+              ],
       ),
     );
   }
@@ -273,3 +306,4 @@ class _UsernameMissingScreen extends StatelessWidget {
     );
   }
 }
+

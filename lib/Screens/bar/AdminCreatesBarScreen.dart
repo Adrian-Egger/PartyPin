@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geocoding/geocoding.dart' as geocoding;
+import '../../Theme/app_theme.dart';
 
 class AdminCreateBarScreen extends StatefulWidget {
   const AdminCreateBarScreen({Key? key}) : super(key: key);
@@ -62,14 +63,13 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   String _userSearch = "";
 
   // Farben
-  static const _bg = Color(0xFF0E0F12);
-  static const _panel = Color(0xFF15171C);
-  static const _panelBorder = Color(0xFF2A2F38);
-  static const _card = Color(0xFF1C1F26);
-  static const _textPrimary = Colors.white;
-  static const _textSecondary = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30);
-  static const _secondary = Color(0xFF00C2A8);
+  static const _bg = AppColors.bgTop;
+  static const _panel = AppColors.panel;
+  static const _card = AppColors.panel;
+  static const _textPrimary = AppColors.text;
+  static const _textSecondary = AppColors.muted;
+  static const _accent = AppColors.accent;
+  static const _secondary = AppColors.teal;
 
   // Wochentage-Definition
   static const List<_DayMeta> _days = [
@@ -114,7 +114,11 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
 
     if (currentUsername != kAdminUsername) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Kein Zugriff (nur Admin).")),
+        const SnackBar(
+          content: Text("Kein Zugriff (nur Admin)."),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       Navigator.of(context).pop();
     }
@@ -188,17 +192,19 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     final first = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: _panel,
-        title: Text(title1, style: const TextStyle(color: _textPrimary)),
-        content: Text(msg1, style: const TextStyle(color: _textSecondary)),
+        backgroundColor: AppColors.panel,
+        title: Text(title1, style: const TextStyle(color: AppColors.text)),
+        content: Text(msg1, style: const TextStyle(color: AppColors.muted)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text("Abbrechen"),
+            child: const Text("Abbrechen", style: TextStyle(color: AppColors.muted)),
           ),
-          TextButton(
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(okText, style: const TextStyle(color: _accent)),
+            child: Text(okText),
           ),
         ],
       ),
@@ -208,17 +214,19 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     final second = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: _panel,
-        title: Text(title2, style: const TextStyle(color: _textPrimary)),
-        content: Text(msg2, style: const TextStyle(color: _textSecondary)),
+        backgroundColor: AppColors.panel,
+        title: Text(title2, style: const TextStyle(color: AppColors.text)),
+        content: Text(msg2, style: const TextStyle(color: AppColors.muted)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text("Abbrechen"),
+            child: const Text("Abbrechen", style: TextStyle(color: AppColors.muted)),
           ),
-          TextButton(
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: Colors.white),
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(okText, style: const TextStyle(color: _accent)),
+            child: Text(okText),
           ),
         ],
       ),
@@ -296,12 +304,22 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       setState(() => _profileImageUrl = url);
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Profilbild hochgeladen.")),
+        SnackBar(
+          content: const Text("Profilbild hochgeladen."),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler beim Bild-Upload: $e")),
+        SnackBar(
+          content: Text("Fehler beim Bild-Upload: $e"),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     } finally {
       if (mounted) setState(() => _uploadingImage = false);
@@ -376,7 +394,12 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler beim Highlight-Bild-Upload: $e")),
+        SnackBar(
+          content: Text("Fehler beim Highlight-Bild-Upload: $e"),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     }
   }
@@ -422,7 +445,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           padding: const EdgeInsets.only(bottom: 12),
           child: Container(
             decoration: BoxDecoration(
-              color: const Color(0xFF1C1F26),
+              color: AppColors.panel,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: Colors.white12),
             ),
@@ -506,7 +529,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       child: Container(
         height: 140,
         decoration: BoxDecoration(
-          color: const Color(0xFF141A22),
+          color: AppColors.bgBottom,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white24),
         ),
@@ -518,7 +541,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   Widget _highlightTextCard({required _BarHighlight highlight}) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF141A22),
+        color: AppColors.bgBottom,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white24),
       ),
@@ -611,7 +634,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
       ),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -700,7 +723,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                           : () => _pickOpeningTime(dayMeta.key, true),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.white24),
-                        backgroundColor: const Color(0xFF141A22),
+                        backgroundColor: AppColors.bgBottom,
                         padding: const EdgeInsets.symmetric(vertical: 8),
                       ),
                       child: Text(
@@ -718,7 +741,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                           : () => _pickOpeningTime(dayMeta.key, false),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.white24),
-                        backgroundColor: const Color(0xFF141A22),
+                        backgroundColor: AppColors.bgBottom,
                         padding: const EdgeInsets.symmetric(vertical: 8),
                       ),
                       child: Text(
@@ -782,7 +805,10 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         if (!mounted) return null;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Adresse konnte nicht gefunden werden. Bitte prüfen.')),
+            content: Text('Adresse konnte nicht gefunden werden. Bitte prüfen.'),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
         return null;
       }
@@ -792,7 +818,12 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     } catch (e) {
       if (!mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Adresse konnte nicht geocodiert werden: $e')),
+        SnackBar(
+          content: Text('Adresse konnte nicht geocodiert werden: $e'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
       return null;
     }
@@ -888,7 +919,11 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     if (!valid) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Bitte alle Pflichtfelder korrekt ausfüllen.")),
+        const SnackBar(
+          content: Text("Bitte alle Pflichtfelder korrekt ausfüllen."),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       return;
     }
@@ -907,7 +942,11 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       if (geo == null) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Adresse konnte nicht geocodiert werden. Bitte prüfen.')),
+          const SnackBar(
+            content: Text('Adresse konnte nicht geocodiert werden. Bitte prüfen.'),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
         setState(() => _isSaving = false);
         return;
@@ -945,13 +984,23 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         await docRef.update(data);
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Bar aktualisiert.")),
+          const SnackBar(
+            content: Text("Bar aktualisiert."),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+          ),
         );
       } else {
         await docRef.set(data);
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Bar angelegt.")),
+          const SnackBar(
+            content: Text("Bar angelegt."),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+          ),
         );
       }
 
@@ -959,7 +1008,12 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler beim Speichern: $e")),
+        SnackBar(
+          content: Text("Fehler beim Speichern: $e"),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -1070,12 +1124,22 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       await doc.reference.delete();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Bar-Anfrage gelöscht.")),
+        const SnackBar(
+          content: Text("Bar-Anfrage gelöscht."),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler beim Löschen: $e")),
+        SnackBar(
+          content: Text("Fehler beim Löschen: $e"),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     }
   }
@@ -1093,7 +1157,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         padding: const EdgeInsets.only(bottom: 10),
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF141A22),
+            color: AppColors.bgBottom,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.white24),
           ),
@@ -1203,7 +1267,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Column(
@@ -1255,7 +1319,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
 
                 return ListView.separated(
                   itemCount: docs.length,
-                  separatorBuilder: (_, __) => const Divider(color: _panelBorder),
+                  separatorBuilder: (_, __) => const Divider(color: AppColors.accentBorder),
                   itemBuilder: (context, index) {
                     final doc = docs[index];
                     final data = (doc.data() as Map<String, dynamic>?) ?? {};
@@ -1412,12 +1476,22 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(value ? "Premium aktiviert (Firestore)." : "Premium beendet (Firestore).")),
+        SnackBar(
+          content: Text(value ? "Premium aktiviert (Firestore)." : "Premium beendet (Firestore)."),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler: $e")),
+        SnackBar(
+          content: Text("Fehler: $e"),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     }
   }
@@ -1505,12 +1579,22 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("User gebannt. Feedbacks ausgeblendet: $totalHidden")),
+        SnackBar(
+          content: Text("User gebannt. Feedbacks ausgeblendet: $totalHidden"),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler beim Bannen/Hidden: $e")),
+        SnackBar(
+          content: Text("Fehler beim Bannen/Hidden: $e"),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     }
   }
@@ -1532,12 +1616,22 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       if (!mounted) return;
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("User-Dokument gelöscht.")),
+        const SnackBar(
+          content: Text("User-Dokument gelöscht."),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler: $e")),
+        SnackBar(
+          content: Text("Fehler: $e"),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     }
   }
@@ -1659,7 +1753,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         padding: const EdgeInsets.only(bottom: 10),
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF141A22),
+            color: AppColors.bgBottom,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.white24),
           ),
@@ -1863,7 +1957,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
       ),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -1932,7 +2026,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
 
                 return ListView.separated(
                   itemCount: docs.length,
-                  separatorBuilder: (_, __) => const Divider(color: _panelBorder),
+                  separatorBuilder: (_, __) => const Divider(color: AppColors.accentBorder),
                   itemBuilder: (context, index) {
                     final doc = docs[index];
                     final d = doc.data();
@@ -2017,7 +2111,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
       ),
       padding: const EdgeInsets.all(4),
       child: Row(
@@ -2044,7 +2138,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
       ),
       child: Row(
         children: [
@@ -2077,7 +2171,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
       ),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -2161,7 +2255,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                     icon: Icons.access_time_filled,
                   ),
                   const SizedBox(height: 16),
-                  const Divider(color: _panelBorder),
+                  const Divider(color: AppColors.accentBorder),
                   const SizedBox(height: 12),
                   Row(
                     children: const [
@@ -2226,7 +2320,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           decoration: BoxDecoration(
             color: _panel,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _panelBorder),
+            border: Border.all(color: AppColors.accentBorder),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Column(
@@ -2272,7 +2366,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                     }
                     return ListView.separated(
                       itemCount: docs.length,
-                      separatorBuilder: (_, __) => const Divider(color: _panelBorder),
+                      separatorBuilder: (_, __) => const Divider(color: AppColors.accentBorder),
                       itemBuilder: (context, index) {
                         final d = docs[index].data() as Map<String, dynamic>;
                         final name = (d['barName'] ?? 'Unbenannt').toString();
@@ -2329,7 +2423,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
           decoration: BoxDecoration(
             color: _panel,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _panelBorder),
+            border: Border.all(color: AppColors.accentBorder),
           ),
           padding: const EdgeInsets.all(20),
           child: Form(
@@ -2580,7 +2674,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                     onPressed: _isSaving ? null : _addHighlightRow,
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(color: Colors.redAccent),
-                      backgroundColor: const Color(0xFF141A22),
+                      backgroundColor: AppColors.bgBottom,
                     ),
                     icon: const Icon(Icons.add, color: Colors.redAccent),
                     label: const Text('Highlight hinzufügen', style: TextStyle(color: Colors.redAccent)),

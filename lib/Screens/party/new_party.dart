@@ -8,19 +8,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
+
 import 'package:geocoding/geocoding.dart' as geo;
 
 // ✅ (Coming soon) Bilder-Funktionalität bleibt im Code,
 // aber UI ist komplett deaktiviert und es gibt keinen Premium-/Payment-Flow.
 import 'package:image_picker/image_picker.dart';
 
-import '../Services/geocoding_services.dart';
+import '../../Services/geocoding_services.dart';
 import 'map_picker_screen.dart';
-import '../Social/friends_model.dart';
-import '../Screens/exclude_friends.dart';
+import '../../Social/friends_model.dart';
+import 'exclude_friends.dart';
 
 // ✅ HomeShell (WICHTIG für BottomNav!)
-import 'home_shell.dart';
+import '../home/home_shell.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 class NewPartyScreen extends StatefulWidget {
   final Map<String, dynamic>? existingData;
@@ -44,6 +50,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   final _formKey = GlobalKey<FormState>();
   final _scrollCtrl = ScrollController();
 
+
   final TextEditingController _addressController = TextEditingController();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
@@ -64,9 +71,16 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
 
   bool _isUnlimitedGuests = false;
   bool _isFreeEntry = false;
+  bool _navigatedAway = false;
+  bool _detailsSubmitted = false;
+
 
   bool _isLoading = false;
   bool _triedSubmit = false;
+
+  String? _stripeAccountId;
+  bool _checkingStripe = true;
+
 
   String? _hostName;
   String _partyType = 'Open';
@@ -80,16 +94,15 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   bool _friendsOnly = false; // visibility: friends/public
   List<String> _excludedFriends = []; // usernames
 
-  static const _bg = Color(0xFF0E0F12);
-  static const _gradTop = Color(0xFF0E0F12);
-  static const _gradBottom = Color(0xFF141A22);
+  static const _bg = AppColors.bgTop;
+  static const _gradTop = AppColors.bgTop;
+  static const _gradBottom = AppColors.bgBottom;
   static const _panel = Color(0xFF15171C);
-  static const _panelBorder = Color(0xFF2A2F38);
-  static const _card = Color(0xFF1C1F26);
-  static const _textPrimary = Colors.white;
-  static const _textSecondary = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30);
-  static const _secondary = _accent;
+  static const _card = AppColors.panel;
+  static const _textPrimary = AppColors.text;
+  static const _textSecondary = AppColors.muted;
+  static const _accent = AppColors.accent;
+  static const _secondary = AppColors.accent;
 
   static const _accentSoft = Color(0x26FF3B30);
   static const _accentLine = Color(0x66FF3B30);
@@ -123,6 +136,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   void initState() {
     super.initState();
     _loadHostData();
+    _loadStripeStatus();
     _preloadExisting();
     _wireListeners();
 
@@ -177,6 +191,50 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       final p = await SharedPreferences.getInstance();
       await p.remove('draft_newparty');
     } catch (_) {}
+  }
+
+  Future<String?> _askForEmail() async {
+    final controller = TextEditingController();
+
+    return await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: AppColors.panel,
+          title: const Text(
+            "Email eingeben",
+            style: TextStyle(color: AppColors.text),
+          ),
+          content: TextField(
+            controller: controller,
+            keyboardType: TextInputType.emailAddress,
+            style: const TextStyle(color: Colors.white),
+            decoration: const InputDecoration(
+              hintText: "deine@email.com",
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Abbrechen"),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final email = controller.text.trim();
+
+                if (email.isEmpty ||
+                    !RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
+                  return;
+                }
+
+                Navigator.pop(context, email);
+              },
+              child: const Text("Weiter"),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _preloadExisting() {
@@ -273,15 +331,220 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     });
   }
 
+  Future<void> _loadStripeStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final username = prefs.getString('username');
+
+    if (username == null) {
+      setState(() => _checkingStripe = false);
+      return;
+    }
+
+    // 🔎 User korrekt über username finden
+    final query = await FirebaseFirestore.instance
+        .collection('users')
+        .where('username', isEqualTo: username)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) {
+      setState(() => _checkingStripe = false);
+      return;
+    }
+
+    final userDoc = query.docs.first;
+    final stripeId = userDoc.data()['stripeAccountId'];
+
+    if (stripeId == null) {
+      setState(() {
+        _stripeAccountId = null;
+        _detailsSubmitted = false;
+        _checkingStripe = false;
+      });
+      return;
+    }
+
+    try {
+      // 🔥 Backend Status prüfen
+      final response = await http.post(
+        Uri.parse("http://192.168.1.5:3000/check-stripe-status"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "stripeAccountId": stripeId,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        setState(() {
+          _stripeAccountId = stripeId;
+          _detailsSubmitted = false;
+          _checkingStripe = false;
+        });
+        return;
+      }
+
+      final data = jsonDecode(response.body);
+
+      setState(() {
+        _stripeAccountId = stripeId;
+        _detailsSubmitted = data["detailsSubmitted"] ?? false;
+        _checkingStripe = false;
+      });
+
+    } catch (e) {
+      setState(() {
+        _stripeAccountId = stripeId;
+        _detailsSubmitted = false;
+        _checkingStripe = false;
+      });
+    }
+  }
+
+
+
+  Future<void> _createStripeAccount() async {
+    final prefs = await SharedPreferences.getInstance();
+    final username = prefs.getString('username');
+
+    if (username == null) return;
+
+    final email = await _askForEmail();
+    if (email == null) return;
+
+    // 🔎 richtigen User suchen
+    final query = await FirebaseFirestore.instance
+        .collection('users')
+        .where('username', isEqualTo: username)
+        .limit(1)
+        .get();
+
+    if (query.docs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text("User nicht gefunden."),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
+      return;
+    }
+
+    final userDoc = query.docs.first;
+    final docId = userDoc.id;
+
+    final response = await http.post(
+      Uri.parse("http://192.168.1.5:3000/create-host-account"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({"email": email}),
+    );
+
+    if (response.statusCode != 200) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text("Backend Fehler."),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
+      return;
+    }
+
+    final data = jsonDecode(response.body);
+    final accountId = data["accountId"];
+    final onboardingUrl = data["onboardingUrl"];
+
+    // ✅ Stripe ID im richtigen Dokument speichern
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(docId)
+        .set({
+      "stripeAccountId": accountId,
+    }, SetOptions(merge: true));
+
+    await launchUrl(
+      Uri.parse(onboardingUrl),
+      mode: LaunchMode.externalApplication,
+    );
+
+    setState(() {
+      _stripeAccountId = accountId;
+    });
+  }
+
+
+  Future<void> _openStripeDashboard() async {
+    if (_stripeAccountId == null) return;
+
+    final response = await http.post(
+      Uri.parse("http://192.168.1.5:3000/create-login-link"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "stripeAccountId": _stripeAccountId,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text("Stripe Login Fehler."),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
+      return;
+    }
+
+    final url = jsonDecode(response.body)["url"];
+
+    await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+  }
+
+  Future<void> _resumeOnboarding() async {
+    final response = await http.post(
+      Uri.parse("http://192.168.1.5:3000/resume-onboarding"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "stripeAccountId": _stripeAccountId,
+      }),
+    );
+
+    if (response.statusCode != 200) return;
+
+    final url = jsonDecode(response.body)["url"];
+
+    await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+  }
+
+
   Future<bool> _ensureLegalConsentBeforeCreating() async {
     final prefs = await SharedPreferences.getInstance();
-    final alreadyAccepted = prefs.getBool('legal_consent_create_v1') ?? false;
-    if (alreadyAccepted) return true;
+
+    // Lokaler Cache – schneller Check
+    if (prefs.getBool('legal_consent_create_v1') == true) return true;
+
+    // Firestore-Check (pro Account)
+    final username = prefs.getString('username') ?? prefs.getString('currentUsername') ?? '';
+    if (username.isNotEmpty) {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(username).get();
+      if (doc.data()?['legalConsentCreateV1'] == true) {
+        await prefs.setBool('legal_consent_create_v1', true);
+        return true;
+      }
+    }
 
     final acceptedNow = await _showLegalGateDialog();
     if (acceptedNow) {
       await prefs.setBool('legal_consent_create_v1', true);
       await prefs.setString('legal_consent_create_v1_date', DateTime.now().toIso8601String());
+      if (username.isNotEmpty) {
+        await FirebaseFirestore.instance.collection('users').doc(username).set(
+          {'legalConsentCreateV1': true, 'legalConsentCreateV1At': FieldValue.serverTimestamp()},
+          SetOptions(merge: true),
+        );
+      }
     }
     return acceptedNow;
   }
@@ -297,13 +560,13 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
         return StatefulBuilder(
           builder: (ctx, setSB) {
             return AlertDialog(
-              backgroundColor: Colors.grey[900],
+              backgroundColor: AppColors.panel,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               title: Row(
                 children: const [
-                  Icon(Icons.gavel_outlined, color: Colors.redAccent),
+                  Icon(Icons.gavel_outlined, color: AppColors.accent),
                   SizedBox(width: 8),
-                  Text("Rechtlicher Hinweis", style: TextStyle(color: Colors.white)),
+                  Text("Rechtlicher Hinweis", style: TextStyle(color: AppColors.text)),
                 ],
               ),
               content: SingleChildScrollView(
@@ -313,7 +576,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                     const Text(
                       "Das Erstellen von Fake-Partys ist VERBOTEN. Du bestätigst, dass alle Angaben wahrheitsgemäß sind und die Veranstaltung wirklich stattfindet.",
                       style: TextStyle(
-                        color: Colors.white70,
+                        color: AppColors.muted,
                         height: 1.35,
                         fontWeight: FontWeight.w600,
                       ),
@@ -323,10 +586,10 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                       value: checkbox,
                       onChanged: (v) => setSB(() => checkbox = v ?? false),
                       controlAffinity: ListTileControlAffinity.leading,
-                      activeColor: Colors.redAccent,
+                      activeColor: AppColors.accent,
                       title: const Text(
                         "Ich habe den Hinweis gelesen und stimme zu.",
-                        style: TextStyle(color: Colors.white),
+                        style: TextStyle(color: AppColors.text),
                       ),
                       contentPadding: EdgeInsets.zero,
                     ),
@@ -335,19 +598,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
               ),
               actionsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               actions: [
-                OutlinedButton.icon(
-                  onPressed: () {
-                    accepted = false;
-                    Navigator.of(ctx).pop();
-                  },
-                  icon: const Icon(Icons.close, color: Colors.redAccent),
-                  label: const Text("Abbrechen", style: TextStyle(color: Colors.redAccent)),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.redAccent),
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                ),
                 if (checkbox)
                   ElevatedButton.icon(
                     onPressed: () {
@@ -357,7 +607,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                     icon: const Icon(Icons.check_circle_outline),
                     label: const Text("Fertig", style: TextStyle(color: Colors.white)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.redAccent,
+                      backgroundColor: AppColors.success,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 18),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -414,7 +664,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
         boxShadow: const [
           BoxShadow(color: Color(0x33000000), blurRadius: 14, offset: Offset(0, 10)),
         ],
@@ -432,7 +682,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                 decoration: BoxDecoration(
                   color: _card,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _panelBorder),
+                  border: Border.all(color: AppColors.accentBorder),
                 ),
                 child: Icon(icon, color: _accent, size: 16),
               ),
@@ -489,7 +739,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       decoration: BoxDecoration(
         color: _card,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), // mehr Höhe => 2 Zeilen passen sicher
       child: Row(
@@ -518,7 +768,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     required IconData icon,
   }) {
     final isSelected = _partyType == value;
-    final border = isSelected ? _accent : _panelBorder;
+    final border = isSelected ? _accent : AppColors.accentBorder;
     final textColor = isSelected ? Colors.white : _textPrimary;
     final iconColor = isSelected ? Colors.white : _secondary;
 
@@ -656,7 +906,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       } catch (_) {}
 
       HapticFeedback.lightImpact();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Standort übernommen")));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text("Standort übernommen"),
+        backgroundColor: AppColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
     }
   }
 
@@ -702,17 +957,20 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
 
   // ✅ WICHTIG: immer zurück in HomeShell(Map) -> BottomNav bleibt
   void _closeWithResult({required bool updated, Map<String, dynamic>? payload}) {
-    _unfocus();
-    HapticFeedback.lightImpact();
+    if (!mounted || _navigatedAway) return;
+    _navigatedAway = true;
 
     widget.onGoToMapAndRefresh?.call(updated: updated, payload: payload);
 
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const HomeShell(initialIndex: 2)), // 2 = Map Tab
-          (route) => false,
-    );
+    Navigator.of(context).pop({
+      'updated': updated,
+      'payload': payload,
+    });
   }
+
+
+
+
 
   Future<void> _openExcludeFriendsDialog() async {
     _unfocus();
@@ -728,7 +986,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
           friends: friends,
           initialExcluded: _excludedFriends,
           cardColor: _card,
-          borderColor: _panelBorder,
+          borderColor: AppColors.accentBorder,
           accent: _accent,
           textPrimary: _textPrimary,
           textSecondary: _textSecondary,
@@ -761,9 +1019,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     final remaining = _maxImagesPerBlock - block.images.length;
 
     if (remaining <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Maximal 5 Bilder pro Block.")),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text("Maximal 5 Bilder pro Block."),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
       return;
     }
 
@@ -774,17 +1035,23 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     setState(() => block.images.addAll(toAdd));
 
     if (picked.length > remaining) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Es sind nur 5 Bilder pro Block erlaubt.")),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text("Es sind nur 5 Bilder pro Block erlaubt."),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
     }
   }
 
   void _addBlock() {
     if (_imageBlocks.length >= _maxImageBlocks) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Maximal 5 Blöcke möglich.")),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text("Maximal 5 Blöcke möglich."),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
       return;
     }
     setState(() => _imageBlocks.add(_ImageBlockDraft()));
@@ -792,9 +1059,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
 
   void _removeBlock(int i) {
     if (_imageBlocks.length <= 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Mindestens 1 Block muss bleiben.")),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text("Mindestens 1 Block muss bleiben."),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
       return;
     }
     setState(() {
@@ -823,7 +1093,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                 style: const TextStyle(color: Colors.white),
               ),
               style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: _panelBorder),
+                side: const BorderSide(color: AppColors.accentBorder),
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
@@ -841,7 +1111,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
         decoration: BoxDecoration(
           color: _card,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _panelBorder),
+          border: Border.all(color: AppColors.accentBorder),
         ),
         padding: const EdgeInsets.all(12),
         child: Column(
@@ -858,7 +1128,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                       style: const TextStyle(color: Colors.white),
                     ),
                     style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: _panelBorder),
+                      side: const BorderSide(color: AppColors.accentBorder),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
@@ -961,7 +1231,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                     decoration: BoxDecoration(
                       color: Colors.black.withOpacity(0.62),
                       borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: _panelBorder),
+                      border: Border.all(color: AppColors.accentBorder),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1001,6 +1271,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   // ===========================
 
   Future<void> _saveParty() async {
+
     _unfocus();
     setState(() => _triedSubmit = true);
     _addressCountryError = null;
@@ -1008,10 +1279,32 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     final valid = _formKey.currentState?.validate() ?? false;
     final dateOk = _selectedDate != null;
     final timeOk = _selectedTime != null;
-    setState(() {});
+
     if (!valid || !dateOk || !timeOk || _isLoading) {
       _scrollToFirstError();
       return;
+    }
+
+    // 🔥 PRICE NUR EINMAL DEFINIEREN
+    final price = _isFreeEntry
+        ? 0.0
+        : double.tryParse(
+      _priceController.text.replaceAll(',', '.').trim(),
+    ) ?? 0.0;
+
+    // 🔥 Stripe nur bei kostenpflichtigen Events verlangen
+    if (price > 0) {
+      if (_stripeAccountId == null || !_detailsSubmitted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text(
+            "Für kostenpflichtige Events ist ein verifizierter Stripe Account nötig.",
+          ),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
+        return;
+      }
     }
 
     setState(() => _isLoading = true);
@@ -1019,13 +1312,15 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     final name = _nameController.text.trim();
     final description = _descriptionController.text.trim();
 
-    final guestLimit = _isUnlimitedGuests ? 'Unbegrenzt' : int.tryParse(_guestLimitController.text.trim());
+    final guestLimit = _isUnlimitedGuests
+        ? 'Unbegrenzt'
+        : int.tryParse(_guestLimitController.text.trim());
 
-    final price = _isFreeEntry ? 0.0 : double.tryParse(_priceController.text.replaceAll(',', '.').trim()) ?? 0.0;
 
     final address = _addressController.text.trim();
     final date = _selectedDate!;
-    final timeOfDay = _selectedTime!;
+    final
+    timeOfDay = _selectedTime!;
 
     String time = _timeController.text.trim();
     if (time.isEmpty) {
@@ -1078,8 +1373,11 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       _addressCountryError =
       "Adresse nicht gefunden. Bitte genauer angeben, Stadt ergänzen oder Standort auf der Karte wählen.";
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text("Adresse nicht gefunden. Bitte genauer angeben oder Standort auf der Karte wählen."),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text("Adresse nicht gefunden. Bitte genauer angeben oder Standort auf der Karte wählen."),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ));
       return;
     }
@@ -1099,6 +1397,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       'address': address,
       'hostName': _hostName ?? 'unknown',
       'hostId': username,
+      'stripeAccountId': _stripeAccountId,
       'isClosed': false,
       'requests': widget.existingData?['requests'] ?? [],
       'approved': widget.existingData?['approved'] ?? [],
@@ -1137,9 +1436,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
         'docId': savedDocId,
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler beim Speichern: $e")),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text("Fehler beim Speichern: $e"),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -1187,14 +1489,22 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
     final isEditing = widget.existingData != null;
 
     return WillPopScope(
       onWillPop: () async {
-        // ✅ zurück in HomeShell(Map), nicht einfach pop
+        if (_isLoading || _navigatedAway) return false;
         _closeWithResult(updated: false);
         return false;
       },
+
       child: Stack(
         children: [
           Scaffold(
@@ -1208,19 +1518,19 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
               automaticallyImplyLeading: false,
               centerTitle: true,
               title: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
                 decoration: BoxDecoration(
-                  color: _accentSoft,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: _accentLine, width: 1),
+                  color: AppColors.panel,
+                  borderRadius: AppRadius.fullBr,
+                  border: Border.all(color: AppColors.accentBorder2, width: 1),
                 ),
                 child: Text(
-                  isEditing ? "✏️ Party bearbeiten 🔥" : "Neue Party 🎉",
+                  isEditing ? Lang.t('new_party_edit') : Lang.t('new_party_header'),
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.2,
+                    color: AppColors.text,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    letterSpacing: -0.2,
                   ),
                 ),
               ),
@@ -1232,7 +1542,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                     decoration: BoxDecoration(
                       color: _card,
                       borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: _panelBorder),
+                      border: Border.all(color: AppColors.accentBorder),
                     ),
                     child: Row(
                       children: [
@@ -1270,6 +1580,64 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                     autovalidateMode: AutovalidateMode.onUserInteraction,
                     child: Column(
                       children: [
+                        if (!_checkingStripe)
+                          Container(
+                            margin: const EdgeInsets.only(bottom: 14),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: _card,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: _stripeAccountId != null ? Colors.green : Colors.redAccent,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  _stripeAccountId != null
+                                      ? Icons.check_circle
+                                      : Icons.warning,
+                                  color: _stripeAccountId != null
+                                      ? Colors.green
+                                      : Colors.redAccent,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    _stripeAccountId != null
+                                        ? "Stripe Account verbunden"
+                                        : "Stripe Account erforderlich um Tickets zu verkaufen",
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                ),
+                                if (_stripeAccountId == null)
+                                  TextButton(
+                                    onPressed: _createStripeAccount,
+                                    child: const Text(
+                                      "Erstellen",
+                                      style: TextStyle(color: Colors.redAccent),
+                                    ),
+                                  )
+                                else if (!_detailsSubmitted)
+                                  TextButton(
+                                    onPressed: _resumeOnboarding,
+                                    child: const Text(
+                                      "Onboarding fortsetzen",
+                                      style: TextStyle(color: Colors.orange),
+                                    ),
+                                  )
+                                else
+                                  TextButton(
+                                    onPressed: _openStripeDashboard,
+                                    child: const Text(
+                                      "Dashboard",
+                                      style: TextStyle(color: Colors.green),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+
                         _section(
                           title: "Basis",
                           icon: Icons.celebration_outlined,
@@ -1541,7 +1909,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                                     style: const TextStyle(color: Colors.white),
                                   ),
                                   style: OutlinedButton.styleFrom(
-                                    side: const BorderSide(color: _panelBorder),
+                                    side: const BorderSide(color: AppColors.accentBorder),
                                     padding: const EdgeInsets.symmetric(vertical: 14),
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                                   ),

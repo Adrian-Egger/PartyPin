@@ -3,8 +3,10 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'firebase_options.dart';
-import 'Screens/home_shell.dart';
-import 'Screens/create_account_screen.dart';
+import 'Screens/home/home_shell.dart';
+import 'Theme/app_theme.dart';
+import 'Services/notification_service.dart';
+import 'l10n/lang.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,27 +20,27 @@ Future<void> main() async {
     await FirebaseAuth.instance.signInAnonymously();
   }
 
-  runApp(
-    const MyApp(
-      startScreen: HomeShell(),
-    ),
-  );
+  await Lang.load();
+  try {
+    await NotificationService.init();
+  } catch (_) {}
+
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  final Widget startScreen;
-
-  const MyApp({
-    super.key,
-    required this.startScreen,
-  });
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Party Finder',
-      home: startScreen,
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (_, lang, __) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'PartyPin',
+        theme: AppTheme.dark,
+        home: const HomeShell(),
+      ),
     );
   }
 }

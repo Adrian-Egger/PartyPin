@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import 'package:party_pin/Screens/party_map_screen.dart';
+import 'package:party_pin/Screens/home/home_shell.dart';
 
 class PhoneUpgradeScreen extends StatefulWidget {
   const PhoneUpgradeScreen({Key? key}) : super(key: key);
@@ -221,7 +221,7 @@ class _PhoneUpgradeScreenState extends State<PhoneUpgradeScreen> {
 
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const PartyMapScreen()),
+        MaterialPageRoute(builder: (_) => const HomeShell()),
             (route) => false,
       );
     } catch (e) {

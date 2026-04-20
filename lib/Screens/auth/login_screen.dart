@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'selection_screen.dart';
+import '../home/selection_screen.dart';
 import 'create_account_screen.dart';
 import 'nutzungsbedinungen.dart';
-import 'home_shell.dart';
+import '../home/home_shell.dart';
 import 'package:party_pin/Upgrade/phone_upgrade_screen.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
@@ -26,15 +28,14 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _loginAsCompany = false;
 
   // Farben wie im CreateAccountScreen
-  static const _bg = Color(0xFF0E0F12);
-  static const _gradTop = Color(0xFF0E0F12);
-  static const _gradBottom = Color(0xFF141A22);
+  static const _bg = AppColors.bgTop;
+  static const _gradTop = AppColors.bgTop;
+  static const _gradBottom = AppColors.bgBottom;
   static const _panel = Color(0xFF15171C);
-  static const _panelBorder = Color(0xFF2A2F38);
-  static const _card = Color(0xFF1C1F26);
-  static const _textPrimary = Colors.white;
-  static const _textSecondary = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30);
+  static const _card = AppColors.panel;
+  static const _textPrimary = AppColors.text;
+  static const _textSecondary = AppColors.muted;
+  static const _accent = AppColors.accent;
 
   bool get _isFormValid =>
       _usernameController.text.trim().isNotEmpty &&
@@ -105,7 +106,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (!_isFormValid) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Bitte Benutzername und Passwort eingeben.")),
+        SnackBar(
+          content: Text(Lang.t('login_err_empty')),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
       return;
     }
@@ -154,7 +160,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (userData == null || userType == null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Benutzername nicht gefunden.")),
+          SnackBar(
+            content: Text(Lang.t('login_err_not_found')),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
         );
         return;
       }
@@ -163,7 +174,12 @@ class _LoginScreenState extends State<LoginScreen> {
       final storedPw = (userData["password"] ?? "").toString();
       if (storedPw != passwordInput) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Falsches Passwort.")),
+          SnackBar(
+            content: Text(Lang.t('login_err_wrong_pw')),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
         );
         return;
       }
@@ -171,16 +187,22 @@ class _LoginScreenState extends State<LoginScreen> {
       // Typ-Kontrolle: Auswahl muss zum Account-Typ passen
       if (_loginAsCompany && userType != "bar") {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Dieser Account ist kein Unternehmens-Account.")),
+          SnackBar(
+            content: Text(Lang.t('login_err_not_company')),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
         );
         return;
       }
       if (!_loginAsCompany && userType != "user") {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              "Dieser Account ist ein Unternehmens-Account. Bitte als Unternehmen einloggen.",
-            ),
+          SnackBar(
+            content: Text(Lang.t('login_err_is_company')),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           ),
         );
         return;
@@ -278,7 +300,12 @@ class _LoginScreenState extends State<LoginScreen> {
       await _checkNavigation();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Fehler beim Login: $e")),
+        SnackBar(
+          content: Text("${Lang.t('login_err_generic')}: $e"),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -318,9 +345,9 @@ class _LoginScreenState extends State<LoginScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          "Account-Typ",
-          style: TextStyle(
+        Text(
+          Lang.t('login_account_type'),
+          style: const TextStyle(
             color: _textSecondary,
             fontSize: 14,
             fontWeight: FontWeight.w600,
@@ -335,17 +362,17 @@ class _LoginScreenState extends State<LoginScreen> {
             decoration: BoxDecoration(
               color: _card,
               borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: _panelBorder),
+              border: Border.all(color: AppColors.accentBorder),
             ),
             child: Row(
               children: [
                 _buildToggleSegment(
-                  label: "Privat",
+                  label: Lang.t('login_type_private'),
                   selected: isPrivat,
                   onTap: () => setState(() => _loginAsCompany = false),
                 ),
                 _buildToggleSegment(
-                  label: "Unternehmen",
+                  label: Lang.t('login_type_company'),
                   selected: isUnternehmen,
                   onTap: () => setState(() => _loginAsCompany = true),
                 ),
@@ -356,8 +383,8 @@ class _LoginScreenState extends State<LoginScreen> {
         const SizedBox(height: 6),
         Text(
           _loginAsCompany
-              ? "Du meldest dich als Unternehmen an."
-              : "Du meldest dich als Privatperson an.",
+              ? Lang.t('login_as_company')
+              : Lang.t('login_as_private'),
           style: const TextStyle(color: _textSecondary, fontSize: 12),
         ),
       ],
@@ -396,7 +423,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => Scaffold(
       backgroundColor: _bg,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -422,7 +451,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 decoration: BoxDecoration(
                   color: _panel,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: _panelBorder),
+                  border: Border.all(color: AppColors.accentBorder),
                   boxShadow: const [
                     BoxShadow(
                       color: Color(0x33000000),
@@ -436,21 +465,23 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      const LangToggleWidget(),
+                      const SizedBox(height: 16),
                       const Icon(Icons.nightlife, size: 52, color: _accent),
                       const SizedBox(height: 8),
-                      const Text(
-                        'Anmeldung',
-                        style: TextStyle(
+                      Text(
+                        Lang.t('login_title'),
+                        style: const TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w700,
                           color: _textPrimary,
                         ),
                       ),
                       const SizedBox(height: 6),
-                      const Text(
-                        'Melde dich mit deinem Privat- oder Unternehmensaccount an.',
+                      Text(
+                        Lang.t('login_subtitle'),
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: _textSecondary, fontSize: 13),
+                        style: const TextStyle(color: _textSecondary, fontSize: 13),
                       ),
                       const SizedBox(height: 20),
                       TextField(
@@ -458,8 +489,8 @@ class _LoginScreenState extends State<LoginScreen> {
                         onChanged: (_) => setState(() {}),
                         style: const TextStyle(color: _textPrimary),
                         decoration: _dec(
-                          label: "Benutzername",
-                          hint: "Dein Login-Name",
+                          label: Lang.t('login_username'),
+                          hint: Lang.t('login_username_hint'),
                           icon: Icons.person,
                         ),
                       ),
@@ -470,7 +501,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         obscureText: true,
                         style: const TextStyle(color: _textPrimary),
                         decoration: _dec(
-                          label: "Passwort",
+                          label: Lang.t('login_password'),
                           hint: "•••••••",
                           icon: Icons.lock,
                         ),
@@ -500,9 +531,9 @@ class _LoginScreenState extends State<LoginScreen> {
                               strokeWidth: 2,
                             ),
                           )
-                              : const Text(
-                            'Login',
-                            style: TextStyle(
+                              : Text(
+                            Lang.t('login_btn'),
+                            style: const TextStyle(
                               fontSize: 17,
                               fontWeight: FontWeight.bold,
                             ),
@@ -520,9 +551,9 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           );
                         },
-                        child: const Text(
-                          "Noch keinen Account? Jetzt registrieren",
-                          style: TextStyle(
+                        child: Text(
+                          Lang.t('login_no_account'),
+                          style: const TextStyle(
                             color: _textSecondary,
                             fontWeight: FontWeight.w600,
                           ),
@@ -535,6 +566,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         ),
+      ),
       ),
     );
   }

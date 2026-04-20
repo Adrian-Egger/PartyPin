@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 class ExcludeFriendsScreen extends StatefulWidget {
   final List<String> friends;
@@ -46,18 +48,29 @@ class _ExcludeFriendsScreenState extends State<ExcludeFriendsScreen> {
     final allSelected =
         widget.friends.isNotEmpty && tempExcluded.length == widget.friends.length;
 
-    return Scaffold(
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => Scaffold(
       backgroundColor: widget.panel,
       appBar: AppBar(
         backgroundColor: widget.panel,
         elevation: 0,
-        centerTitle: true, // mittig
-        title: Text(
-          "Freunde ausschließen",
-          style: TextStyle(
-            color: widget.textPrimary,
-            fontSize: 22,
-            fontWeight: FontWeight.w800, // fetter
+        centerTitle: true,
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.panel,
+            borderRadius: AppRadius.fullBr,
+            border: Border.all(color: AppColors.accentBorder2, width: 1),
+          ),
+          child: Text(
+            Lang.t('exclude_friends_header'),
+            style: const TextStyle(
+              color: AppColors.text,
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              letterSpacing: -0.2,
+            ),
           ),
         ),
         leading: IconButton(
@@ -197,8 +210,9 @@ class _ExcludeFriendsScreenState extends State<ExcludeFriendsScreen> {
           onPressed: () {
             Navigator.pop(context, tempExcluded.toList());
           },
-          child: const Text("Speichern"),
+          child: Text(Lang.t('save')),
         ),
+      ),
       ),
     );
   }

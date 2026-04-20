@@ -4,8 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../Services/app_draggable_sheet.dart';
-import '../Screens/bar_event_screen.dart';
+import '../../Services/app_draggable_sheet.dart';
+import 'bar_event_screen.dart';
+import '../../Theme/app_theme.dart';
 
 /// ✅ Stabiler Event-Key (verhindert doppelte Keys durch UTC/Local/String/Timestamp Mix)
 String computeEventKey(dynamic rawDate) {
@@ -208,17 +209,17 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
       barrierDismissible: false,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF0E1117),
-          title: Text(title, style: const TextStyle(color: Colors.white)),
-          content: Text(message, style: const TextStyle(color: Colors.white70)),
+          backgroundColor: AppColors.panel,
+          title: Text(title, style: const TextStyle(color: AppColors.text)),
+          content: Text(message, style: const TextStyle(color: AppColors.muted)),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Abbrechen', style: TextStyle(color: Colors.white70)),
+              child: const Text('Abbrechen', style: TextStyle(color: AppColors.muted)),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
+                backgroundColor: AppColors.accent,
                 foregroundColor: Colors.white,
               ),
               onPressed: () => Navigator.of(ctx).pop(true),
@@ -259,12 +260,22 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Event gelöscht.')),
+        SnackBar(
+          content: const Text('Event gelöscht.'),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Fehler beim Löschen des Events.')),
+        SnackBar(
+          content: const Text('Fehler beim Löschen des Events.'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     }
   }
@@ -487,7 +498,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
         if (profileImageUrl.isNotEmpty) {
           avatar = CircleAvatar(
             radius: 48,
-            backgroundColor: const Color(0xFF1C1F26),
+            backgroundColor: AppColors.panel,
             backgroundImage: NetworkImage(profileImageUrl),
           );
         } else {
@@ -496,7 +507,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
             height: 96,
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
-              color: Color(0xFF1C1F26),
+              color: AppColors.panel,
             ),
             child: const Icon(Icons.local_bar, color: Colors.white70, size: 40),
           );
@@ -581,7 +592,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                       ),
                       IconButton(
                         tooltip: 'Bar melden',
-                        icon: const Icon(Icons.flag, color: Colors.redAccent, size: 22),
+                        icon: const Icon(Icons.flag, color: AppColors.accent, size: 22),
 
                         onPressed: () {
                           _openBarReportSheet(context);
@@ -624,14 +635,14 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.location_on, color: Colors.redAccent, size: 18),
+                        const Icon(Icons.location_on, color: AppColors.accent, size: 18),
                         const SizedBox(width: 6),
                         Flexible(
                           child: Text(
                             fullAddress,
                             textAlign: TextAlign.center,
                             style: const TextStyle(
-                              color: Color(0xFFB6BDC8),
+                              color: AppColors.muted,
                               fontSize: 14,
                             ),
                           ),
@@ -646,7 +657,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                       margin: const EdgeInsets.only(top: 10, bottom: 6),
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF141A22),
+                        color: AppColors.bgBottom,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.white12),
                       ),
@@ -680,7 +691,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF141A22),
+                          color: AppColors.bgBottom,
                           borderRadius: BorderRadius.circular(14),
                           border: Border.all(color: Colors.white12),
                         ),
@@ -713,8 +724,8 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                           label: const Text('Event 🎉'),
                           selected: _showEventView,
                           onSelected: (_) => setState(() => _showEventView = true),
-                          selectedColor: Colors.redAccent,
-                          backgroundColor: const Color(0xFF1C1F26),
+                          selectedColor: AppColors.accent,
+                          backgroundColor: AppColors.panel,
                           labelStyle: TextStyle(
                             color: _showEventView ? Colors.white : Colors.white70,
                             fontWeight: FontWeight.w600,
@@ -725,8 +736,8 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                           label: const Text('Bar-Infos 🍹'),
                           selected: !_showEventView,
                           onSelected: (_) => setState(() => _showEventView = false),
-                          selectedColor: Colors.redAccent,
-                          backgroundColor: const Color(0xFF1C1F26),
+                          selectedColor: AppColors.accent,
+                          backgroundColor: AppColors.panel,
                           labelStyle: TextStyle(
                             color: !_showEventView ? Colors.white : Colors.white70,
                             fontWeight: FontWeight.w600,
@@ -801,7 +812,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                       width: 46,
                       height: 5,
                       decoration: BoxDecoration(
-                        color: Colors.redAccent,
+                        color: AppColors.accent,
                         borderRadius: BorderRadius.circular(999),
                       ),
                     ),
@@ -813,7 +824,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                     'Bar melden 🚩',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Colors.redAccent,
+                      color: AppColors.accent,
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
                     ),
@@ -830,7 +841,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                   const SizedBox(height: 20),
 
                   DropdownButtonFormField<String>(
-                    dropdownColor: const Color(0xFF141A22),
+                    dropdownColor: AppColors.bgBottom,
                     style: const TextStyle(color: Colors.white),
                     items: const [
                       DropdownMenuItem(value: 'hate', child: Text('Hass / Diskriminierung')),
@@ -842,7 +853,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                     onChanged: (v) => reason = v,
                     decoration: InputDecoration(
                       filled: true,
-                      fillColor: const Color(0xFF141A22),
+                      fillColor: AppColors.bgBottom,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(14),
                         borderSide: BorderSide.none,
@@ -866,7 +877,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
 
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.redAccent,
+                      backgroundColor: AppColors.accent,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(
@@ -927,7 +938,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFF141A22),
+        color: AppColors.bgBottom,
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: Colors.white24),
       ),
@@ -959,7 +970,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
+        color: AppColors.panel,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white12),
       ),
@@ -971,7 +982,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: const Color(0xFF141A22),
+                color: AppColors.bgBottom,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.white12),
               ),
@@ -1001,7 +1012,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
+                    backgroundColor: AppColors.accent,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1042,7 +1053,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
+                    backgroundColor: AppColors.accent,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     padding: const EdgeInsets.symmetric(vertical: 12),
@@ -1118,7 +1129,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF141A22),
+        color: AppColors.bgBottom,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white12),
       ),
@@ -1148,7 +1159,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                 eventId: e.eventId,
                 title: e.title.isEmpty ? 'Event' : e.title,
               ),
-              icon: const Icon(Icons.close, color: Colors.redAccent, size: 20),
+              icon: const Icon(Icons.close, color: AppColors.accent, size: 20),
             ),
           ],
         ],
@@ -1198,7 +1209,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                 child: Text(
                   closed ? 'geschlossen' : '$openStr – $closeStr',
                   style: TextStyle(
-                    color: closed ? Colors.redAccent : Colors.white70,
+                    color: closed ? AppColors.accent : Colors.white70,
                     fontSize: 12,
                   ),
                 ),
@@ -1222,7 +1233,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
         Container(
           margin: const EdgeInsets.only(bottom: 10),
           decoration: BoxDecoration(
-            color: const Color(0xFF141A22),
+            color: AppColors.bgBottom,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: Colors.white12),
           ),
@@ -1327,9 +1338,9 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
         width: double.infinity,
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFF1C1F26),
+          color: AppColors.panel,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.redAccent.withOpacity(0.45)),
+          border: Border.all(color: AppColors.accent.withOpacity(0.45)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1337,7 +1348,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
             Text(
               eventRunning ? 'Live-Event 🔥' : 'Nächstes Event 🎉',
               style: const TextStyle(
-                color: Colors.redAccent,
+                color: AppColors.accent,
                 fontWeight: FontWeight.w700,
               ),
             ),
@@ -1367,11 +1378,11 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
               decoration: BoxDecoration(
                 color: Colors.black.withOpacity(0.35),
                 borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: Colors.redAccent),
+                border: Border.all(color: AppColors.accent),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.timer, color: Colors.redAccent, size: 18),
+                  const Icon(Icons.timer, color: AppColors.accent, size: 18),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -1401,7 +1412,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
               alignment: Alignment.centerRight,
               child: ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
+                  backgroundColor: AppColors.accent,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
@@ -1438,27 +1449,27 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
       barrierDismissible: true,
       builder: (_) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF0F1B12),
+          backgroundColor: AppColors.panel,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(18),
           ),
           title: const Text(
             'Erfolgreich gemeldet',
             style: TextStyle(
-              color: Colors.greenAccent,
+              color: AppColors.success,
               fontWeight: FontWeight.w800,
             ),
           ),
           content: const Text(
             'Danke. Deine Meldung wurde übermittelt.',
-            style: TextStyle(color: Colors.white70),
+            style: TextStyle(color: AppColors.muted),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text(
                 'OK',
-                style: TextStyle(color: Colors.greenAccent),
+                style: TextStyle(color: AppColors.success),
               ),
             ),
           ],
@@ -1661,7 +1672,11 @@ class EventDetailsCard extends StatelessWidget {
       return cred.user;
     } catch (_) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login fehlgeschlagen. Bitte App neu starten.')),
+        const SnackBar(
+          content: Text('Login fehlgeschlagen. Bitte App neu starten.'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       return null;
     }
@@ -1685,9 +1700,9 @@ class EventDetailsCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
+        color: AppColors.panel,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.redAccent.withOpacity(0.45)),
+        border: Border.all(color: AppColors.accent.withOpacity(0.45)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.35),
@@ -1702,7 +1717,7 @@ class EventDetailsCard extends StatelessWidget {
           Text(
             headline,
             style: const TextStyle(
-              color: Colors.redAccent,
+              color: AppColors.accent,
               fontWeight: FontWeight.w700,
               fontSize: 14,
             ),
@@ -1780,7 +1795,7 @@ class EventDetailsCard extends StatelessWidget {
               alignment: Alignment.center,
               child: ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
+                  backgroundColor: AppColors.accent,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
@@ -1899,7 +1914,7 @@ class EventDetailsCard extends StatelessWidget {
                     style: const TextStyle(color: Colors.white),
                     decoration: const InputDecoration(
                       filled: true,
-                      fillColor: Color(0xFF141A22),
+                      fillColor: AppColors.bgBottom,
                       border: OutlineInputBorder(
                         borderSide: BorderSide(color: Colors.white24),
                         borderRadius: BorderRadius.all(Radius.circular(12)),
@@ -1916,7 +1931,7 @@ class EventDetailsCard extends StatelessWidget {
                       width: double.infinity,
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF141A22),
+                        color: AppColors.bgBottom,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.white12),
                       ),
@@ -1931,7 +1946,7 @@ class EventDetailsCard extends StatelessWidget {
                     width: double.infinity,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.redAccent,
+                        backgroundColor: AppColors.accent,
                         foregroundColor: Colors.white,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
                         padding: const EdgeInsets.symmetric(vertical: 10),
@@ -2014,7 +2029,7 @@ class EventDetailsCard extends StatelessWidget {
                       SwitchListTile(
                         value: isAnonymous,
                         onChanged: (v) => setState(() => isAnonymous = v),
-                        activeColor: Colors.redAccent,
+                        activeColor: AppColors.accent,
                         title: const Text(
                           'Anonym bewerten',
                           style: TextStyle(color: Colors.white),
@@ -2033,7 +2048,7 @@ class EventDetailsCard extends StatelessWidget {
                           hintText: 'Optionales Feedback für die Bar ...',
                           hintStyle: TextStyle(color: Colors.white54),
                           filled: true,
-                          fillColor: Color(0xFF141A22),
+                          fillColor: AppColors.bgBottom,
                           border: OutlineInputBorder(
                             borderSide: BorderSide(color: Colors.white24),
                             borderRadius: BorderRadius.all(Radius.circular(12)),
@@ -2043,7 +2058,7 @@ class EventDetailsCard extends StatelessWidget {
                             borderRadius: BorderRadius.all(Radius.circular(12)),
                           ),
                           focusedBorder: OutlineInputBorder(
-                            borderSide: BorderSide(color: Colors.redAccent),
+                            borderSide: BorderSide(color: AppColors.accent),
                             borderRadius: BorderRadius.all(Radius.circular(12)),
                           ),
                         ),
@@ -2064,7 +2079,7 @@ class EventDetailsCard extends StatelessWidget {
                           Expanded(
                             child: ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.redAccent,
+                                backgroundColor: AppColors.accent,
                                 foregroundColor: Colors.white,
                               ),
                               onPressed: selectedRating == 0
@@ -2104,7 +2119,11 @@ class EventDetailsCard extends StatelessWidget {
     final user = await _ensureUser(context);
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bitte logge dich ein, um zu bewerten.')),
+        const SnackBar(
+          content: Text('Bitte logge dich ein, um zu bewerten.'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+        ),
       );
       return;
     }
@@ -2173,21 +2192,41 @@ class EventDetailsCard extends StatelessWidget {
       );
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Danke für dein Feedback!')),
+        const SnackBar(
+          content: Text('Danke für dein Feedback!'),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+        ),
       );
     } on FirebaseException catch (e) {
       if (e.code == 'already-exists') {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Du hast dieses Event bereits bewertet.')),
+          const SnackBar(
+            content: Text('Du hast dieses Event bereits bewertet.'),
+            backgroundColor: AppColors.panel,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+          ),
         );
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Fehler beim Speichern der Bewertung.')),
+        const SnackBar(
+          content: Text('Fehler beim Speichern der Bewertung.'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+        ),
       );
     } catch (_) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Fehler beim Speichern der Bewertung.')),
+        const SnackBar(
+          content: Text('Fehler beim Speichern der Bewertung.'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+        ),
       );
     }
   }
@@ -2262,7 +2301,7 @@ class EventDetailsCard extends StatelessWidget {
       return Container(
         height: 90,
         decoration: BoxDecoration(
-          color: const Color(0xFF141A22),
+          color: AppColors.bgBottom,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white12),
         ),
@@ -2287,7 +2326,7 @@ class EventDetailsCard extends StatelessWidget {
       width: double.infinity,
       padding: EdgeInsets.all(big ? 12 : 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF141A22),
+        color: AppColors.bgBottom,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white12),
       ),
@@ -2398,7 +2437,7 @@ class NoEventCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1F26),
+        color: AppColors.panel,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white12),
       ),
@@ -2491,7 +2530,7 @@ class BarFeedbackStream extends StatelessWidget {
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF141A22),
+                  color: AppColors.bgBottom,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.white12),
                 ),

@@ -7,7 +7,8 @@ import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, Tar
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../Screens/bar_event_screen.dart';
+import 'bar_event_screen.dart';
+import '../../Theme/app_theme.dart';
 
 class MyBarScreen extends StatelessWidget {
   final String barId;
@@ -90,18 +91,17 @@ class _MyBarBody extends StatefulWidget {
 
 class _MyBarBodyState extends State<_MyBarBody> {
   // ✅ Clean Design (gleich wie deine anderen Screens)
-  static const _bgTop = Color(0xFF0E0F12);
-  static const _bgBottom = Color(0xFF141A22);
-  static const _panel = Color(0xFF1C1F26);
-  static const _panel2 = Color(0xFF141A22);
-  static const _panelBorder = Color(0xFF2A2F38);
+  static const _bgTop = AppColors.bgTop;
+  static const _bgBottom = AppColors.bgBottom;
+  static const _panel = AppColors.panel;
+  static const _panel2 = AppColors.bgBottom;
 
-  static const _text = Colors.white;
-  static const _muted = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30);
-  static const _ok = Color(0xFF22C55E);
+  static const _text = AppColors.text;
+  static const _muted = AppColors.muted;
+  static const _accent = AppColors.accent;
+  static const _ok = AppColors.success;
   static const _warn = Color(0xFFFFB020);
-  static const _err = Color(0xFFFF3B30);
+  static const _err = AppColors.accent;
 
   static const _accentSoft = Color(0x26FF3B30); // ~15%
   static const _accentLine = Color(0x66FF3B30); // ~40%
@@ -386,8 +386,10 @@ class _MyBarBodyState extends State<_MyBarBody> {
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    backgroundColor: _panel,
-                    content: Text('Fehler beim Bild-Upload: $e', style: const TextStyle(color: _text)),
+                    backgroundColor: AppColors.accent,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    content: Text('Fehler beim Bild-Upload: $e', style: const TextStyle(color: AppColors.text)),
                   ),
                 );
               }
@@ -446,7 +448,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
                               child: OutlinedButton(
                                 onPressed: saving ? null : () => pickTime(meta.key, true),
                                 style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: _panelBorder),
+                                  side: const BorderSide(color: AppColors.accentBorder),
                                   backgroundColor: _panel2,
                                   foregroundColor: _text,
                                   padding: const EdgeInsets.symmetric(vertical: 10),
@@ -463,7 +465,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
                               child: OutlinedButton(
                                 onPressed: saving ? null : () => pickTime(meta.key, false),
                                 style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: _panelBorder),
+                                  side: const BorderSide(color: AppColors.accentBorder),
                                   backgroundColor: _panel2,
                                   foregroundColor: _text,
                                   padding: const EdgeInsets.symmetric(vertical: 10),
@@ -487,7 +489,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
                         decoration: BoxDecoration(
                           color: closed ? _accentSoft : Colors.transparent,
                           borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: closed ? _accentLine : _panelBorder, width: 1),
+                          border: Border.all(color: closed ? _accentLine : AppColors.accentBorder, width: 1),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -543,25 +545,31 @@ class _MyBarBodyState extends State<_MyBarBody> {
 
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    backgroundColor: _panel,
-                    content: const Text('Gespeichert ✅', style: TextStyle(color: _text, fontWeight: FontWeight.w800)),
+                    backgroundColor: AppColors.success,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    content: const Text('Gespeichert ✅', style: TextStyle(color: AppColors.text, fontWeight: FontWeight.w800)),
                   ),
                 );
               } on FirebaseException catch (e) {
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    backgroundColor: _panel,
+                    backgroundColor: AppColors.accent,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     content: Text('Firebase: ${e.code} ${e.message ?? ''}',
-                        style: const TextStyle(color: _text)),
+                        style: const TextStyle(color: AppColors.text)),
                   ),
                 );
               } catch (e) {
                 if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    backgroundColor: _panel,
-                    content: Text('Fehler beim Speichern: $e', style: const TextStyle(color: _text)),
+                    backgroundColor: AppColors.accent,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    content: Text('Fehler beim Speichern: $e', style: const TextStyle(color: AppColors.text)),
                   ),
                 );
               } finally {
@@ -647,7 +655,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
                                         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                                         enabledBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: const BorderSide(color: _panelBorder, width: 1),
+                                          borderSide: const BorderSide(color: AppColors.accentBorder, width: 1),
                                         ),
                                         focusedBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
@@ -690,7 +698,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
                                           decoration: BoxDecoration(
                                             color: _panel2,
                                             borderRadius: BorderRadius.circular(16),
-                                            border: Border.all(color: _panelBorder, width: 1),
+                                            border: Border.all(color: AppColors.accentBorder, width: 1),
                                           ),
                                           child: Column(
                                             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -720,7 +728,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
                                                   decoration: BoxDecoration(
                                                     color: _panel,
                                                     borderRadius: BorderRadius.circular(12),
-                                                    border: Border.all(color: _panelBorder, width: 1),
+                                                    border: Border.all(color: AppColors.accentBorder, width: 1),
                                                   ),
                                                   child: url.isNotEmpty
                                                       ? ClipRRect(
@@ -750,7 +758,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
                                                 decoration: BoxDecoration(
                                                   color: _panel,
                                                   borderRadius: BorderRadius.circular(12),
-                                                  border: Border.all(color: _panelBorder, width: 1),
+                                                  border: Border.all(color: AppColors.accentBorder, width: 1),
                                                 ),
                                                 child: TextField(
                                                   controller: h.textCtrl,
@@ -826,7 +834,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _panelBorder, width: 1),
+        border: Border.all(color: AppColors.accentBorder, width: 1),
         boxShadow: const [
           BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 8)),
         ],
@@ -863,7 +871,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _panelBorder, width: 1),
+        border: Border.all(color: AppColors.accentBorder, width: 1),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1146,7 +1154,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: _panelBorder, width: 1),
+        border: Border.all(color: AppColors.accentBorder, width: 1),
         boxShadow: const [
           BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 8)),
         ],
@@ -1240,7 +1248,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
               decoration: BoxDecoration(
                 color: _panel2,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: _panelBorder, width: 1),
+                border: Border.all(color: AppColors.accentBorder, width: 1),
               ),
               child: const Text(
                 'Events konnten nicht geladen werden.',
@@ -1308,7 +1316,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
       decoration: BoxDecoration(
         color: _panel2,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: running ? _accentLine : _panelBorder, width: 1),
+        border: Border.all(color: running ? _accentLine : AppColors.accentBorder, width: 1),
       ),
       child: Row(
         children: [
@@ -1345,7 +1353,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
       decoration: BoxDecoration(
         color: _panel2,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _panelBorder, width: 1),
+        border: Border.all(color: AppColors.accentBorder, width: 1),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

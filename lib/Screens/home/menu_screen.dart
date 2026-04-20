@@ -4,15 +4,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import '../Services/language_services.dart';
-import '../Screens/selection_screen.dart';
-import '../Screens/feedback_screen.dart';
-import '../Screens/AdminCreatesBarScreen.dart';
-import '../Screens/access_parties_screen.dart';
+import 'selection_screen.dart';
+import '../../l10n/lang.dart';
+import '../profile/feedback_screen.dart';
+import '../bar/AdminCreatesBarScreen.dart';
+import '../party/access_parties_screen.dart';
 
 // WICHTIG: Party Map muss ueber HomeShell geoeffnet werden
 // Passe den Importpfad an, falls deine Datei anders heisst:
-import '../Screens/home_shell.dart';
+import 'home_shell.dart';
+import '../../Theme/app_theme.dart';
 
 // =======================
 // APPLE UGC 1.2 SETTINGS
@@ -23,13 +24,12 @@ const String kAdminUsername = "admin_pp";
 // =======================
 // THEME
 // =======================
-const _gradTop = Color(0xFF0E0F12);
-const _gradBottom = Color(0xFF141A22);
+const _gradTop = AppColors.bgTop;
+const _gradBottom = AppColors.bgBottom;
 const _panel = Color(0xFF15171C);
-const _panelBorder = Color(0xFF2A2F38);
-const _textPrimary = Colors.white;
-const _textSecondary = Color(0xFFB6BDC8);
-const _accent = Color(0xFFFF3B30);
+const _textPrimary = AppColors.text;
+const _textSecondary = AppColors.muted;
+const _accent = AppColors.accent;
 
 // =======================
 // HELPERS
@@ -141,7 +141,13 @@ class _RequireTermsAcceptedState extends State<RequireTermsAccepted> {
       final res = await Navigator.of(context).push<bool>(
         MaterialPageRoute(builder: (_) => const TermsGateScreen()),
       );
-      _ok = (res == true);
+      if (res != true) {
+        // User declined or pressed back — just close this screen
+        if (!mounted) return;
+        if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+        return;
+      }
+      _ok = true;
     } else {
       _ok = true;
     }
@@ -216,9 +222,12 @@ class _TermsGateScreenState extends State<TermsGateScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
       backgroundColor: _gradTop,
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
@@ -244,7 +253,7 @@ class _TermsGateScreenState extends State<TermsGateScreen> {
           decoration: BoxDecoration(
             color: _panel,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _panelBorder),
+            border: Border.all(color: AppColors.accentBorder),
           ),
           padding: const EdgeInsets.all(18),
           child: Column(
@@ -308,6 +317,7 @@ class _TermsGateScreenState extends State<TermsGateScreen> {
           ),
         ),
       ),
+      ),
     );
   }
 }
@@ -336,7 +346,7 @@ class BannedScreen extends StatelessWidget {
           decoration: BoxDecoration(
             color: _panel,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _panelBorder),
+            border: Border.all(color: AppColors.accentBorder),
           ),
           padding: const EdgeInsets.all(18),
           child: const Text(
@@ -407,7 +417,7 @@ class AdminReportsScreen extends StatelessWidget {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
       ),
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -448,7 +458,12 @@ class AdminReportsScreen extends StatelessWidget {
                     );
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("Content versteckt + Report geschlossen")),
+                        SnackBar(
+                          content: const Text("Content versteckt + Report geschlossen"),
+                          backgroundColor: AppColors.success,
+                          behavior: SnackBarBehavior.floating,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
                       );
                     }
                   },
@@ -474,7 +489,12 @@ class AdminReportsScreen extends StatelessWidget {
                     );
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("User gebannt + Report geschlossen")),
+                        SnackBar(
+                          content: const Text("User gebannt + Report geschlossen"),
+                          backgroundColor: AppColors.success,
+                          behavior: SnackBarBehavior.floating,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
                       );
                     }
                   },
@@ -497,13 +517,18 @@ class AdminReportsScreen extends StatelessWidget {
                     );
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("Report geschlossen")),
+                        SnackBar(
+                          content: const Text("Report geschlossen"),
+                          backgroundColor: AppColors.panel,
+                          behavior: SnackBarBehavior.floating,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
                       );
                     }
                   },
                   style: OutlinedButton.styleFrom(
                     foregroundColor: _textPrimary,
-                    side: const BorderSide(color: _panelBorder),
+                    side: const BorderSide(color: AppColors.accentBorder),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                   child: const Text("Close"),
@@ -645,7 +670,7 @@ class MenuScreen extends StatelessWidget {
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _panelBorder),
+        border: Border.all(color: AppColors.accentBorder),
       ),
       child: ListTile(
         leading: Icon(icon, color: _accent, size: 28),
@@ -662,31 +687,166 @@ class MenuScreen extends StatelessWidget {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final lang = LanguageService.currentLanguage;
+  void _showComingSoon(BuildContext context) {
+    final features = [
+      (Icons.notifications_rounded,      'cs_f1'),
+      (Icons.chat_bubble_outline_rounded, 'cs_f2'),
+      (Icons.group_rounded,               'cs_f3'),
+      (Icons.filter_alt_rounded,          'cs_f4'),
+      (Icons.star_outline_rounded,        'cs_f5'),
+      (Icons.photo_library_outlined,      'cs_f6'),
+      (Icons.verified_rounded,            'cs_f7'),
+      (Icons.lightbulb_outline_rounded,   'cs_f8'),
+    ];
 
-    return BanWatcher(
-      child: Scaffold(
-        backgroundColor: _gradTop,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          centerTitle: true,
-          title: Text(
-            LanguageService.getText('menu_title', lang),
-            style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: _textPrimary,
-            ),
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.65,
+        minChildSize: 0.4,
+        maxChildSize: 0.92,
+        builder: (_, controller) => Container(
+          decoration: const BoxDecoration(
+            color: _panel,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
           ),
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            color: _accent,
-            onPressed: () => Navigator.pop(context),
+          child: Column(
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.accentBorder,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Expanded(
+                child: ListView(
+                  controller: controller,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  children: [
+                    // ── Header ──────────────────────────────────────────
+                    Row(
+                      children: [
+                        Container(
+                          width: 46, height: 46,
+                          decoration: BoxDecoration(
+                            color: _accent.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(Icons.rocket_launch_rounded, color: _accent, size: 24),
+                        ),
+                        const SizedBox(width: 14),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              Lang.t('menu_coming_soon'),
+                              style: const TextStyle(
+                                color: _textPrimary,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 20,
+                              ),
+                            ),
+                            Text(
+                              Lang.t('cs_subtitle'),
+                              style: const TextStyle(color: _textSecondary, fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+
+                    // ── Feature list ─────────────────────────────────────
+                    ...features.map((f) => Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.panel,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.accentBorder),
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        child: Row(
+                          children: [
+                            Icon(f.$1, color: _accent, size: 20),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                Lang.t(f.$2),
+                                style: const TextStyle(
+                                  color: _textPrimary,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: _accent.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: const Text(
+                                'Soon',
+                                style: TextStyle(color: _accent, fontSize: 10, fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )),
+
+                    const SizedBox(height: 6),
+
+                    // ── Feedback note ────────────────────────────────────
+                    Container(
+                      decoration: BoxDecoration(
+                        color: _accent.withOpacity(0.07),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: _accent.withOpacity(0.25)),
+                      ),
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.favorite_rounded, color: _accent, size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              Lang.t('cs_feedback_note'),
+                              style: const TextStyle(
+                                color: _textSecondary,
+                                fontSize: 13,
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => BanWatcher(
+      child: Scaffold(
+        backgroundColor: _gradTop,
         body: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -695,13 +855,51 @@ class MenuScreen extends StatelessWidget {
               end: Alignment.bottomCenter,
             ),
           ),
-          child: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            children: [
-              // PARTY MAP (MUSS ueber HomeShell laufen)
+          child: SafeArea(
+            child: Column(
+              children: [
+                // ─── Header Pill ──────────────────────────────────────────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back, color: _accent),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                      Expanded(
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+                            decoration: BoxDecoration(
+                              color: AppColors.panel,
+                              borderRadius: AppRadius.fullBr,
+                              border: Border.all(color: AppColors.accentBorder2, width: 1),
+                            ),
+                            child: Text(
+                              Lang.t('menu_header'),
+                              style: const TextStyle(
+                                color: _textPrimary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                                letterSpacing: -0.2,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 40),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    children: [
+              // PARTY MAP
               _menuTile(
                 icon: Icons.map,
-                title: LanguageService.getText('party_map', lang),
+                title: Lang.t('menu_party_map'),
                 onTap: () {
                   // Menü schließen (falls Drawer/Overlay)
                   if (Navigator.of(context).canPop()) {
@@ -741,7 +939,7 @@ class MenuScreen extends StatelessWidget {
               // UGC: approved parties -> Terms Gate
               _menuTile(
                 icon: Icons.verified_rounded,
-                title: "Zugelassene Partys",
+                title: Lang.t('menu_approved_parties'),
                 onTap: () {
                   Navigator.push(
                     context,
@@ -779,7 +977,7 @@ class MenuScreen extends StatelessWidget {
 
               _menuTile(
                 icon: Icons.language,
-                title: LanguageService.getText('change_language', lang),
+                title: Lang.t('menu_language_location'),
                 onTap: () {
                   Navigator.push(
                     context,
@@ -790,57 +988,14 @@ class MenuScreen extends StatelessWidget {
 
               _menuTile(
                 icon: Icons.upcoming,
-                title: "Coming Soon",
-                onTap: () {
-                  showDialog(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      backgroundColor: _panel,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        side: const BorderSide(color: _panelBorder),
-                      ),
-                      title: const Text(
-                        "Coming Soon",
-                        style: TextStyle(
-                          color: _accent,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      content: const Text(
-                        "Bald verfuegbar:\n\n"
-                            "- Freunde-Feature ✔\n"
-                            "- Benachrichtigungen\n"
-                            "- Weitere Premium-Vorteile\n"
-                            "- Chatting\n"
-                            "- Eure Wuensche\n\n"
-                            "Wir bitten um dein Feedback und deine Ideen, um unsere App nach deinen Wuenschen zu gestalten!",
-                        style: TextStyle(
-                          color: _textSecondary,
-                          height: 1.4,
-                        ),
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: const Text(
-                            "Schliessen",
-                            style: TextStyle(
-                              color: _accent,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
+                title: Lang.t('menu_coming_soon'),
+                onTap: () => _showComingSoon(context),
               ),
 
               // UGC: Feedback -> Terms Gate
               _menuTile(
                 icon: Icons.feedback,
-                title: "Feedback",
+                title: Lang.t('nav_feedback'),
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute(
@@ -854,7 +1009,7 @@ class MenuScreen extends StatelessWidget {
 
               _menuTile(
                 icon: Icons.info,
-                title: "Rechtliches",
+                title: Lang.t('menu_legal'),
                 onTap: () {
                   Navigator.push(
                     context,
@@ -905,9 +1060,14 @@ class MenuScreen extends StatelessWidget {
                   );
                 },
               ),
-            ],
-          ),
+            ], // ListView children
+          ), // ListView
+                ), // Expanded
+              ], // Column children
+            ), // Column
+          ), // SafeArea
         ),
+      ),
       ),
     );
   }
@@ -983,7 +1143,7 @@ class LegalScreen extends StatelessWidget {
             decoration: BoxDecoration(
               color: _panel,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _panelBorder),
+              border: Border.all(color: AppColors.accentBorder),
             ),
             padding: const EdgeInsets.all(18),
             child: Column(
@@ -1172,7 +1332,7 @@ class SupportScreen extends StatelessWidget {
           decoration: BoxDecoration(
             color: _panel,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: _panelBorder),
+            border: Border.all(color: AppColors.accentBorder),
           ),
           padding: const EdgeInsets.all(18),
           child: Column(

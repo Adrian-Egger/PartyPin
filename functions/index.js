@@ -371,3 +371,35 @@ const paypalPremium = require("./paypal/index");
 exports.paypalWebhook = paypalPremium.paypalWebhook;
 exports.createPayPalCheckout = paypalPremium.createPayPalCheckout;
 exports.syncPayPalPremiumDaily = paypalPremium.syncPayPalPremiumDaily;
+
+// =======================
+// Friend Request Push Notification
+// =======================
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+
+exports.onFriendRequest = onDocumentCreated("friendRequests/{requestId}", async (event) => {
+  const data = event.data?.data();
+  if (!data) return;
+
+  const fromUsername = (data.from || "").trim();
+  const toUsername = (data.to || data.toUsername || "").trim();
+  if (!toUsername || !fromUsername) return;
+
+  // Get recipient's FCM token
+  const userSnap = await db.collection("users").doc(toUsername).get();
+  if (!userSnap.exists) return;
+
+  const fcmToken = userSnap.data()?.fcmToken;
+  if (!fcmToken) return;
+
+  await admin.messaging().send({
+    token: fcmToken,
+    notification: {
+      title: "Neue Freundschaftsanfrage",
+      body: `${fromUsername} möchte dich adden`,
+    },
+    android: {
+      notification: { channelId: "friend_requests" },
+    },
+  });
+});

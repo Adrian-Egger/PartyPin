@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import 'party_map_screen.dart';
-import 'selection_screen.dart';
+import '../home/home_shell.dart';
+import '../home/selection_screen.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 class TermsScreen extends StatefulWidget {
   const TermsScreen({Key? key}) : super(key: key);
@@ -18,15 +20,14 @@ class _TermsScreenState extends State<TermsScreen> {
   bool _isSaving = false;
 
   // --- Farben im selben Schema wie Selection/PartyMap ---
-  static const _gradTop = Color(0xFF0E0F12);
-  static const _gradBottom = Color(0xFF141A22);
+  static const _gradTop = AppColors.bgTop;
+  static const _gradBottom = AppColors.bgBottom;
   static const _panel = Color(0xFF15171C);
-  static const _panelBorder = Color(0xFF2A2F38);
-  static const _card = Color(0xFF1C1F26);
-  static const _textPrimary = Colors.white;
-  static const _textSecondary = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30); // Rot
-  static const _secondary = Color(0xFF00C2A8); // Türkis (falls gebraucht)
+  static const _card = AppColors.panel;
+  static const _textPrimary = AppColors.text;
+  static const _textSecondary = AppColors.muted;
+  static const _accent = AppColors.accent;
+  static const _secondary = AppColors.teal;
 
   Future<void> _acceptTerms() async {
     setState(() => _isSaving = true);
@@ -80,23 +81,41 @@ class _TermsScreenState extends State<TermsScreen> {
       context,
       MaterialPageRoute(
         builder: (_) =>
-        hasLocationData ? const PartyMapScreen() : const SelectionScreen(),
+        hasLocationData ? const HomeShell() : const SelectionScreen(),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => PopScope(
+      canPop: false,
+      child: Scaffold(
       backgroundColor: _gradTop,
       extendBodyBehindAppBar: true,
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
-        title: const Text(
-          "Nutzungsbedingungen & Datenschutz",
-          style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w700),
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.panel,
+            borderRadius: AppRadius.fullBr,
+            border: Border.all(color: AppColors.accentBorder2, width: 1),
+          ),
+          child: Text(
+            Lang.t('terms_header'),
+            style: const TextStyle(
+              color: _textPrimary,
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              letterSpacing: -0.2,
+            ),
+          ),
         ),
       ),
       body: Container(
@@ -116,7 +135,7 @@ class _TermsScreenState extends State<TermsScreen> {
                 decoration: BoxDecoration(
                   color: _panel,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: _panelBorder),
+                  border: Border.all(color: AppColors.accentBorder),
                   boxShadow: const [
                     BoxShadow(
                       color: Color(0x33000000),
@@ -152,7 +171,7 @@ class _TermsScreenState extends State<TermsScreen> {
                         decoration: BoxDecoration(
                           color: _card,
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: _panelBorder),
+                          border: Border.all(color: AppColors.accentBorder),
                         ),
                         constraints: const BoxConstraints(
                           minHeight: 260,
@@ -259,7 +278,7 @@ Es gilt österreichisches Recht, soweit zwingendes Verbraucherrecht nicht entgeg
                           Checkbox(
                             value: _accepted,
                             activeColor: _accent,
-                            side: const BorderSide(color: _panelBorder),
+                            side: const BorderSide(color: AppColors.accentBorder),
                             onChanged: (val) =>
                                 setState(() => _accepted = val ?? false),
                           ),
@@ -296,9 +315,9 @@ Es gilt österreichisches Recht, soweit zwingendes Verbraucherrecht nicht entgeg
                               strokeWidth: 2,
                             ),
                           )
-                              : const Text(
-                            "Weiter",
-                            style: TextStyle(
+                              : Text(
+                            Lang.t('ok'),
+                            style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
                             ),
@@ -312,6 +331,8 @@ Es gilt österreichisches Recht, soweit zwingendes Verbraucherrecht nicht entgeg
             ),
           ),
         ),
+      ),
+      ),
       ),
     );
   }

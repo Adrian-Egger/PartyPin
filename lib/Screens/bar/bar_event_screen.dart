@@ -7,7 +7,9 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import 'home_shell.dart';
+import '../home/home_shell.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 class BarEventScreen extends StatefulWidget {
   final String barId;
@@ -27,10 +29,10 @@ class BarEventScreen extends StatefulWidget {
 }
 
 class _BarEventScreenState extends State<BarEventScreen> {
-  // ---------- THEME (schwarz/rot) ----------
-  static const Color kBg = Color(0xFF0E0F12);
-  static const Color kSurface = Color(0xFF141A22);
-  static const Color kRed = Colors.redAccent;
+  // ---------- THEME ----------
+  static const Color kBg = AppColors.bgTop;
+  static const Color kSurface = AppColors.bgBottom;
+  static const Color kRed = AppColors.accent;
 
   // ✅ 1:1 wie NewParty: keine extra TimePickerTheme-Spielereien
   ThemeData _pickerTheme(ThemeData base) {
@@ -251,7 +253,12 @@ class _BarEventScreenState extends State<BarEventScreen> {
           _resetFormState();
           setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Event war vorbei → wurde automatisch gelöscht.')),
+            const SnackBar(
+              content: Text('Event war vorbei → wurde automatisch gelöscht.'),
+              backgroundColor: AppColors.panel,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+            ),
           );
           return;
         }
@@ -328,7 +335,12 @@ class _BarEventScreenState extends State<BarEventScreen> {
       if (!mounted) return;
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Fehler beim Laden: $e')),
+        SnackBar(
+          content: Text('Fehler beim Laden: $e'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     }
   }
@@ -488,21 +500,36 @@ class _BarEventScreenState extends State<BarEventScreen> {
           imageUrl = '';
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Bild-Upload Reihe ${i + 1} Timeout → ohne Bild gespeichert.')),
+              SnackBar(
+                content: Text('Bild-Upload Reihe ${i + 1} Timeout → ohne Bild gespeichert.'),
+                backgroundColor: AppColors.accent,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
             );
           }
         } on FirebaseException catch (e) {
           imageUrl = '';
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Bild-Upload Reihe ${i + 1} fehlgeschlagen (${e.code}) → ohne Bild.')),
+              SnackBar(
+                content: Text('Bild-Upload Reihe ${i + 1} fehlgeschlagen (${e.code}) → ohne Bild.'),
+                backgroundColor: AppColors.accent,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
             );
           }
         } catch (e) {
           imageUrl = '';
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Bild-Upload Reihe ${i + 1} Fehler: $e → ohne Bild.')),
+              SnackBar(
+                content: Text('Bild-Upload Reihe ${i + 1} Fehler: $e → ohne Bild.'),
+                backgroundColor: AppColors.accent,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
             );
           }
         }
@@ -544,21 +571,36 @@ class _BarEventScreenState extends State<BarEventScreen> {
 
     if (title.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bitte einen Event-Titel eingeben.')),
+        const SnackBar(
+          content: Text('Bitte einen Event-Titel eingeben.'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+        ),
       );
       return;
     }
 
     if (_selectedDate == null || _selectedTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bitte Datum und Uhrzeit auswählen.')),
+        const SnackBar(
+          content: Text('Bitte Datum und Uhrzeit auswählen.'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+        ),
       );
       return;
     }
 
     if (!_openEnd && _selectedEndTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Bitte eine Endzeit wählen oder „Open End“ aktivieren.')),
+        const SnackBar(
+          content: Text('Bitte eine Endzeit wählen oder „Open End” aktivieren.'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+        ),
       );
       return;
     }
@@ -637,7 +679,12 @@ class _BarEventScreenState extends State<BarEventScreen> {
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(widget.eventId == null ? '🎉 Event erstellt.' : '✅ Event gespeichert.')),
+        SnackBar(
+          content: Text(widget.eventId == null ? '🎉 Event erstellt.' : '✅ Event gespeichert.'),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
 
       Navigator.of(context).pushAndRemoveUntil(
@@ -647,12 +694,22 @@ class _BarEventScreenState extends State<BarEventScreen> {
     } on TimeoutException {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Timeout beim Speichern. Prüfe Internet/Firestore Rules.')),
+        const SnackBar(
+          content: Text('Timeout beim Speichern. Prüfe Internet/Firestore Rules.'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Fehler beim Speichern: $e')),
+        SnackBar(
+          content: Text('Fehler beim Speichern: $e'),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       );
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -665,6 +722,13 @@ class _BarEventScreenState extends State<BarEventScreen> {
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
     final isEdit = widget.eventId != null;
 
     final dateText = _selectedDate == null
@@ -701,13 +765,22 @@ class _BarEventScreenState extends State<BarEventScreen> {
       appBar: AppBar(
         centerTitle: true,
         backgroundColor: kSurface,
-        title: Text(
-          isEdit ? '🛠️ Event bearbeiten 🎉' : '🍹 Event erstellen 🎉',
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w900,
-            fontSize: 22,
+        elevation: 0,
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.panel,
+            borderRadius: AppRadius.fullBr,
+            border: Border.all(color: AppColors.accentBorder2, width: 1),
+          ),
+          child: Text(
+            isEdit ? Lang.t('bar_event_edit') : Lang.t('bar_event_create'),
+            style: const TextStyle(
+              color: AppColors.text,
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              letterSpacing: -0.2,
+            ),
           ),
         ),
       ),
@@ -851,8 +924,12 @@ class _BarEventScreenState extends State<BarEventScreen> {
                                   : () async {
                                 if (_selectedDate == null || _selectedTime == null) {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content: Text('Bitte zuerst Datum und Startzeit wählen.')),
+                                    SnackBar(
+                                      content: const Text('Bitte zuerst Datum und Startzeit wählen.'),
+                                      backgroundColor: AppColors.accent,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
                                   );
                                   return;
                                 }
@@ -953,11 +1030,11 @@ class _BarEventScreenState extends State<BarEventScreen> {
                     child: OutlinedButton.icon(
                       onPressed: _isSaving ? null : _addSection,
                       style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.redAccent),
+                        side: const BorderSide(color: AppColors.accent),
                         backgroundColor: kSurface,
                       ),
-                      icon: const Icon(Icons.add, color: Colors.redAccent),
-                      label: const Text('Reihe hinzufügen', style: TextStyle(color: Colors.redAccent)),
+                      icon: const Icon(Icons.add, color: AppColors.accent),
+                      label: const Text('Reihe hinzufügen', style: TextStyle(color: AppColors.accent)),
                     ),
                   ),
                   const SizedBox(height: 80),
@@ -989,7 +1066,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                 Expanded(
                   child: ElevatedButton(
                     onPressed: _isSaving ? null : _saveEvent,
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                    style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent),
                     child: _isSaving
                         ? const SizedBox(
                       width: 20,
@@ -1015,7 +1092,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
   Widget _sectionTitle(String text) {
     return Row(
       children: [
-        const Icon(Icons.local_fire_department, color: Colors.redAccent, size: 18),
+        const Icon(Icons.local_fire_department, color: AppColors.accent, size: 18),
         const SizedBox(width: 6),
         Text(
           text,
@@ -1036,9 +1113,9 @@ class _BarEventScreenState extends State<BarEventScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: value ? Colors.green.withOpacity(0.12) : Colors.transparent,
+          color: value ? AppColors.success.withOpacity(0.12) : Colors.transparent,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: value ? Colors.greenAccent : Colors.white24),
+          border: Border.all(color: value ? AppColors.success : Colors.white24),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1046,12 +1123,12 @@ class _BarEventScreenState extends State<BarEventScreen> {
             Icon(
               value ? Icons.check_circle : Icons.radio_button_unchecked,
               size: 16,
-              color: value ? Colors.greenAccent : Colors.white38,
+              color: value ? AppColors.success : Colors.white38,
             ),
             const SizedBox(width: 4),
             Text(
               label,
-              style: TextStyle(color: value ? Colors.greenAccent : Colors.white54, fontSize: 11),
+              style: TextStyle(color: value ? AppColors.success : Colors.white54, fontSize: 11),
             ),
           ],
         ),
@@ -1070,14 +1147,14 @@ class _BarEventScreenState extends State<BarEventScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(
-          color: selected ? Colors.redAccent.withOpacity(0.15) : Colors.transparent,
+          color: selected ? AppColors.accent.withOpacity(0.15) : Colors.transparent,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: selected ? Colors.redAccent : Colors.white24),
+          border: Border.all(color: selected ? AppColors.accent : Colors.white24),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: selected ? Colors.redAccent : Colors.white70,
+            color: selected ? AppColors.accent : Colors.white70,
             fontSize: 12,
             fontWeight: FontWeight.w700,
           ),
@@ -1114,7 +1191,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
           borderRadius: BorderRadius.circular(12),
         ),
         focusedBorder: OutlineInputBorder(
-          borderSide: BorderSide(color: enabled ? Colors.redAccent : Colors.white12),
+          borderSide: BorderSide(color: enabled ? AppColors.accent : Colors.white12),
           borderRadius: BorderRadius.circular(12),
         ),
       ),
@@ -1147,7 +1224,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                   const Spacer(),
                   IconButton(
                     onPressed: _isSaving ? null : () => _removeSection(i),
-                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 18),
+                    icon: const Icon(Icons.delete_outline, color: AppColors.accent, size: 18),
                     tooltip: 'Reihe entfernen',
                   ),
                 ],

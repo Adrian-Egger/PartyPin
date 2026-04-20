@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../Theme/app_theme.dart';
 
 class FeedbackScreen extends StatefulWidget {
   // steuert ob links oben der rote Pfeil angezeigt wird
@@ -21,22 +22,6 @@ class FeedbackScreen extends StatefulWidget {
 }
 
 class _FeedbackScreenState extends State<FeedbackScreen> {
-  // Farben
-  static const _bgTop = Color(0xFF0E0F12);
-  static const _bgBottom = Color(0xFF141A22);
-  static const _panel = Color(0xFF1C1F26);
-  static const _panelBorder = Color(0xFF2A2F38);
-  static const _text = Colors.white;
-  static const _muted = Color(0xFFB6BDC8);
-  static const _accent = Color(0xFFFF3B30);
-  static const _ok = Color(0xFF22C55E);
-  static const _warn = Color(0xFFFFB020);
-  static const _err = Color(0xFFFF3B30);
-  static const _info = Color(0xFF3AA0FF);
-
-  // ✅ mehr rot, aber clean:
-  static const _accentSoft = Color(0x26FF3B30); // ~15% rot
-  static const _accentLine = Color(0x66FF3B30); // ~40% rot
 
   // Limits
   static const int kWindowLimit = 3;
@@ -151,7 +136,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   void _toast(
       String msg, {
-        Color color = _info,
+        Color color = AppColors.panel,
         IconData icon = Icons.info_outline,
       }) {
     if (!mounted) return;
@@ -565,7 +550,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     // ✅ gebannte User dürfen nichts posten
     if (_isBanned) {
       HapticFeedback.heavyImpact();
-      _toast("Dein Account ist gesperrt.", color: _err, icon: Icons.block);
+      _toast("Dein Account ist gesperrt.", color: AppColors.accent, icon: Icons.block);
       return;
     }
 
@@ -573,7 +558,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     if (feedbackText.isEmpty) {
       HapticFeedback.heavyImpact();
       _toast("Bitte Text eingeben.",
-          color: _warn, icon: Icons.warning_amber_rounded);
+          color: AppColors.accent, icon: Icons.warning_amber_rounded);
       return;
     }
 
@@ -581,14 +566,14 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     if (_lockUntilLocal != null) {
       HapticFeedback.heavyImpact();
       _toast("Limit erreicht. Warte: ${_fmtDur(_remainingVN.value)}",
-          color: _warn, icon: Icons.lock_clock);
+          color: AppColors.accent, icon: Icons.lock_clock);
       return;
     }
 
     if (_userKey.isEmpty) {
       HapticFeedback.heavyImpact();
       _toast("UserKey fehlt (App neu starten).",
-          color: _err, icon: Icons.error_outline);
+          color: AppColors.accent, icon: Icons.error_outline);
       return;
     }
 
@@ -662,7 +647,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       _feedbackController.clear();
       HapticFeedback.lightImpact();
-      _toast("Gesendet ✅", color: _ok, icon: Icons.check_circle_rounded);
+      _toast("Gesendet ✅", color: AppColors.success, icon: Icons.check_circle_rounded);
 
       await Future.wait([
         _refreshQuota24h(force: true),
@@ -678,11 +663,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     } on FirebaseException catch (e) {
       HapticFeedback.heavyImpact();
       _toast("Firestore Fehler: ${e.code}",
-          color: _err, icon: Icons.error_outline);
+          color: AppColors.accent, icon: Icons.error_outline);
       await _refreshQuota24h(force: true);
     } catch (e) {
       HapticFeedback.heavyImpact();
-      _toast("Fehler: $e", color: _err, icon: Icons.error_outline);
+      _toast("Fehler: $e", color: AppColors.accent, icon: Icons.error_outline);
       await _refreshQuota24h(force: true);
     } finally {
       _sendingVN.value = false;
@@ -727,11 +712,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       });
 
       HapticFeedback.lightImpact();
-      _toast("Gemeldet ✅", color: _ok, icon: Icons.check_circle_rounded);
+      _toast("Gemeldet ✅", color: AppColors.success, icon: Icons.check_circle_rounded);
     } catch (e) {
       HapticFeedback.heavyImpact();
       _toast("Melden fehlgeschlagen: $e",
-          color: _err, icon: Icons.error_outline);
+          color: AppColors.accent, icon: Icons.error_outline);
     }
   }
 
@@ -743,14 +728,14 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
     if (authorId == "unknown") {
       _toast("Blockieren nicht möglich (User unbekannt).",
-          color: _warn, icon: Icons.warning_amber_rounded);
+          color: AppColors.accent, icon: Icons.warning_amber_rounded);
       return;
     }
 
     // sich selbst nicht blocken
     if (authorId == _myUserDocId) {
       _toast("Du kannst dich nicht selbst blockieren.",
-          color: _warn, icon: Icons.warning_amber_rounded);
+          color: AppColors.accent, icon: Icons.warning_amber_rounded);
       return;
     }
 
@@ -787,11 +772,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       }
 
       HapticFeedback.lightImpact();
-      _toast("User blockiert ✅", color: _ok, icon: Icons.check_circle_rounded);
+      _toast("User blockiert ✅", color: AppColors.success, icon: Icons.check_circle_rounded);
     } catch (e) {
       HapticFeedback.heavyImpact();
       _toast("Blockieren fehlgeschlagen: $e",
-          color: _err, icon: Icons.error_outline);
+          color: AppColors.accent, icon: Icons.error_outline);
     }
   }
 
@@ -807,7 +792,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
     return showModalBottomSheet<String>(
       context: context,
-      backgroundColor: _panel,
+      backgroundColor: AppColors.panel,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
@@ -817,12 +802,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             shrinkWrap: true,
             itemCount: reasons.length,
             separatorBuilder: (_, __) =>
-            const Divider(height: 1, color: _panelBorder),
+            const Divider(height: 1, color: AppColors.accentBorder),
             itemBuilder: (_, i) {
               return ListTile(
                 title: Text(reasons[i],
                     style: const TextStyle(
-                        color: _text, fontWeight: FontWeight.w700)),
+                        color: AppColors.text, fontWeight: FontWeight.w700)),
                 onTap: () => Navigator.of(ctx).pop(reasons[i]),
               );
             },
@@ -838,32 +823,32 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: _panel,
+          backgroundColor: AppColors.panel,
           shape:
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           title: const Text("Details (optional)",
-              style: TextStyle(color: _text)),
+              style: TextStyle(color: AppColors.text)),
           content: TextField(
             controller: ctrl,
             maxLines: 3,
-            style: const TextStyle(color: _text),
+            style: const TextStyle(color: AppColors.text),
             decoration: const InputDecoration(
               hintText: "Kurz erklären…",
-              hintStyle: TextStyle(color: _muted),
+              hintStyle: TextStyle(color: AppColors.muted),
               enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: _panelBorder)),
+                  borderSide: BorderSide(color: AppColors.accentBorder)),
               focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: _accentLine)),
+                  borderSide: BorderSide(color: AppColors.accent)),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(""),
               child: const Text("Überspringen",
-                  style: TextStyle(color: _muted)),
+                  style: TextStyle(color: AppColors.muted)),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: _accent),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
               onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
               child: const Text("OK",
                   style: TextStyle(
@@ -885,20 +870,20 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: _panel,
+          backgroundColor: AppColors.panel,
           shape:
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          title: Text(title, style: const TextStyle(color: _text)),
+          title: Text(title, style: const TextStyle(color: AppColors.text)),
           content: Text(msg,
-              style: const TextStyle(color: _muted, height: 1.25)),
+              style: const TextStyle(color: AppColors.muted, height: 1.25)),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(false),
               child: const Text("Abbrechen",
-                  style: TextStyle(color: _muted)),
+                  style: TextStyle(color: AppColors.muted)),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: _accent),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.success),
               onPressed: () => Navigator.of(ctx).pop(true),
               child: Text(okText,
                   style: const TextStyle(
@@ -921,7 +906,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       leading: widget.openedFromMenu
           ? IconButton(
         tooltip: "Zurück",
-        icon: const Icon(Icons.arrow_back, color: _accent),
+        icon: const Icon(Icons.arrow_back, color: AppColors.accent),
         onPressed: () {
           HapticFeedback.selectionClick();
           Navigator.of(context).maybePop();
@@ -930,40 +915,40 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           : null,
       automaticallyImplyLeading: false,
       title: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
         decoration: BoxDecoration(
-          color: _accentSoft,
+          color: AppColors.panel,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: _accentLine, width: 1),
+          border: Border.all(color: AppColors.accentBorder2, width: 1),
         ),
         child: const Text(
-          "Feedback💬 ",
+          "Feedback",
           style: TextStyle(
-            color: _text,
-            fontWeight: FontWeight.w900,
-            fontSize: 24,
-            letterSpacing: 0.2,
+            color: AppColors.text,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
+            letterSpacing: -0.2,
           ),
         ),
       ),
       actions: [
         Container(
-          margin: const EdgeInsets.only(right: 6),
+          margin: const EdgeInsets.only(right: 4),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
-            color: Colors.white12,
+            color: AppColors.panelAlt,
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: _accentLine, width: 1),
+            border: Border.all(color: AppColors.accentBorder, width: 1),
           ),
           child: Text(
             "${_usedInWindow.clamp(0, kWindowLimit)}/$kWindowLimit",
-            style: const TextStyle(color: _muted, fontWeight: FontWeight.w800),
+            style: const TextStyle(color: AppColors.muted, fontSize: 12, fontWeight: FontWeight.w600),
           ),
         ),
         IconButton(
           tooltip: "Aktualisieren",
           onPressed: _reloadAll,
-          icon: const Icon(Icons.refresh, color: _muted),
+          icon: const Icon(Icons.refresh, color: AppColors.muted),
         ),
       ],
     );
@@ -977,16 +962,16 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
           decoration: BoxDecoration(
-            color: _panel,
+            color: AppColors.panel,
             border: const Border(
-              bottom: BorderSide(color: _panelBorder, width: 0.5),
-              top: BorderSide(color: _panelBorder, width: 0.5),
+              bottom: BorderSide(color: AppColors.accentBorder, width: 0.5),
+              top: BorderSide(color: AppColors.accentBorder, width: 0.5),
             ),
           ),
           child: Row(
             children: [
               Icon(locked ? Icons.lock_clock : Icons.av_timer,
-                  size: 18, color: _muted),
+                  size: 18, color: AppColors.muted),
               const SizedBox(width: 8),
               Expanded(
                 child: ValueListenableBuilder<Duration>(
@@ -996,7 +981,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                         ? "24h-Limit erreicht · noch ${_fmtDur(rem)}"
                         : "Heute verfügbar: $_remainingToday von $kWindowLimit",
                     style: const TextStyle(
-                        color: _muted, fontWeight: FontWeight.w600),
+                        color: AppColors.muted, fontWeight: FontWeight.w600),
                   ),
                 ),
               ),
@@ -1016,8 +1001,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     final authorId = _authorIdFromDoc(raw);
 
     return PopupMenuButton<String>(
-      color: const Color(0xFF1C1F26),
-      icon: const Icon(Icons.more_vert, color: _muted),
+      color: AppColors.panel,
+      icon: const Icon(Icons.more_vert, color: AppColors.muted),
       onSelected: (v) async {
         HapticFeedback.selectionClick();
         if (v == 'report') {
@@ -1025,7 +1010,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         } else if (v == 'block') {
           if (authorId == _myUserDocId || isMine) {
             _toast("Du kannst dich nicht selbst blockieren.",
-                color: _warn, icon: Icons.warning_amber_rounded);
+                color: AppColors.accent, icon: Icons.warning_amber_rounded);
             return;
           }
           await _blockUser(raw: raw);
@@ -1037,11 +1022,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             value: 'report',
             child: Row(
               children: const [
-                Icon(Icons.flag_outlined, size: 18, color: _accent),
+                Icon(Icons.flag_outlined, size: 18, color: AppColors.accent),
                 SizedBox(width: 10),
                 Text("Melden",
                     style: TextStyle(
-                        color: _accent, fontWeight: FontWeight.w800)),
+                        color: AppColors.accent, fontWeight: FontWeight.w800)),
               ],
             ),
           ),
@@ -1049,11 +1034,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             value: 'block',
             child: Row(
               children: const [
-                Icon(Icons.block, size: 18, color: _accent),
+                Icon(Icons.block, size: 18, color: AppColors.accent),
                 SizedBox(width: 10),
                 Text("Blockieren",
                     style: TextStyle(
-                        color: _accent, fontWeight: FontWeight.w800)),
+                        color: AppColors.accent, fontWeight: FontWeight.w800)),
               ],
             ),
           ),
@@ -1071,40 +1056,35 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     required String feedbackDocId,
     required Map<String, dynamic> raw,
   }) {
-    final borderColor = isMine ? _ok : _accentLine;
-
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
       decoration: BoxDecoration(
-        color: _panel,
+        color: AppColors.panel,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: borderColor, width: 1),
-        boxShadow: const [
-          BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 8)),
-        ],
+        border: Border.all(color: AppColors.accentBorder, width: 1),
       ),
       child: ListTile(
         leading: CircleAvatar(
           radius: 18,
-          backgroundColor: Colors.white12,
+          backgroundColor: AppColors.accentBorder,
           child: Icon(
-            isMine ? Icons.person : Icons.feedback,
-            color: isMine ? _ok : _accent,
-            size: 18,
+            isMine ? Icons.person_rounded : Icons.chat_bubble_rounded,
+            color: isMine ? AppColors.success : AppColors.accent,
+            size: 16,
           ),
         ),
         title: Text(
           message,
-          style: const TextStyle(color: _text, fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(color: AppColors.text, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         subtitle: Text(
           isMine ? "Von: $user (du)" : "Von: $user",
-          style: const TextStyle(color: _muted),
+          style: const TextStyle(color: AppColors.muted),
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(date, style: const TextStyle(color: _muted, fontSize: 12)),
+            Text(date, style: const TextStyle(color: AppColors.muted, fontSize: 12)),
             const SizedBox(width: 6),
             _moreMenu(feedbackDocId: feedbackDocId, raw: raw, isMine: isMine),
           ],
@@ -1114,8 +1094,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   Widget _inputBar() {
-    final borderColor = _sentFlash ? _ok : _accentLine;
-    final sendColor = _sentFlash ? _ok : _accent;
+    final borderColor = _sentFlash ? AppColors.success : AppColors.accent;
+    final sendColor = _sentFlash ? AppColors.success : AppColors.accent;
 
     return SafeArea(
       top: false,
@@ -1131,20 +1111,20 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   controller: _feedbackController,
                   maxLines: null,
                   enabled: !locked && !_isBanned,
-                  style: const TextStyle(color: _text),
+                  style: const TextStyle(color: AppColors.text),
                   decoration: InputDecoration(
                     hintText: _isBanned ? "Account gesperrt" : (locked ? "Gesperrt …" : _hint),
-                    hintStyle: const TextStyle(color: _muted),
+                    hintStyle: const TextStyle(color: AppColors.muted),
                     contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
                     filled: true,
-                    fillColor: _panel,
+                    fillColor: AppColors.panel,
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                       borderSide: BorderSide(color: borderColor, width: 1),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: _sentFlash ? _ok : _accent, width: 1.2),
+                      borderSide: BorderSide(color: _sentFlash ? AppColors.success : AppColors.accent, width: 1.2),
                     ),
                   ),
                   textInputAction: TextInputAction.newline,
@@ -1201,16 +1181,16 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   Widget _buildFeedbackList() {
     if (_isLoadingFeedback) {
-      return const Center(child: CircularProgressIndicator(color: _accent));
+      return const Center(child: CircularProgressIndicator(color: AppColors.accent));
     }
     if (_feedbackError) {
       return const Center(
-        child: Text("Fehler beim Laden", style: TextStyle(color: _accent)),
+        child: Text("Fehler beim Laden", style: TextStyle(color: AppColors.accent)),
       );
     }
     if (_feedbackDocs.isEmpty) {
       return const Center(
-        child: Text("Noch kein Feedback vorhanden", style: TextStyle(color: _muted)),
+        child: Text("Noch kein Feedback vorhanden", style: TextStyle(color: AppColors.muted)),
       );
     }
 
@@ -1260,12 +1240,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     // ✅ Wenn gebannt: klare Sperr-Ansicht
     if (_isBanned) {
       return Scaffold(
-        backgroundColor: _bgTop,
+        backgroundColor: AppColors.bgTop,
         appBar: _appBar(),
         body: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [_bgTop, _bgBottom],
+              colors: [AppColors.bgTop, AppColors.bgBottom],
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
             ),
@@ -1275,24 +1255,24 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               margin: const EdgeInsets.all(16),
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: _panel,
+                color: AppColors.panel,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: _accentLine, width: 1),
+                border: Border.all(color: AppColors.accent, width: 1),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.block, color: _err, size: 42),
+                  const Icon(Icons.block, color: AppColors.accent, size: 42),
                   const SizedBox(height: 10),
                   const Text(
                     "Account gesperrt",
-                    style: TextStyle(color: _text, fontWeight: FontWeight.w900, fontSize: 18),
+                    style: TextStyle(color: AppColors.text, fontWeight: FontWeight.w900, fontSize: 18),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
                   Text(
                     _banReason.isNotEmpty ? "Grund: $_banReason" : "Du kannst diese Funktion nicht mehr nutzen.",
-                    style: const TextStyle(color: _muted, height: 1.25),
+                    style: const TextStyle(color: AppColors.muted, height: 1.25),
                     textAlign: TextAlign.center,
                   ),
                 ],
@@ -1308,7 +1288,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       behavior: HitTestBehavior.translucent,
       onTap: _dismissKeyboard,
       child: Scaffold(
-        backgroundColor: _bgTop,
+        backgroundColor: AppColors.bgTop,
         appBar: _appBar(),
         body: Stack(
           children: [
@@ -1316,7 +1296,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [_bgTop, _bgBottom],
+                    colors: [AppColors.bgTop, AppColors.bgBottom],
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                   ),

@@ -2,6 +2,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../Theme/app_theme.dart';
+import '../../l10n/lang.dart';
 
 class BarFeedbackScreen extends StatefulWidget {
   const BarFeedbackScreen({super.key});
@@ -50,7 +52,7 @@ class _BarFeedbackScreenState extends State<BarFeedbackScreen> {
   @override
   Widget build(BuildContext context) {
     const bgColor = Color(0xFF090B10);
-    const accent = Color(0xFFFF3B30);
+    const accent = AppColors.accent;
 
     Widget body;
     if (_loadingBarId) {
@@ -72,21 +74,35 @@ class _BarFeedbackScreenState extends State<BarFeedbackScreen> {
       body = _FeedbackContent(barId: _barId!);
     }
 
-    return Scaffold(
+    return ValueListenableBuilder<String>(
+      valueListenable: langNotifier,
+      builder: (context, _, __) => Scaffold(
       appBar: AppBar(
-        automaticallyImplyLeading: false, // ← verhindert Zurück-Pfeil
-        backgroundColor: const Color(0xFF141A22),
-        title: const Text(
-          '🍹 Bar-Feedback ⭐📝',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w800,
+        automaticallyImplyLeading: false,
+        backgroundColor: AppColors.bgBottom,
+        elevation: 0,
+        centerTitle: true,
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 7),
+          decoration: BoxDecoration(
+            color: AppColors.panel,
+            borderRadius: AppRadius.fullBr,
+            border: Border.all(color: AppColors.accentBorder2, width: 1),
+          ),
+          child: Text(
+            Lang.t('bar_feedback_header'),
+            style: const TextStyle(
+              color: AppColors.text,
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              letterSpacing: -0.2,
+            ),
           ),
         ),
-        centerTitle: true,
       ),
       backgroundColor: bgColor,
       body: body,
+      ),
     );
 
   }
@@ -98,8 +114,8 @@ class _FeedbackContent extends StatelessWidget {
 
   const _FeedbackContent({required this.barId});
 
-  static const Color cardColor = Color(0xFF1C1F26);
-  static const Color accent = Color(0xFFFF3B30);
+  static const Color cardColor = AppColors.panel;
+  static const Color accent = AppColors.accent;
 
   @override
   Widget build(BuildContext context) {
@@ -440,7 +456,7 @@ class _FeedbackContent extends StatelessWidget {
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.flag_rounded, color: Colors.redAccent),
+                icon: const Icon(Icons.flag_rounded, color: AppColors.accent),
                 tooltip: 'Inhalt melden',
                 onPressed: () => _showReportDialog(
                   context,
@@ -519,19 +535,19 @@ class _FeedbackContent extends StatelessWidget {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1C1F26), // dunkel / schwarz
+        backgroundColor: AppColors.panel,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
         ),
         title: const Text(
           'Feedback melden',
           style: TextStyle(
-            color: Colors.white,
+            color: AppColors.text,
             fontWeight: FontWeight.w600,
           ),
         ),
         content: DropdownButtonFormField<String>(
-          dropdownColor: const Color(0xFF1C1F26),
+          dropdownColor: AppColors.panel,
           value: reason,
           style: const TextStyle(color: Colors.white),
           decoration: const InputDecoration(
@@ -591,8 +607,8 @@ class _FeedbackContent extends StatelessWidget {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF3B30), // Accent
-              foregroundColor: Colors.white,            // Text weiß
+              backgroundColor: AppColors.accent,
+              foregroundColor: Colors.white,
             ),
             onPressed: () async {
               await FirebaseFirestore.instance
