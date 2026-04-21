@@ -385,7 +385,6 @@ exports.onFriendRequest = onDocumentCreated("friendRequests/{requestId}", async 
   const toUsername = (data.to || data.toUsername || "").trim();
   if (!toUsername || !fromUsername) return;
 
-  // Get recipient's FCM token
   const userSnap = await db.collection("users").doc(toUsername).get();
   if (!userSnap.exists) return;
 
@@ -402,4 +401,28 @@ exports.onFriendRequest = onDocumentCreated("friendRequests/{requestId}", async 
       notification: { channelId: "friend_requests" },
     },
   });
+});
+
+// =======================
+// Party Anfrage Status Notification (Callable v2)
+// =======================
+exports.sendPushNotification = onCall({ region: "europe-west1" }, async (request) => {
+  const { toUsername, title, body, data: extraData } = request.data || {};
+  if (!toUsername || !title || !body) return { ok: false, reason: "missing fields" };
+
+  const userSnap = await db.collection("users").doc(toUsername).get();
+  if (!userSnap.exists) return { ok: false, reason: "user not found" };
+
+  const fcmToken = userSnap.data()?.fcmToken;
+  if (!fcmToken) return { ok: false, reason: "no fcm token" };
+
+  await admin.messaging().send({
+    token: fcmToken,
+    notification: { title, body },
+    data: extraData || {},
+    android: { priority: "high", notification: { channelId: "party_requests" } },
+    apns: { payload: { aps: { sound: "default" } } },
+  });
+
+  return { ok: true };
 });

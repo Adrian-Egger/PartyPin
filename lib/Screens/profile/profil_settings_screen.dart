@@ -1,3 +1,4 @@
+
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -600,186 +601,132 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         child: SafeArea(
           top: false,
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.fromLTRB(20, 28, 20, 32),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                // ── Avatar ──────────────────────────────────────
                 GestureDetector(
-                  // ✅ Coming soon: nicht mehr editierbar
                   onTap: () => _showSnack("Profilbild: Coming soon"),
                   child: Stack(
                     alignment: Alignment.bottomRight,
                     children: [
                       Container(
                         padding: const EdgeInsets.all(3),
-                        decoration: const BoxDecoration(
+                        decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: _accent,
+                          border: Border.all(color: Colors.white12, width: 2),
                         ),
                         child: CircleAvatar(
-                          radius: 50,
+                          radius: 46,
                           backgroundColor: _card,
                           backgroundImage: _buildAvatarImageProvider(),
                         ),
                       ),
-
-                      // ✅ Coming soon Badge statt Edit Icon
                       Container(
                         decoration: BoxDecoration(
                           color: _panel,
                           borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: AppColors.accentBorder, width: 1),
+                          border: Border.all(color: Colors.white10),
                         ),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         child: _busyAvatar
                             ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.white),
-                          ),
-                        )
-                            : const Text(
-                          "Coming soon",
-                          style: TextStyle(
-                            color: _textSecondary,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
+                                width: 12, height: 12,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+                              )
+                            : const Text("soon", style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.w700)),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 24),
-
-                // Username
-                _profileCard(
-                  icon: Icons.person,
-                  title: "Username",
-                  child: !_editingUsername
-                      ? Text(
-                    _usernameController.text.isEmpty
-                        ? "Kein Username gespeichert"
-                        : _usernameController.text,
-                    style: const TextStyle(color: _textPrimary),
-                  )
-                      : TextField(
-                    controller: _usernameController,
-                    style: const TextStyle(color: _textPrimary),
-                    decoration: const InputDecoration(
-                      border: UnderlineInputBorder(),
-                      hintText: "Neuer Username",
-                      hintStyle: TextStyle(color: _textSecondary),
-                    ),
-                  ),
-                  trailing: IconButton(
-                    icon: Icon(
-                      _editingUsername ? Icons.check : Icons.edit,
-                      color: _accent,
-                    ),
-                    onPressed: () {
-                      if (_editingUsername) {
-                        _saveUsername();
-                      } else {
-                        setState(() => _editingUsername = true);
-                      }
-                    },
-                  ),
+                const SizedBox(height: 10),
+                Text(
+                  _username.isEmpty ? "—" : _username,
+                  style: const TextStyle(color: _textPrimary, fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: -0.3),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 28),
 
-                // Passwort
-                _profileCard(
-                  icon: Icons.lock,
-                  title: "Passwort",
-                  child: !_editingPassword
-                      ? const Text(
-                    "********",
-                    style: TextStyle(color: _textPrimary),
-                  )
-                      : Column(
+                // ── Account-Einstellungen ────────────────────────
+                _sectionLabel("Account"),
+                const SizedBox(height: 8),
+                Container(
+                  decoration: BoxDecoration(
+                    color: _panel,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.accentBorder),
+                  ),
+                  child: Column(
                     children: [
-                      TextField(
-                        controller: _currentPasswordController,
-                        obscureText: true,
-                        style: const TextStyle(color: _textPrimary),
-                        decoration: const InputDecoration(
-                          border: UnderlineInputBorder(),
-                          hintText: "Aktuelles Passwort",
-                          hintStyle: TextStyle(color: _textSecondary),
+                      // Username row
+                      _settingRow(
+                        icon: Icons.person_outline_rounded,
+                        label: "Username",
+                        editing: _editingUsername,
+                        displayValue: _usernameController.text.isEmpty ? "Nicht gesetzt" : _usernameController.text,
+                        editChild: _inputField(
+                          controller: _usernameController,
+                          hint: "Neuer Username",
                         ),
+                        onEdit: () => setState(() => _editingUsername = true),
+                        onSave: _saveUsername,
+                        onCancel: () => setState(() {
+                          _editingUsername = false;
+                          _usernameController.text = _username;
+                        }),
                       ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _newPasswordController,
-                        obscureText: true,
-                        style: const TextStyle(color: _textPrimary),
-                        decoration: const InputDecoration(
-                          border: UnderlineInputBorder(),
-                          hintText: "Neues Passwort",
-                          hintStyle: TextStyle(color: _textSecondary),
+                      const Divider(height: 1, color: Color(0xFF2A2D35)),
+                      // Password row
+                      _settingRow(
+                        icon: Icons.lock_outline_rounded,
+                        label: "Passwort",
+                        editing: _editingPassword,
+                        displayValue: "••••••••",
+                        editChild: Column(
+                          children: [
+                            _inputField(controller: _currentPasswordController, hint: "Aktuelles Passwort", obscure: true),
+                            const SizedBox(height: 10),
+                            _inputField(controller: _newPasswordController, hint: "Neues Passwort", obscure: true),
+                          ],
                         ),
+                        onEdit: () => setState(() => _editingPassword = true),
+                        onSave: _savePassword,
+                        onCancel: () => setState(() {
+                          _editingPassword = false;
+                          _currentPasswordController.clear();
+                          _newPasswordController.clear();
+                        }),
                       ),
                     ],
                   ),
-                  trailing: IconButton(
-                    icon: Icon(
-                      _editingPassword ? Icons.check : Icons.edit,
-                      color: _accent,
-                    ),
-                    onPressed: () {
-                      if (_editingPassword) {
-                        _savePassword();
-                      } else {
-                        setState(() => _editingPassword = true);
-                      }
-                    },
-                  ),
                 ),
-                const SizedBox(height: 30),
 
-                // Logout
+                const SizedBox(height: 32),
+
+                // ── Logout ────────────────────────────────────────
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: _logout,
-                    icon: const Icon(Icons.logout),
-                    label: const Text("Logout"),
+                    icon: const Icon(Icons.logout_rounded, size: 18),
+                    label: const Text("Abmelden", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _accent,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 24, vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      elevation: 0,
                     ),
                   ),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
 
-                // Account löschen
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _deleteAccount,
-                    icon: const Icon(Icons.delete_forever, color: _accent),
-                    label: const Text(
-                      "Account löschen",
-                      style: TextStyle(color: _accent),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: _accent, width: 1.5),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 24, vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                  ),
+                // ── Account löschen ───────────────────────────────
+                TextButton.icon(
+                  onPressed: _deleteAccount,
+                  icon: const Icon(Icons.delete_outline_rounded, size: 16, color: Colors.redAccent),
+                  label: const Text("Account löschen", style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 10)),
                 ),
               ],
             ),
@@ -794,61 +741,122 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     if (avatar == null || avatar.trim().isEmpty) {
       return const AssetImage('lib/Pics/profile_pic.png');
     }
-
     if (avatar.startsWith('http://') || avatar.startsWith('https://')) {
       return NetworkImage(avatar);
     }
-
     if (File(avatar).existsSync()) {
       return FileImage(File(avatar));
     }
-
     return const AssetImage('lib/Pics/profile_pic.png');
   }
 
-  Widget _profileCard({
-    required IconData icon,
-    required String title,
-    required Widget child,
-    Widget? trailing,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _panel,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.accentBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x33000000),
-            blurRadius: 12,
-            offset: Offset(0, 8),
+  static Widget _sectionLabel(String label) => Align(
+    alignment: Alignment.centerLeft,
+    child: Text(label, style: const TextStyle(color: _textSecondary, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: .6)),
+  );
+
+  static Widget _inputField({
+    required TextEditingController controller,
+    required String hint,
+    bool obscure = false,
+  }) =>
+      TextField(
+        controller: controller,
+        obscureText: obscure,
+        style: const TextStyle(color: _textPrimary, fontSize: 14),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: const TextStyle(color: _textSecondary, fontSize: 14),
+          filled: true,
+          fillColor: Color(0xFF0E0F12),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: Color(0xFF2A2D35)),
           ),
-        ],
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      child: Row(
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: Color(0xFF2A2D35)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: _accent, width: 1.5),
+          ),
+        ),
+      );
+
+  Widget _settingRow({
+    required IconData icon,
+    required String label,
+    required bool editing,
+    required String displayValue,
+    required Widget editChild,
+    required VoidCallback onEdit,
+    required VoidCallback onSave,
+    required VoidCallback onCancel,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: _accent),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: _textSecondary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+          Row(
+            children: [
+              Icon(icon, color: _accent, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: const TextStyle(color: _textSecondary, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: .4)),
+                    const SizedBox(height: 2),
+                    if (!editing)
+                      Text(displayValue, style: const TextStyle(color: _textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+              if (!editing)
+                GestureDetector(
+                  onTap: onEdit,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: _accent.withAlpha(20),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: _accent.withAlpha(60)),
+                    ),
+                    child: const Text("Ändern", style: TextStyle(color: _accent, fontSize: 12, fontWeight: FontWeight.w700)),
                   ),
                 ),
-                const SizedBox(height: 4),
-                child,
+            ],
+          ),
+          if (editing) ...[
+            const SizedBox(height: 12),
+            editChild,
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: onCancel,
+                  style: TextButton.styleFrom(foregroundColor: _textSecondary, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
+                  child: const Text("Abbrechen", style: TextStyle(fontSize: 13)),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: onSave,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _accent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    elevation: 0,
+                  ),
+                  child: const Text("Speichern", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                ),
               ],
             ),
-          ),
-          if (trailing != null) trailing,
+          ],
         ],
       ),
     );

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -995,14 +996,12 @@ String _safeDocId(String input) => input
 
   Future<void> _loadPartiesFromFirebase() async {
     final snapshot = await FirebaseFirestore.instance.collection('Party').get();
-    debugPrint('🎉 Party docs loaded: ${snapshot.docs.length}');
-
     for (final doc in snapshot.docs) {
       try {
         final data = doc.data();
         _partyCache[doc.id] = data;
 
-        if (!_showParties) { debugPrint('⛔ ${doc.id}: showParties=false'); continue; }
+        if (!_showParties) continue;
 
         // 🔒 Host-Erkennung (NUR EINMAL!)
         final bool isHostForThisParty = _isHostForPartyData(data);
@@ -1012,7 +1011,7 @@ String _safeDocId(String input) => input
         (data['moderationStatus'] ?? 'active').toString();
 
         if (moderationStatus == 'blocked' && !isHostForThisParty) {
-          debugPrint('⛔ ${doc.id}: blocked moderation'); continue;
+          continue;
         }
 
         // =============================
@@ -1035,7 +1034,7 @@ String _safeDocId(String input) => input
               partyAge = int.tryParse(digits) ?? 0;
             }
           }
-          if (partyAge > 0 && partyAge > _minAgeFilter!) { debugPrint('⛔ ${doc.id}: age filter'); continue; }
+          if (partyAge > 0 && partyAge > _minAgeFilter!) continue;
         }
 
         // =============================
@@ -1052,21 +1051,21 @@ String _safeDocId(String input) => input
           );
         }
 
-        if (_onlyFree && (entryFee ?? 0) > 0) { debugPrint('⛔ ${doc.id}: onlyFree filter'); continue; }
+        if (_onlyFree && (entryFee ?? 0) > 0) continue;
         if (_maxEntryFilter != null &&
             entryFee != null &&
-            entryFee > _maxEntryFilter!) { debugPrint('⛔ ${doc.id}: maxEntry filter'); continue; }
+            entryFee > _maxEntryFilter!) continue;
 
         // =============================
         // ⏰ abgelaufen
         // =============================
-        if (_isExpiredWithGrace(data)) { debugPrint('⛔ ${doc.id}: expired. date=${data['date']}, time=${data['time']}'); continue; }
+        if (_isExpiredWithGrace(data)) continue;
 
         // =============================
         // 📍 Position
         // =============================
         final pos = _parseLatLng(data);
-        if (pos == null) { debugPrint('⛔ ${doc.id}: no position. lat=${data['lat']}, lng=${data['lng']}, location=${data['location']}'); continue; }
+        if (pos == null) continue;
 
         // =============================
         // 🌍 friends-only Sichtbarkeit
@@ -1085,7 +1084,7 @@ String _safeDocId(String input) => input
               me != null && me.isNotEmpty && _myFriendsSet.contains(hostUsername);
           final isExcluded = me != null && excluded.contains(me);
 
-          if (!isFriend || isExcluded) { debugPrint('⛔ ${doc.id}: friends-only, not friend of $hostUsername'); continue; }
+          if (!isFriend || isExcluded) continue;
         }
 
         // =============================
@@ -1127,7 +1126,6 @@ String _safeDocId(String input) => input
             icon = _lockIconGrey ?? BitmapDescriptor.defaultMarker;
           }
 
-          debugPrint('✅ ${doc.id}: CLOSED party marker added');
           _markers.add(Marker(
             markerId: MarkerId('lock_${doc.id}'),
             position: fakeCenter,
@@ -1154,7 +1152,6 @@ String _safeDocId(String input) => input
               ? _iconForFriendsPartyMarker(doc.id)
               : _iconForOpenPartyMarker(doc.id);
 
-          debugPrint('✅ ${doc.id}: OPEN party marker added at $pos');
           _markers.add(Marker(
             markerId: MarkerId(doc.id),
             position: pos,
@@ -1162,8 +1159,7 @@ String _safeDocId(String input) => input
             onTap: () => _openPartySheet(data, doc.id),
           ));
         }
-      } catch (e, st) {
-        debugPrint('💥 ${doc.id}: exception $e\n$st');
+      } catch (_) {
         continue;
       }
     }
@@ -1808,11 +1804,24 @@ String _safeDocId(String input) => input
       }
     });
 
+    // Push-Benachrichtigung an den anfragenden User
+    try {
+      final partyName = (_partyCache[partyId]?['name'] ?? 'Party').toString();
+      await FirebaseFunctions.instanceFor(region: 'europe-west1')
+          .httpsCallable('sendPushNotification')
+          .call({
+        'toUsername': username,
+        'title': status == 'approved' ? '✅ Zugang genehmigt' : '❌ Anfrage abgelehnt',
+        'body': status == 'approved'
+            ? 'Du wurdest für "$partyName" zugelassen!'
+            : 'Deine Anfrage für "$partyName" wurde abgelehnt.',
+        'data': {'partyId': partyId, 'type': 'request_$status'},
+      });
+    } catch (_) {} // best-effort
+
     if (_currentUsername == username) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _setLockIconForPartyStatus(partyId, status: status);
-        }
+        if (mounted) _setLockIconForPartyStatus(partyId, status: status);
       });
     }
   }
@@ -2094,8 +2103,10 @@ String _safeDocId(String input) => input
     bool onlyOpen = _onlyOpenParties;
     bool onlyClosed = _onlyClosedParties;
 
-    final ageCtrl = TextEditingController(text: minAge != null ? minAge.toString() : '');
-    final entryCtrl = TextEditingController(text: maxEntry != null ? maxEntry.toString() : '');
+    // Age chips: null = Alle, 16, 18, 21
+    const ageOptions = <int?>[null, 16, 18, 21];
+    // Entry chips: null = Alle, 0 = Gratis, 5, 10, 20
+    const entryOptions = <double?>[null, 0, 5, 10, 20];
 
     final result = await showModalBottomSheet<Map<String, dynamic>?>(
       context: context,
@@ -2106,12 +2117,7 @@ String _safeDocId(String input) => input
       ),
       builder: (ctx) {
         return Padding(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 12,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
-          ),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           child: StatefulBuilder(
             builder: (ctx, setSB) {
               void turnOffPartySubFiltersIfNeeded() {
@@ -2121,134 +2127,152 @@ String _safeDocId(String input) => input
                   onlyFree = false;
                   minAge = null;
                   maxEntry = null;
-                  ageCtrl.text = '';
-                  entryCtrl.text = '';
                 }
+              }
+
+              Widget chipRow<T>({
+                required List<T> options,
+                required T selected,
+                required String Function(T) label,
+                required bool enabled,
+                required void Function(T) onSelect,
+              }) {
+                return Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: options.map((opt) {
+                    final active = opt == selected;
+                    return GestureDetector(
+                      onTap: enabled ? () => setSB(() => onSelect(opt)) : null,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: active ? _accent.withOpacity(0.18) : Colors.grey[800],
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: active ? _accent : Colors.white24,
+                            width: active ? 1.5 : 1,
+                          ),
+                        ),
+                        child: Text(
+                          label(opt),
+                          style: TextStyle(
+                            color: active ? _accent : (enabled ? Colors.white70 : Colors.white30),
+                            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                );
               }
 
               return Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.filter_list, color: Colors.white),
-                      SizedBox(width: 8),
-                      Text(
-                        "Filter",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                        ),
+                  // Header
+                  Row(children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[850],
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: Colors.white24),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  SwitchListTile(
-                    value: showParties,
-                    onChanged: (v) => setSB(() {
-                      showParties = v;
-                      turnOffPartySubFiltersIfNeeded();
-                    }),
-                    activeColor: _accent,
-                    title: const Text("Partys anzeigen", style: TextStyle(color: Colors.white)),
-                  ),
-                  SwitchListTile(
-                    value: onlyOpen,
-                    onChanged: showParties
-                        ? (v) => setSB(() {
-                      onlyOpen = v;
-                      if (v) onlyClosed = false;
-                    })
-                        : null,
-                    activeColor: _accent,
-                    title: const Text("Nur offene Partys", style: TextStyle(color: Colors.white)),
-                  ),
-                  SwitchListTile(
-                    value: onlyClosed,
-                    onChanged: showParties
-                        ? (v) => setSB(() {
-                      onlyClosed = v;
-                      if (v) onlyOpen = false;
-                    })
-                        : null,
-                    activeColor: _accent,
-                    title: const Text("Nur geschlossene Partys", style: TextStyle(color: Colors.white)),
-                  ),
-                  SwitchListTile(
-                    value: showBars,
-                    onChanged: (v) => setSB(() => showBars = v),
-                    activeColor: _accent,
-                    title: const Text("Bars anzeigen", style: TextStyle(color: Colors.white)),
-                  ),
-                  const Divider(color: Colors.white24, height: 24),
-                  SwitchListTile(
-                    value: onlyFree,
-                    onChanged: showParties ? (v) => setSB(() => onlyFree = v) : null,
-                    activeColor: _accent,
-                    title: const Text("Nur gratis Partys (0 € Eintritt)", style: TextStyle(color: Colors.white)),
-                  ),
+                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.filter_list_rounded, color: Colors.white, size: 16),
+                        SizedBox(width: 6),
+                        Text("Filter", style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                      ]),
+                    ),
+                  ]),
+                  const SizedBox(height: 20),
+
+                  // Toggles
+                  _filterToggle("Partys anzeigen", showParties, (v) => setSB(() {
+                    showParties = v;
+                    turnOffPartySubFiltersIfNeeded();
+                  })),
                   const SizedBox(height: 4),
-                  TextField(
-                    controller: ageCtrl,
-                    enabled: showParties,
-                    style: const TextStyle(color: Colors.white),
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: "Dein Alter (z. B. 16, 18, 21)",
-                      labelStyle: TextStyle(color: Colors.white70),
-                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white38)),
-                      focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
-                    ),
-                    onChanged: (_) {
-                      final val = int.tryParse(ageCtrl.text.trim());
-                      minAge = val;
-                    },
-                  ),
+                  _filterToggle("Nur offene Partys", onlyOpen, showParties ? (v) => setSB(() {
+                    onlyOpen = v;
+                    if (v) onlyClosed = false;
+                  }) : null),
+                  const SizedBox(height: 4),
+                  _filterToggle("Nur geschlossene Partys", onlyClosed, showParties ? (v) => setSB(() {
+                    onlyClosed = v;
+                    if (v) onlyOpen = false;
+                  }) : null),
+                  const SizedBox(height: 4),
+                  _filterToggle("Bars anzeigen", showBars, (v) => setSB(() => showBars = v)),
+                  const SizedBox(height: 4),
+                  _filterToggle("Nur gratis Partys", onlyFree, showParties ? (v) => setSB(() => onlyFree = v) : null),
+
+                  const Divider(color: Colors.white12, height: 28),
+
+                  // Age chips
+                  const Text("Mindestalter", style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: .5)),
                   const SizedBox(height: 8),
-                  TextField(
-                    controller: entryCtrl,
+                  chipRow<int?>(
+                    options: ageOptions,
+                    selected: minAge,
+                    label: (v) => v == null ? "Alle" : "$v+",
                     enabled: showParties,
-                    style: const TextStyle(color: Colors.white),
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: "Max. Eintritt (€)",
-                      labelStyle: TextStyle(color: Colors.white70),
-                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white38)),
-                      focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
-                    ),
-                    onChanged: (_) {
-                      final val = double.tryParse(entryCtrl.text.trim().replaceAll(',', '.'));
-                      maxEntry = val;
+                    onSelect: (v) => minAge = v,
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Entry chips
+                  const Text("Max. Eintritt", style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: .5)),
+                  const SizedBox(height: 8),
+                  chipRow<double?>(
+                    options: entryOptions,
+                    selected: maxEntry,
+                    label: (v) => v == null ? "Alle" : (v == 0 ? "Gratis" : "≤${v.toInt()}€"),
+                    enabled: showParties,
+                    onSelect: (v) {
+                      maxEntry = v;
+                      if (v == 0) onlyFree = true;
                     },
                   ),
-                  const SizedBox(height: 18),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      TextButton(
-                        onPressed: () {
-                          Navigator.of(ctx).pop(<String, dynamic>{'reset': true});
-                        },
-                        child: const Text("Zurücksetzen", style: TextStyle(color: Colors.white70)),
+
+                  const SizedBox(height: 24),
+
+                  // Action buttons
+                  Row(children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white54,
+                          side: const BorderSide(color: Colors.white24),
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        onPressed: () => Navigator.of(ctx).pop(<String, dynamic>{'reset': true}),
+                        child: const Text("Zurücksetzen", style: TextStyle(fontWeight: FontWeight.w600)),
                       ),
-                      ElevatedButton(
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _accent,
                           foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          elevation: 0,
                         ),
                         onPressed: () {
-                          final localMinAge = int.tryParse(ageCtrl.text.trim());
-                          final localMaxEntry = double.tryParse(entryCtrl.text.trim().replaceAll(',', '.'));
-
                           bool finalOnlyOpen = onlyOpen;
                           bool finalOnlyClosed = onlyClosed;
                           bool finalOnlyFree = onlyFree;
-
-                          int? finalMinAge = localMinAge;
-                          double? finalMaxEntry = localMaxEntry;
+                          int? finalMinAge = minAge;
+                          double? finalMaxEntry = maxEntry;
 
                           if (!showParties) {
                             finalOnlyOpen = false;
@@ -2257,10 +2281,7 @@ String _safeDocId(String input) => input
                             finalMinAge = null;
                             finalMaxEntry = null;
                           }
-
-                          if (finalOnlyOpen && finalOnlyClosed) {
-                            finalOnlyClosed = false;
-                          }
+                          if (finalOnlyOpen && finalOnlyClosed) finalOnlyClosed = false;
 
                           Navigator.of(ctx).pop(<String, dynamic>{
                             'showParties': showParties,
@@ -2273,10 +2294,10 @@ String _safeDocId(String input) => input
                             'reset': false,
                           });
                         },
-                        child: const Text("Übernehmen"),
+                        child: const Text("Übernehmen", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                       ),
-                    ],
-                  ),
+                    ),
+                  ]),
                 ],
               );
             },
@@ -2284,12 +2305,6 @@ String _safeDocId(String input) => input
         );
       },
     );
-
-    // Dismiss-Animation abwarten bevor dispose — sonst crash während Swipe
-    Future.delayed(const Duration(milliseconds: 400), () {
-      ageCtrl.dispose();
-      entryCtrl.dispose();
-    });
 
     if (result == null) return;
 
@@ -2304,6 +2319,7 @@ String _safeDocId(String input) => input
         _onlyClosedParties = false;
       });
       await _refreshMap();
+      if (mounted) await _showCenterSuccess("Filter zurückgesetzt");
       return;
     }
 
@@ -2626,6 +2642,21 @@ String _safeDocId(String input) => input
       if (mounted) setState(() => _isReloading = false);
     }
   }
+
+  static Widget _filterToggle(String label, bool value, void Function(bool)? onChanged) {
+    return SwitchListTile(
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+      value: value,
+      onChanged: onChanged,
+      activeColor: _accent,
+      title: Text(label, style: TextStyle(
+        color: onChanged != null ? Colors.white : Colors.white38,
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+      )),
+    );
+  }
 }
 
 class _SearchCard extends StatefulWidget {
@@ -2674,20 +2705,20 @@ class _SearchCardState extends State<_SearchCard> {
     final hasText = widget.controller.text.trim().isNotEmpty;
 
     return Container(
-      height: 46,
+      height: 44,
       decoration: BoxDecoration(
-        color: AppColors.panel.withValues(alpha: 0.95),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.accentBorder.withValues(alpha: 0.7)),
+        color: const Color(0xE6101318),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white12),
         boxShadow: const [
-          BoxShadow(color: Color(0x40000000), blurRadius: 20, offset: Offset(0, 6)),
+          BoxShadow(color: Color(0x50000000), blurRadius: 16, offset: Offset(0, 4)),
         ],
       ),
       child: Row(
         children: [
-          const SizedBox(width: 14),
-          const Icon(Icons.search_rounded, color: AppColors.muted, size: 20),
-          const SizedBox(width: 10),
+          const SizedBox(width: 16),
+          const Icon(Icons.search_rounded, color: AppColors.subtle, size: 18),
+          const SizedBox(width: 8),
           Expanded(
             child: TextField(
               controller: widget.controller,
@@ -2707,12 +2738,12 @@ class _SearchCardState extends State<_SearchCard> {
             GestureDetector(
               onTap: widget.onClear,
               child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Icon(Icons.close_rounded, color: AppColors.muted, size: 18),
+                padding: EdgeInsets.symmetric(horizontal: 14),
+                child: Icon(Icons.close_rounded, color: AppColors.subtle, size: 16),
               ),
             )
           else
-            const SizedBox(width: 14),
+            const SizedBox(width: 16),
         ],
       ),
     );

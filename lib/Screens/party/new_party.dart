@@ -962,10 +962,10 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
 
     widget.onGoToMapAndRefresh?.call(updated: updated, payload: payload);
 
-    Navigator.of(context).pop({
-      'updated': updated,
-      'payload': payload,
-    });
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const HomeShell(initialIndex: 2)),
+      (route) => false,
+    );
   }
 
 
@@ -1292,21 +1292,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       _priceController.text.replaceAll(',', '.').trim(),
     ) ?? 0.0;
 
-    // 🔥 Stripe nur bei kostenpflichtigen Events verlangen
-    if (price > 0) {
-      if (_stripeAccountId == null || !_detailsSubmitted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text(
-            "Für kostenpflichtige Events ist ein verifizierter Stripe Account nötig.",
-          ),
-          backgroundColor: AppColors.accent,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ));
-        return;
-      }
-    }
-
     setState(() => _isLoading = true);
 
     final name = _nameController.text.trim();
@@ -1580,64 +1565,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                     autovalidateMode: AutovalidateMode.onUserInteraction,
                     child: Column(
                       children: [
-                        if (!_checkingStripe)
-                          Container(
-                            margin: const EdgeInsets.only(bottom: 14),
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: _card,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: _stripeAccountId != null ? Colors.green : Colors.redAccent,
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  _stripeAccountId != null
-                                      ? Icons.check_circle
-                                      : Icons.warning,
-                                  color: _stripeAccountId != null
-                                      ? Colors.green
-                                      : Colors.redAccent,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    _stripeAccountId != null
-                                        ? "Stripe Account verbunden"
-                                        : "Stripe Account erforderlich um Tickets zu verkaufen",
-                                    style: const TextStyle(color: Colors.white),
-                                  ),
-                                ),
-                                if (_stripeAccountId == null)
-                                  TextButton(
-                                    onPressed: _createStripeAccount,
-                                    child: const Text(
-                                      "Erstellen",
-                                      style: TextStyle(color: Colors.redAccent),
-                                    ),
-                                  )
-                                else if (!_detailsSubmitted)
-                                  TextButton(
-                                    onPressed: _resumeOnboarding,
-                                    child: const Text(
-                                      "Onboarding fortsetzen",
-                                      style: TextStyle(color: Colors.orange),
-                                    ),
-                                  )
-                                else
-                                  TextButton(
-                                    onPressed: _openStripeDashboard,
-                                    child: const Text(
-                                      "Dashboard",
-                                      style: TextStyle(color: Colors.green),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-
                         _section(
                           title: "Basis",
                           icon: Icons.celebration_outlined,

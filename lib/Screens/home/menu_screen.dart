@@ -1085,15 +1085,23 @@ class LegalScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: _accent,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              color: _accent.withAlpha(30),
+              borderRadius: BorderRadius.circular(50),
+              border: Border.all(color: _accent.withAlpha(80)),
+            ),
+            child: Text(
+              title,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: _accent,
+              ),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 10),
           Text(
             content,
             style: const TextStyle(
@@ -1115,12 +1123,16 @@ class LegalScreen extends StatelessWidget {
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
-        title: const Text(
-          "Rechtliches",
-          style: TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-            color: _textPrimary,
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+          decoration: BoxDecoration(
+            color: _panel,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AppColors.accentBorder2, width: 1),
+          ),
+          child: const Text(
+            "Rechtliches",
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _textPrimary, letterSpacing: -0.2),
           ),
         ),
         leading: IconButton(
@@ -1291,7 +1303,6 @@ class SupportScreen extends StatelessWidget {
       path: 'mypartypin@gmail.com',
       query: 'subject=Support-Anfrage&body=Hallo, ich benoetige Hilfe zu ...',
     );
-
     if (!await launchUrl(emailLaunchUri)) {
       debugPrint('Konnte keine E-Mail oeffnen');
     }
@@ -1305,16 +1316,20 @@ class SupportScreen extends StatelessWidget {
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
-        title: const Text(
-          "Support",
-          style: TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-            color: _textPrimary,
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+          decoration: BoxDecoration(
+            color: _panel,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AppColors.accentBorder2, width: 1),
+          ),
+          child: const Text(
+            "Support",
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _textPrimary, letterSpacing: -0.2),
           ),
         ),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded),
           color: _accent,
           onPressed: () => Navigator.pop(context),
         ),
@@ -1327,54 +1342,82 @@ class SupportScreen extends StatelessWidget {
             end: Alignment.bottomCenter,
           ),
         ),
-        padding: const EdgeInsets.all(16),
-        child: Container(
-          decoration: BoxDecoration(
-            color: _panel,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.accentBorder),
-          ),
-          padding: const EdgeInsets.all(18),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              // Icon
+              Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: _panel,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.accentBorder2),
+                ),
+                child: const Icon(Icons.headset_mic_rounded, color: _accent, size: 34),
+              ),
+              const SizedBox(height: 20),
+
+              // Subtitle
               const Text(
-                "Support & Hilfe",
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: _accent,
+                "Schreib uns – wir melden uns\nso schnell wie möglich.",
+                style: TextStyle(color: _textSecondary, fontSize: 14, height: 1.6),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 32),
+
+              // Email row
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                decoration: BoxDecoration(
+                  color: _panel,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppColors.accentBorder2),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.alternate_email_rounded, color: _accent, size: 18),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        "mypartypin@gmail.com",
+                        style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w600, fontSize: 14),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _accent.withAlpha(25),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: const Text(
+                        "24–48h",
+                        style: TextStyle(color: _accent, fontSize: 11, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 10),
-              const Text(
-                "Solltest du Fragen haben oder Unterstuetzung brauchen, kontaktiere uns per E-Mail:",
-                style: TextStyle(color: _textSecondary),
-              ),
-              const SizedBox(height: 5),
-              const Text(
-                "mypartypin@gmail.com",
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: _accent,
-                ),
-              ),
-              const SizedBox(height: 24),
-              Center(
+              const SizedBox(height: 16),
+
+              // Button
+              SizedBox(
+                width: double.infinity,
                 child: ElevatedButton.icon(
                   onPressed: _sendEmail,
-                  icon: const Icon(Icons.email),
+                  icon: const Icon(Icons.send_rounded, size: 18),
                   label: const Text(
-                    "Support per E-Mail schreiben",
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                    "E-Mail schreiben",
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _accent,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    elevation: 0,
                   ),
                 ),
               ),

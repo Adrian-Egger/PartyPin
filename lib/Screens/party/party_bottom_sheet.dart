@@ -335,7 +335,7 @@ class PartyBottomSheet extends StatelessWidget {
                       const SizedBox(height: 10),
                       if (comingFriends.isEmpty && maybeFriends.isEmpty)
                         const Text(
-                          "Keine deiner Freunde sind hier aktuell in „Ich komme“ oder „Vielleicht“.",
+                          "Keine deiner Freunde sind hier aktuell in 'Ich komme' oder 'Vielleicht'.",
                           style: TextStyle(color: Colors.white70),
                         )
                       else ...[
@@ -469,8 +469,8 @@ class PartyBottomSheet extends StatelessWidget {
         const Text("Person ausladen?", style: TextStyle(color: Colors.white)),
         content: Text(
           isFriendsOnly
-              ? "Möchtest du „$cleanUser“ wirklich ausladen? Die Person wird aus allen Listen entfernt und bei dieser Only4Friends-Party ausgeschlossen."
-              : "Möchtest du „$cleanUser“ wirklich ausladen? Die Person wird aus allen Zusagen/Listen dieser Party entfernt.",
+              ? "Möchtest du \"$cleanUser\" wirklich ausladen? Die Person wird aus allen Listen entfernt und bei dieser Only4Friends-Party ausgeschlossen."
+              : "Möchtest du \"$cleanUser\" wirklich ausladen? Die Person wird aus allen Zusagen/Listen dieser Party entfernt.",
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -525,7 +525,7 @@ class PartyBottomSheet extends StatelessWidget {
         }
       });
 
-      showStatusSnack(context, "„$cleanUser“ wurde ausgeladen.", positive: true);
+      showStatusSnack(context, "\"$cleanUser\" wurde ausgeladen.", positive: true);
     } catch (e) {
       showStatusSnack(context, "Fehler beim Ausladen: $e", positive: false);
     }
@@ -552,7 +552,7 @@ class PartyBottomSheet extends StatelessWidget {
         final canRate = status == 'going' || status == 'maybe';
         if (!canRate) {
           return _pill(
-            "Bewerten erst möglich, wenn du „Ich komme“ oder „Ich komme eventuell“ gesetzt hast.",
+            "Bewerten erst möglich, wenn du \"Ich komme\" oder \"Ich komme eventuell\" gesetzt hast.",
             Colors.white70,
           );
         }
@@ -770,7 +770,7 @@ class PartyBottomSheet extends StatelessWidget {
     final IconData badgeIcon =
     isFriendsOnly ? Icons.group_rounded : (isClosed ? Icons.lock : Icons.public);
     final String badgeLabel =
-    isFriendsOnly ? "Only4Friends" : (isClosed ? "Closed" : "Open");
+    isFriendsOnly ? "👥 Only4Friends" : (isClosed ? "🔒 Closed" : "🌍 Open");
 
     Future<void> _confirmAndDeleteParty() async {
       final confirm = await showDialog<bool>(
@@ -834,149 +834,200 @@ class PartyBottomSheet extends StatelessWidget {
       }
     }
 
-    Widget infoRow(IconData ic, String label, String value) => Row(
-      children: [
-        Icon(ic, color: Colors.white70, size: 18),
-        const SizedBox(width: 8),
-        Text("$label: ",
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.w600)),
-        Expanded(
-            child: Text(value, style: const TextStyle(color: Colors.white70))),
-      ],
+    const _redIcon = Color(0xAAFF3B30);
+    const _redBorder = Color(0x22FF3B30);
+
+    Widget _chip(IconData icon, String label, String value) => Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1215),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _redBorder),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w500)),
+            const SizedBox(height: 4),
+            Row(children: [
+              Icon(icon, color: _redIcon, size: 13),
+              const SizedBox(width: 4),
+              Expanded(child: Text(value,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
+                overflow: TextOverflow.ellipsis)),
+            ]),
+          ],
+        ),
+      ),
     );
+
+    final minAge = (data['minAge']?.toString() ?? '').trim();
+    final price = data['price'];
+    final guestLimit = (data['guestLimit']?.toString() ?? '').trim();
+    final address = (data['address'] ?? '—').toString();
+    final description = (data['description'] ?? '').toString().trim();
 
     final Widget fullDetails = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _box(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              infoRow(Icons.event, "🗓️ Datum", formattedDate),
-              const SizedBox(height: 8),
-              infoRow(Icons.schedule, "⏰ Uhrzeit", (data['time'] ?? '—').toString()),
-              const SizedBox(height: 8),
-              infoRow(Icons.people, "👥 Gästelimit", (data['guestLimit'] ?? '—').toString()),
-              const SizedBox(height: 8),
-              infoRow(Icons.euro, "💶 Preis", "${(data['price'] ?? '—')}€"),
-              const SizedBox(height: 8),
-              infoRow(
-                Icons.cake_outlined,
-                "🔞 Mindestalter",
-                ((data['minAge']?.toString() ?? '').isEmpty ? '—' : data['minAge'].toString()),
-              ),
-              const SizedBox(height: 8),
-              infoRow(Icons.place, "📍 Adresse", (data['address'] ?? '—').toString()),
-            ],
+        Row(children: [
+          _chip(Icons.calendar_today_rounded, "📅  Datum", formattedDate),
+          const SizedBox(width: 8),
+          _chip(Icons.schedule_rounded, "🕐  Uhrzeit", (data['time'] ?? '—').toString()),
+        ]),
+        const SizedBox(height: 8),
+        Row(children: [
+          _chip(Icons.euro_rounded, "💶  Eintritt",
+              price == null || price == 0 ? "Gratis" : "${price}€"),
+          const SizedBox(width: 8),
+          _chip(Icons.cake_outlined, "🎂  Alter", minAge.isEmpty ? '—' : '${minAge}+'),
+          const SizedBox(width: 8),
+          _chip(Icons.group_rounded, "👥  Limit", guestLimit.isEmpty ? '∞' : guestLimit),
+        ]),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1215),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _redBorder),
           ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.location_on_rounded, color: _redIcon, size: 14),
+            const SizedBox(width: 6),
+            Expanded(child: Text(address,
+                style: const TextStyle(color: Colors.white70, fontSize: 13))),
+          ]),
         ),
-        const SizedBox(height: 12),
-        if ((data['description'] ?? '').toString().trim().isNotEmpty)
-          _box(
-            child: Text(
-              "📝 Beschreibung:\n${data['description']}",
-              style: const TextStyle(color: Colors.white70, height: 1.35),
+        if (description.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1215),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _redBorder),
             ),
+            child: Text(description,
+                style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5)),
           ),
+        ],
       ],
     );
 
-    final Widget closedPartial = _box(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          infoRow(Icons.event, "🗓️ Datum", formattedDate),
-          const SizedBox(height: 8),
-          infoRow(
-            Icons.cake_outlined,
-            "🔞 Mindestalter",
-            ((data['minAge']?.toString() ?? '').isEmpty ? '—' : data['minAge'].toString()),
+    final Widget closedPartial = Column(
+      children: [
+        Row(children: [
+          _chip(Icons.calendar_today_rounded, "📅  Datum", formattedDate),
+          const SizedBox(width: 8),
+          _chip(Icons.cake_outlined, "🎂  Alter", minAge.isEmpty ? '—' : '${minAge}+'),
+        ]),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1215),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _redBorder),
           ),
-          const SizedBox(height: 12),
-          const Text(
-            "Weitere Details sind verborgen, bis der Host dich zulässt.",
-            style: TextStyle(color: Colors.white54, fontStyle: FontStyle.italic),
-          ),
-        ],
-      ),
+          child: const Row(children: [
+            Icon(Icons.lock_outline_rounded, color: _redIcon, size: 14),
+            SizedBox(width: 8),
+            Expanded(child: Text(
+              "Weitere Details werden nach Freigabe sichtbar.",
+              style: TextStyle(color: Colors.white38, fontSize: 12, fontStyle: FontStyle.italic),
+            )),
+          ]),
+        ),
+      ],
     );
 
     return AppDraggableSheet(
-      panelColor: Colors.grey[900]!,
-      borderColor: Colors.grey[800]!,
+      panelColor: const Color(0xFF120D0F),
+      borderColor: const Color(0xFF2E1A1F),
       childBuilder: (context, scrollController) {
         return ListView(
           controller: scrollController,
           padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
           children: [
+            // Party name – full width, no competition with badge
+            Text(
+              (data['name'] ?? (isClosed ? "Geschlossene Party" : "Party")).toString(),
+              style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+            const SizedBox(height: 8),
+            // Badge + Host in same row
             Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Expanded(
-                  child: Text(
-                    (data['name'] ?? (isClosed ? "Geschlossene Party" : "Party")).toString(),
-                    style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
                       color: badgeColor, borderRadius: BorderRadius.circular(999)),
                   child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(badgeIcon, color: Colors.white, size: 16),
-                      const SizedBox(width: 6),
-                      Text(
-                        badgeLabel,
-                        style: const TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.w600),
-                      ),
+                      Icon(badgeIcon, color: Colors.white, size: 14),
+                      const SizedBox(width: 5),
+                      Text(badgeLabel,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13)),
                     ],
                   ),
+                ),
+                const SizedBox(width: 8),
+                FutureBuilder<bool>(
+                  future: isUserVerified(hostNameStr),
+                  builder: (context, snap) {
+                    final isVerified = snap.data == true;
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2A1018),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: const Color(0x44FF3B30)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isVerified) ...[
+                            const Icon(Icons.verified_rounded, color: Color(0xFFFF3B30), size: 14),
+                            const SizedBox(width: 5),
+                          ] else ...[
+                            const Text("🎤", style: TextStyle(fontSize: 12)),
+                            const SizedBox(width: 5),
+                          ],
+                          Text("$hostLabel",
+                              style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13)),
+                        ],
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            FutureBuilder<bool>(
-              future: isUserVerified(hostNameStr),
-              builder: (context, snap) {
-                final isVerified = snap.data == true;
-                return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                      color: Colors.indigo[700],
-                      borderRadius: BorderRadius.circular(12)),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (isVerified) ...[
-                        const Icon(Icons.verified, color: Colors.white, size: 18),
-                        const SizedBox(width: 8),
-                      ],
-                      Text("Host: $hostLabel",
-                          style: const TextStyle(
-                              color: Colors.white, fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 16),
             if (isFriendsOnly)
               _pill("👥 Nur für Freunde sichtbar.", Colors.deepPurpleAccent)
             else if (isClosed && !canSeeFull)
               _pill("🔒 Geschlossene Party – nur Datum & Mindestalter sichtbar.",
                   Colors.redAccent)
             else if (isClosed && canSeeFull)
-                _pill("✅ Zugriff freigegeben – alle Details sichtbar.",
-                    Colors.lightGreenAccent),
+              _pill("✅ Zugriff freigegeben – alle Details sichtbar.",
+                  Colors.lightGreenAccent),
             const SizedBox(height: 16),
             if (canSeeFull) fullDetails else closedPartial,
             if (canSeeFull) ...[
@@ -986,7 +1037,7 @@ class PartyBottomSheet extends StatelessWidget {
             const SizedBox(height: 14),
             _friendsGoingPremiumSection(context),
             const SizedBox(height: 20),
-            const Divider(color: Color(0x33FFFFFF)),
+            const Divider(color: Color(0x33FF3B30)),
             const SizedBox(height: 12),
             if (isHost) ...[
               if (isClosed && !isFriendsOnly)
@@ -994,42 +1045,40 @@ class PartyBottomSheet extends StatelessWidget {
               else
                 _hostOpenLists(context),
               const SizedBox(height: 16),
-              Center(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(50),
-                        backgroundColor: Colors.orangeAccent,
-                        foregroundColor: Colors.white,
-                      ),
-                      child: const Text("Bearbeiten", style: TextStyle(fontSize: 18)),
-                      onPressed: () async {
-                        await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                NewPartyScreen(existingData: data, docId: partyId),
-                          ),
-                        );
-                        await onEditedParty();
-                      },
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orangeAccent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      elevation: 0,
                     ),
-                    const SizedBox(height: 8),
-                    TextButton.icon(
-                      style: TextButton.styleFrom(
-                        minimumSize: const Size.fromHeight(46),
-                        foregroundColor: Colors.redAccent,
-                      ),
-                      onPressed: _confirmAndDeleteParty,
-                      icon: const Icon(Icons.delete_forever, color: Colors.redAccent),
-                      label: const Text("Party löschen",
-                          style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                    icon: const Icon(Icons.edit_rounded, size: 18),
+                    label: const Text("Party bearbeiten", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                    onPressed: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => NewPartyScreen(existingData: data, docId: partyId),
+                        ),
+                      );
+                      await onEditedParty();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.redAccent,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
-                  ],
-                ),
+                    onPressed: _confirmAndDeleteParty,
+                    icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                    label: const Text("Party löschen", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                ],
               ),
             ]
             else ...[
@@ -1062,18 +1111,12 @@ class PartyBottomSheet extends StatelessWidget {
               _ratingGate(context),
 
               if (isActive) ...[
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
+                const SizedBox(height: 8),
+                TextButton.icon(
                   onPressed: onReport,
-                  icon: const Icon(Icons.flag, color: Colors.redAccent),
-                  label: const Text(
-                    "Party melden",
-                    style: TextStyle(color: Colors.redAccent),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.redAccent),
-                    minimumSize: const Size.fromHeight(44),
-                  ),
+                  icon: const Icon(Icons.flag_outlined, size: 15, color: Colors.redAccent),
+                  label: const Text("Melden", style: TextStyle(color: Colors.redAccent, fontSize: 13)),
+                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 10)),
                 ),
               ],
             ],
@@ -1132,64 +1175,64 @@ class PartyBottomSheet extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
-            backgroundColor: isGoing ? Colors.green : Colors.redAccent,
-            foregroundColor: Colors.white,
+        Row(children: [
+          Expanded(
+            child: _rsvpBtn(
+              label: "Ich komme",
+              icon: Icons.check_circle_rounded,
+              active: isGoing,
+              activeColor: Colors.green,
+              onTap: () async {
+                if (currentUsername == null) return;
+                try {
+                  if (isGoing) {
+                    await onClearRsvp();
+                    if (!context.mounted) return;
+                    showStatusSnack(context, "Zusage zurückgezogen.", positive: true);
+                    recolorOpenMarker(null);
+                  } else {
+                    await onSetRsvp('going');
+                    if (!context.mounted) return;
+                    showStatusSnack(context, "Ich komme ✅", positive: true);
+                    recolorOpenMarker('going');
+                  }
+                } catch (e) {
+                  if (!context.mounted) return;
+                  showStatusSnack(context, "Fehler: $e", positive: false);
+                }
+              },
+            ),
           ),
-          onPressed: () async {
-            if (currentUsername == null) return;
-            try {
-              if (isGoing) {
-                await onClearRsvp();
-                if (!context.mounted) return;
-                showStatusSnack(context, "Zusage zurückgezogen.", positive: true);
-                recolorOpenMarker(null);
-              } else {
-                await onSetRsvp('going');
-                if (!context.mounted) return;
-                showStatusSnack(context, "Status: Ich komme ✅", positive: true);
-                recolorOpenMarker('going');
-              }
-            } catch (e) {
-              if (!context.mounted) return;
-              showStatusSnack(context, "Fehler: $e", positive: false);
-            }
-          },
-          icon: const Icon(Icons.check_circle),
-          label: const Text("Ich komme"),
-        ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _rsvpBtn(
+              label: "Vielleicht",
+              icon: Icons.help_outline_rounded,
+              active: isMaybe,
+              activeColor: Colors.orangeAccent,
+              onTap: () async {
+                if (currentUsername == null) return;
+                try {
+                  if (isMaybe) {
+                    await onClearRsvp();
+                    if (!context.mounted) return;
+                    showStatusSnack(context, "Vielleicht zurückgezogen.", positive: true);
+                    recolorOpenMarker(null);
+                  } else {
+                    await onSetRsvp('maybe');
+                    if (!context.mounted) return;
+                    showStatusSnack(context, "Ich komme eventuell 👍", positive: true);
+                    recolorOpenMarker('maybe');
+                  }
+                } catch (e) {
+                  if (!context.mounted) return;
+                  showStatusSnack(context, "Fehler: $e", positive: false);
+                }
+              },
+            ),
+          ),
+        ]),
         const SizedBox(height: 10),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
-            backgroundColor: isMaybe ? Colors.green : Colors.redAccent,
-            foregroundColor: Colors.white,
-          ),
-          onPressed: () async {
-            if (currentUsername == null) return;
-            try {
-              if (isMaybe) {
-                await onClearRsvp();
-                if (!context.mounted) return;
-                showStatusSnack(context, "„Vielleicht“ zurückgezogen.", positive: true);
-                recolorOpenMarker(null);
-              } else {
-                await onSetRsvp('maybe');
-                if (!context.mounted) return;
-                showStatusSnack(context, "Status: Ich komme eventuell 👍", positive: true);
-                recolorOpenMarker('maybe');
-              }
-            } catch (e) {
-              if (!context.mounted) return;
-              showStatusSnack(context, "Fehler: $e", positive: false);
-            }
-          },
-          icon: const Icon(Icons.help_outline),
-          label: const Text("Ich komme eventuell"),
-        ),
-        const SizedBox(height: 16),
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: comingStream(),
           builder: (context, cs) {
@@ -1198,12 +1241,55 @@ class PartyBottomSheet extends StatelessWidget {
               builder: (context, ms) {
                 final cCount = (cs.data?.docs ?? []).length;
                 final mCount = (ms.data?.docs ?? []).length;
-                return _counter("🔔 $cCount kommen · $mCount vielleicht");
+                return Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[850],
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey[700]!),
+                  ),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.people_rounded, color: Colors.white38, size: 14),
+                    const SizedBox(width: 6),
+                    Text("$cCount kommen  ·  $mCount vielleicht",
+                        style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                  ]),
+                );
               },
             );
           },
         ),
       ],
+    );
+  }
+
+  Widget _rsvpBtn({
+    required String label,
+    required IconData icon,
+    required bool active,
+    required Color activeColor,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 13),
+        decoration: BoxDecoration(
+          color: active ? activeColor.withAlpha(40) : Colors.grey[850],
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: active ? activeColor : Colors.grey[700]!),
+        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(icon, color: active ? activeColor : Colors.white54, size: 16),
+          const SizedBox(width: 6),
+          Text(label, style: TextStyle(
+            color: active ? activeColor : Colors.white70,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+          )),
+        ]),
+      ),
     );
   }
 
@@ -1316,39 +1402,62 @@ class PartyBottomSheet extends StatelessWidget {
             if (status == 'approved') {
               SchedulerBinding.instance
                   .addPostFrameCallback((_) => setClosedLockIcon('approved'));
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const ListTile(
-                    leading: Icon(Icons.check_circle, color: Colors.greenAccent),
-                    title: Text("Zugang genehmigt – Details freigeschaltet.",
-                        style: TextStyle(color: Colors.white)),
-                    subtitle: Text("Du kannst jetzt alle Infos sehen.",
-                        style: TextStyle(color: Colors.white70)),
-                  ),
-                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: FirebaseFirestore.instance
-                        .collection('Party')
-                        .doc(partyId)
-                        .collection('approved')
-                        .snapshots(),
-                    builder: (context, snap) {
-                      final count = snap.data?.docs.length ?? 0;
-                      return _counter("🔔 $count zugelassen");
-                    },
-                  ),
-                ],
+              return Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.green.withAlpha(20),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.greenAccent.withAlpha(80)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 28),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("Zugang genehmigt",
+                              style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w700, fontSize: 15)),
+                          SizedBox(height: 3),
+                          Text("Du kannst jetzt alle Party-Details sehen.",
+                              style: TextStyle(color: Colors.white70, fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               );
             }
 
             // declined
             SchedulerBinding.instance
                 .addPostFrameCallback((_) => setClosedLockIcon('declined'));
-            return const ListTile(
-              leading: Icon(Icons.cancel, color: Colors.redAccent),
-              title: Text("Anfrage abgelehnt", style: TextStyle(color: Colors.white)),
-              subtitle: Text("Du kannst den Host direkt kontaktieren.",
-                  style: TextStyle(color: Colors.white70)),
+            return Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.red.withAlpha(20),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.redAccent.withAlpha(80)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.cancel_rounded, color: Colors.redAccent, size: 28),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text("Anfrage abgelehnt",
+                            style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w700, fontSize: 15)),
+                        SizedBox(height: 3),
+                        Text("Du kannst den Host direkt kontaktieren.",
+                            style: TextStyle(color: Colors.white70, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             );
           },
         );
@@ -1359,7 +1468,113 @@ class PartyBottomSheet extends StatelessWidget {
   // ---------- Host-Listen ----------
   Widget _hostClosedLists(BuildContext context) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ── Offene Anfragen ──
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('Party')
+              .doc(partyId)
+              .collection('requests')
+              .where('status', isEqualTo: 'pending')
+              .orderBy('timestamp', descending: true)
+              .snapshots(),
+          builder: (context, reqsSnap) {
+            final docs = reqsSnap.data?.docs ?? [];
+            return _boxed(Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.orangeAccent.withAlpha(30),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.orangeAccent.withAlpha(80)),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.pending_actions, color: Colors.orangeAccent, size: 14),
+                      const SizedBox(width: 6),
+                      Text("Anfragen (${docs.length})",
+                          style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700, fontSize: 13)),
+                    ]),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+                if (docs.isEmpty)
+                  const Text("Keine offenen Anfragen.", style: TextStyle(color: Colors.white54, fontSize: 13))
+                else
+                  ...docs.map((d) {
+                    final user = d.data()['username']?.toString() ?? 'Unbekannt';
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[850],
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.grey[700]!),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.person_rounded, color: Colors.white54, size: 16),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  user,
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.green,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(vertical: 10),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    elevation: 0,
+                                  ),
+                                  onPressed: () => onUpdateRequestStatus(user, 'approved'),
+                                  child: const Text("Zulassen", style: TextStyle(fontWeight: FontWeight.w700)),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.redAccent,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(vertical: 10),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    elevation: 0,
+                                  ),
+                                  onPressed: () => onUpdateRequestStatus(user, 'declined'),
+                                  child: const Text("Ablehnen", style: TextStyle(fontWeight: FontWeight.w700)),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            );
+          },
+        ),
+
+        const SizedBox(height: 12),
+
+        // ── Zugelassene ──
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
               .collection('Party')
@@ -1371,126 +1586,58 @@ class PartyBottomSheet extends StatelessWidget {
             final names = (apprSnap.data?.docs ?? [])
                 .map((d) => d.data()['username']?.toString() ?? 'Unbekannt')
                 .toList();
-            return _bigList(
-              "✅ Zugelassen",
-              Icons.verified_user,
-              Colors.lightGreenAccent,
-              names,
-              Icons.verified_user,
-              Colors.lightGreenAccent,
-                  (user) => _confirmKickUser(context, user),
-            );
-          },
-        ),
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('Party')
-              .doc(partyId)
-              .collection('requests')
-              .orderBy('timestamp', descending: true)
-              .snapshots(),
-          builder: (context, reqsSnap) {
-            final docs = reqsSnap.data?.docs ?? [];
-            if (docs.isEmpty) {
-              return _boxed(const Text("Keine Anfragen.",
-                  style: TextStyle(color: Colors.white70)));
-            }
-            return _boxed(
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: const [
-                    Icon(Icons.pending_actions, color: Colors.orangeAccent, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      "🛎️ Zugangs-Anfragen",
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800),
+            return _boxed(Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.greenAccent.withAlpha(30),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.greenAccent.withAlpha(80)),
                     ),
-                  ]),
-                  const SizedBox(height: 10),
-                  ...docs.map((d) {
-                    final m = d.data();
-                    final user = m['username']?.toString() ?? 'Unbekannt';
-                    final status = (m['status']?.toString() ?? 'pending');
-
-                    Color statusColor = status == 'approved'
-                        ? Colors.lightGreenAccent
-                        : status == 'declined'
-                        ? Colors.redAccent
-                        : Colors.orangeAccent;
-
-                    return Container(
-                      padding: const EdgeInsets.all(12),
-                      margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.grey[850],
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: Colors.grey[700]!),
-                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  user,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 18,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text("Status: $status",
-                                    style: TextStyle(color: statusColor)),
-                              ],
-                            ),
-                          ),
-                          if (status == 'pending') ...[
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green,
-                                  foregroundColor: Colors.white),
-                              onPressed: () => onUpdateRequestStatus(user, 'approved'),
-                              child: const Text("Zulassen"),
-                            ),
-                            const SizedBox(width: 8),
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent,
-                                  foregroundColor: Colors.white),
-                              onPressed: () => onUpdateRequestStatus(user, 'declined'),
-                              child: const Text("Ablehnen"),
-                            ),
-                          ] else if (status == 'declined') ...[
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green,
-                                  foregroundColor: Colors.white),
-                              onPressed: () => onUpdateRequestStatus(user, 'approved'),
-                              child: const Text("Zulassen"),
-                            ),
-                          ] else ...[
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.redAccent,
-                                  foregroundColor: Colors.white),
-                              onPressed: () => onUpdateRequestStatus(user, 'declined'),
-                              child: const Text("Ablehnen"),
-                            ),
-                          ],
-                        ],
-                      ),
-                    );
-                  }),
-                ],
-              ),
-            );
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 14),
+                      const SizedBox(width: 6),
+                      Text("Zugelassen (${names.length})",
+                          style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w700, fontSize: 13)),
+                    ]),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+                if (names.isEmpty)
+                  const Text("Noch niemand zugelassen.", style: TextStyle(color: Colors.white54, fontSize: 13))
+                else
+                  ...names.map((u) => Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    margin: const EdgeInsets.only(bottom: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[850],
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey[700]!),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.verified_user_rounded, color: Colors.greenAccent, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(u,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        IconButton(
+                          tooltip: "Ausladen",
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.close_rounded, color: Colors.redAccent, size: 18),
+                          onPressed: () => _confirmKickUser(context, u),
+                        ),
+                      ],
+                    ),
+                  )),
+              ],
+            ));
           },
         ),
       ],
