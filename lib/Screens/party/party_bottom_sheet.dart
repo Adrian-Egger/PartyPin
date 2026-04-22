@@ -29,6 +29,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'new_party.dart';
 import '../../Services/app_draggable_sheet.dart';
 import '../profile/premium_screen.dart';
+import '../../Social/friends_model.dart';
+import '../../Theme/app_theme.dart';
 
 typedef VoidAsync = Future<void> Function();
 typedef StringAsync = Future<void> Function(String value);
@@ -1106,6 +1108,18 @@ class PartyBottomSheet extends StatelessWidget {
               else
                 _guestClosedActions(context),
 
+              // 🔥 3️⃣ Host als Freund hinzufügen
+              if (currentUsername != null &&
+                  (data['hostId'] ?? '').toString().trim().isNotEmpty &&
+                  currentUsername!.trim() !=
+                      (data['hostId'] ?? '').toString().trim()) ...[
+                const SizedBox(height: 10),
+                _HostFriendButton(
+                  myUsername: currentUsername!,
+                  hostUsername: (data['hostId'] ?? '').toString().trim(),
+                ),
+              ],
+
               const SizedBox(height: 12),
 
               _ratingGate(context),
@@ -1477,10 +1491,17 @@ class PartyBottomSheet extends StatelessWidget {
               .doc(partyId)
               .collection('requests')
               .where('status', isEqualTo: 'pending')
-              .orderBy('timestamp', descending: true)
               .snapshots(),
           builder: (context, reqsSnap) {
-            final docs = reqsSnap.data?.docs ?? [];
+            final docs = (reqsSnap.data?.docs ?? [])
+              ..sort((a, b) {
+                final ta = a.data()['timestamp'];
+                final tb = b.data()['timestamp'];
+                if (ta is Timestamp && tb is Timestamp) {
+                  return tb.compareTo(ta);
+                }
+                return 0;
+              });
             return _boxed(Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1911,6 +1932,129 @@ class PartyBottomSheet extends StatelessWidget {
               );
             }),
         ],
+      ),
+    );
+  }
+}
+
+// ── Host-Freundschaftsanfrage ─────────────────────────────────────────────────
+
+class _HostFriendButton extends StatefulWidget {
+  final String myUsername;
+  final String hostUsername;
+
+  const _HostFriendButton({
+    required this.myUsername,
+    required this.hostUsername,
+  });
+
+  @override
+  State<_HostFriendButton> createState() => _HostFriendButtonState();
+}
+
+class _HostFriendButtonState extends State<_HostFriendButton> {
+  final _model = FriendsModel();
+  RelStatus? _status;
+  bool _loading = true;
+  bool _sending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStatus();
+  }
+
+  Future<void> _loadStatus() async {
+    try {
+      await _model.loadMyDocId(widget.myUsername);
+      final s = await _model.relationWith(widget.myUsername, widget.hostUsername);
+      if (mounted) setState(() { _status = s; _loading = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _sendRequest() async {
+    if (_sending) return;
+    setState(() => _sending = true);
+    try {
+      final qs = await FirebaseFirestore.instance
+          .collection('users')
+          .where('username', isEqualTo: widget.hostUsername)
+          .limit(1)
+          .get();
+      if (qs.docs.isEmpty) throw Exception('User nicht gefunden');
+
+      final err = await _model.sendRequest(
+        me: widget.myUsername,
+        target: widget.hostUsername,
+        targetDoc: qs.docs.first.id,
+      );
+      if (err != null) throw Exception(err);
+
+      if (mounted) {
+        setState(() => _status = RelStatus.outgoingPending);
+        showStatusSnack(context, 'Freundschaftsanfrage gesendet!', positive: true);
+      }
+    } catch (e) {
+      if (mounted) showStatusSnack(context, 'Fehler: $e', positive: false);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const SizedBox.shrink();
+
+    final isPending = _status == RelStatus.outgoingPending;
+    final isIncoming = _status == RelStatus.incomingPending;
+    final isFriends = _status == RelStatus.friends;
+
+    if (isFriends) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.success.withAlpha(20),
+          borderRadius: AppRadius.smBr,
+          border: Border.all(color: AppColors.success.withAlpha(60)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.check_circle_rounded, color: AppColors.success, size: 16),
+            SizedBox(width: 8),
+            Text('Du bist mit dem Host befreundet', style: TextStyle(color: AppColors.success, fontSize: 13, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      );
+    }
+
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(46),
+        foregroundColor: isPending || isIncoming ? AppColors.subtle : AppColors.text,
+        side: BorderSide(
+          color: isPending || isIncoming ? AppColors.accentBorder : AppColors.accentBorder2,
+        ),
+      ),
+      onPressed: (isPending || isIncoming || _sending) ? null : _sendRequest,
+      icon: _sending
+          ? const SizedBox(
+              width: 16, height: 16,
+              child: CircularProgressIndicator(color: AppColors.subtle, strokeWidth: 2),
+            )
+          : Icon(
+              isPending ? Icons.hourglass_top_rounded
+                  : isIncoming ? Icons.person_rounded
+                  : Icons.person_add_rounded,
+              size: 17,
+            ),
+      label: Text(
+        isPending ? 'Anfrage gesendet'
+            : isIncoming ? 'Hat dich hinzugefügt'
+            : 'Host hinzufügen',
+        style: const TextStyle(fontSize: 14),
       ),
     );
   }

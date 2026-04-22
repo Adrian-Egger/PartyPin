@@ -1,12 +1,12 @@
 // lib/Screens/selection_screen.dart
 import 'package:flutter/material.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'home_shell.dart';
 import '../../Theme/app_theme.dart';
 import '../../l10n/lang.dart';
+import '../../Services/geocoding_services.dart';
 
 class SelectionScreen extends StatefulWidget {
   const SelectionScreen({super.key});
@@ -116,40 +116,46 @@ class _SelectionScreenState extends State<SelectionScreen> {
 
     setState(() => _isSearching = true);
 
-    String city = _enteredCity.trim();
+    // Original-Eingabe für Anzeige behalten (mit Umlauten)
+    final originalCity = _enteredCity.trim();
 
-    // einfache Alias-Mappings
-    switch (city.toLowerCase()) {
-      case 'wien':
-        city = 'Vienna';
-        break;
-      case 'linz':
-        city = 'Linz';
-        break;
-      case 'graz':
-        city = 'Graz';
-        break;
+    // Für Geocoding: Alias-Mapping (nur intern, nicht für Anzeige)
+    String geocodeCity = originalCity;
+    switch (geocodeCity.toLowerCase()) {
+      case 'wien':    geocodeCity = 'Vienna'; break;
+      case 'linz':    geocodeCity = 'Linz';   break;
+      case 'graz':    geocodeCity = 'Graz';   break;
     }
 
     try {
-      final locations = await locationFromAddress("$city, $_selectedCountry");
-      if (locations.isEmpty) {
+      // GeocodingService hat Umlaut-Fallback (ü→ue etc.)
+      final loc = await GeocodingService.getBestLocationNear(
+        "$geocodeCity, $_selectedCountry",
+      );
+
+      if (loc == null) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-          content: Text(Lang.t('selection_city_not_found')),
-          backgroundColor: AppColors.accent,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
+            content: Text(Lang.t('selection_city_not_found')),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
         );
         setState(() => _isSearching = false);
         return;
       }
 
-      final lat = locations.first.latitude;
-      final lng = locations.first.longitude;
+      final lat = loc.latitude;
+      final lng = loc.longitude;
 
-      await _saveUserSelection(city, _selectedCountry, lat, lng);
+      // Originalname mit Umlaut speichern, erster Buchstabe groß
+      final displayCity = originalCity.isEmpty
+          ? geocodeCity
+          : originalCity[0].toUpperCase() + originalCity.substring(1);
+
+      await _saveUserSelection(displayCity, _selectedCountry, lat, lng);
 
       if (!mounted) return;
       Navigator.pushReplacement(

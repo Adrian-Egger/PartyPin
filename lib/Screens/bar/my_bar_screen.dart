@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../Services/timestamp_ext.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
@@ -138,7 +139,7 @@ class _MyBarBodyState extends State<_MyBarBody> {
   // ---------------- data helpers ----------------
 
   DateTime? _readDate(dynamic v) {
-    if (v is Timestamp) return v.toDate();
+    if (v is Timestamp) return v.toLocalDateTime();
     if (v is String) return DateTime.tryParse(v);
     if (v is DateTime) return v;
     return null;

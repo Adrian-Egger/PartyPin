@@ -13,6 +13,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geocoding/geocoding.dart' as geocoding;
 import '../../Theme/app_theme.dart';
+import '../../Services/timestamp_ext.dart';
 
 class AdminCreateBarScreen extends StatefulWidget {
   const AdminCreateBarScreen({Key? key}) : super(key: key);
@@ -95,7 +96,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   String formatTimestamp(dynamic value) {
     if (value == null) return '';
     if (value is Timestamp) {
-      final dt = value.toDate();
+      final dt = value.toLocalDateTime();
       return "${dt.day.toString().padLeft(2, '0')}."
           "${dt.month.toString().padLeft(2, '0')}."
           "${dt.year}  "
@@ -1050,7 +1051,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
       final data = doc.data();
       final ts = data['startTime'] as Timestamp?;
       if (ts == null) return false;
-      final start = ts.toDate();
+      final start = ts.toLocalDateTime();
       return !start.isAfter(now);
     }).length;
 
@@ -1396,8 +1397,8 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         DateTime? aT;
         DateTime? bT;
 
-        if (aUpd is Timestamp) aT = aUpd.toDate();
-        if (bUpd is Timestamp) bT = bUpd.toDate();
+        if (aUpd is Timestamp) aT = aUpd.toLocalDateTime();
+        if (bUpd is Timestamp) bT = bUpd.toLocalDateTime();
 
         if (aT != null && bT != null) return bT.compareTo(aT);
 
@@ -1644,7 +1645,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     String _fmtTs(dynamic v) {
       if (v == null) return "";
       if (v is Timestamp) {
-        final dt = v.toDate();
+        final dt = v.toLocalDateTime();
         return "${two(dt.day)}.${two(dt.month)}.${dt.year} ${two(dt.hour)}:${two(dt.minute)}";
       }
       return v.toString().trim();
@@ -1653,7 +1654,7 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     String _fmtDateOnly(dynamic v) {
       if (v == null) return "";
       if (v is Timestamp) {
-        final dt = v.toDate();
+        final dt = v.toLocalDateTime();
         return "${two(dt.day)}.${two(dt.month)}.${dt.year}";
       }
       if (v is DateTime) {

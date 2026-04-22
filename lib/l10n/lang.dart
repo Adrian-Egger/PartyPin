@@ -44,6 +44,7 @@ class Lang {
     'no': 'Nein',
 
     // Navigation
+    'nav_chat': 'Chat',
     'nav_feedback': 'Feedback',
     'nav_friends': 'Freunde',
     'nav_map': 'Map',
@@ -268,6 +269,7 @@ class Lang {
     'no': 'No',
 
     // Navigation
+    'nav_chat': 'Chat',
     'nav_feedback': 'Feedback',
     'nav_friends': 'Friends',
     'nav_map': 'Map',

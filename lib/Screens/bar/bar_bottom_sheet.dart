@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../Services/app_draggable_sheet.dart';
+import '../../Services/timestamp_ext.dart';
 import 'bar_event_screen.dart';
 import '../../Theme/app_theme.dart';
 
@@ -130,9 +131,9 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
   }
 
   DateTime? _readDate(dynamic v) {
-    if (v is Timestamp) return v.toDate();
-    if (v is String) return DateTime.tryParse(v);
-    if (v is DateTime) return v;
+    if (v is Timestamp) return v.toLocalDateTime();
+    if (v is String) return DateTime.tryParse(v)?.toLocal();
+    if (v is DateTime) return v.toLocal();
     return null;
   }
 
@@ -412,7 +413,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
         DateTime? eventDateTime;
         final rawDate = barDataForUi['eventDate'];
         if (rawDate is Timestamp) {
-          eventDateTime = rawDate.toDate();
+          eventDateTime = rawDate.toLocalDateTime();
         } else if (rawDate is String) {
           eventDateTime = DateTime.tryParse(rawDate);
         }
@@ -444,7 +445,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
         DateTime? eventVisibleFrom;
         final rawVisibleFrom = barDataForUi['eventVisibleFrom'];
         if (rawVisibleFrom is Timestamp) {
-          eventVisibleFrom = rawVisibleFrom.toDate();
+          eventVisibleFrom = rawVisibleFrom.toLocalDateTime();
         } else if (rawVisibleFrom is String) {
           eventVisibleFrom = DateTime.tryParse(rawVisibleFrom);
         }
@@ -452,7 +453,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
         DateTime? eventCleanupAt;
         final rawCleanupAt = barDataForUi['eventCleanupAt'];
         if (rawCleanupAt is Timestamp) {
-          eventCleanupAt = rawCleanupAt.toDate();
+          eventCleanupAt = rawCleanupAt.toLocalDateTime();
         } else if (rawCleanupAt is String) {
           eventCleanupAt = DateTime.tryParse(rawCleanupAt);
         }
@@ -1297,7 +1298,7 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     // cleanupAt bevorzugt (aus Firestore), sonst fallback 12h
     DateTime? cleanupAt;
     final rawCleanupAt = eventData['eventCleanupAt'];
-    if (rawCleanupAt is Timestamp) cleanupAt = rawCleanupAt.toDate();
+    if (rawCleanupAt is Timestamp) cleanupAt = rawCleanupAt.toLocalDateTime();
     if (rawCleanupAt is String) cleanupAt = DateTime.tryParse(rawCleanupAt);
     cleanupAt ??= start.add(const Duration(hours: 12));
 
@@ -1508,9 +1509,9 @@ class EventBottomSheet extends StatelessWidget {
   });
 
   DateTime? _readDate(dynamic v) {
-    if (v is Timestamp) return v.toDate();
-    if (v is String) return DateTime.tryParse(v);
-    if (v is DateTime) return v;
+    if (v is Timestamp) return v.toLocalDateTime();
+    if (v is String) return DateTime.tryParse(v)?.toLocal();
+    if (v is DateTime) return v.toLocal();
     return null;
   }
 
@@ -1521,9 +1522,9 @@ class EventBottomSheet extends StatelessWidget {
     DateTime? eventDateTime;
     final rawDate = eventData['eventDate']; // ✅ rawDate behalten!
     if (rawDate is Timestamp) {
-      eventDateTime = rawDate.toDate();
+      eventDateTime = rawDate.toLocalDateTime();
     } else if (rawDate is String) {
-      eventDateTime = DateTime.tryParse(rawDate);
+      eventDateTime = DateTime.tryParse(rawDate)?.toLocal();
     }
 
     final String eventTitle = (eventData['eventTitle'] ?? '').toString().trim();
@@ -2516,7 +2517,7 @@ class BarFeedbackStream extends StatelessWidget {
               final comment = (data['comment'] ?? '').toString().trim();
               final createdAt = data['createdAt'] as Timestamp?;
               final dateStr = createdAt != null
-                  ? '${createdAt.toDate().day.toString().padLeft(2, '0')}.${createdAt.toDate().month.toString().padLeft(2, '0')}.${createdAt.toDate().year}'
+                  ? () { final d = createdAt.toLocalDateTime(); return '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}'; }()
                   : '';
 
               final bool anonymous = data['anonymous'] == true;

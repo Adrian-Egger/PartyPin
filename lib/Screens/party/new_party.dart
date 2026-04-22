@@ -26,6 +26,7 @@ import 'exclude_friends.dart';
 // ✅ HomeShell (WICHTIG für BottomNav!)
 import '../home/home_shell.dart';
 import '../../Theme/app_theme.dart';
+import '../../Services/timestamp_ext.dart';
 import '../../l10n/lang.dart';
 
 class NewPartyScreen extends StatefulWidget {
@@ -255,13 +256,13 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     _addressController.text = (data['address'] ?? '').toString();
 
     if (data['startTime'] is Timestamp) {
-      final dt = (data['startTime'] as Timestamp).toDate();
+      final dt = (data['startTime'] as Timestamp).toLocalDateTime();
       _selectedDate = DateTime(dt.year, dt.month, dt.day);
       _selectedTime = TimeOfDay(hour: dt.hour, minute: dt.minute);
       _timeController.text = "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
     } else {
       if (data['date'] is Timestamp) {
-        final d = (data['date'] as Timestamp).toDate();
+        final d = (data['date'] as Timestamp).toLocalDateTime();
         _selectedDate = DateTime(d.year, d.month, d.day);
       }
       if (data['time'] != null) {
@@ -885,26 +886,39 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       });
 
       try {
-        final placemarks = await geo.placemarkFromCoordinates(picked.latitude, picked.longitude);
+        final placemarks = await geo.placemarkFromCoordinates(
+            picked.latitude, picked.longitude);
+
         if (placemarks.isNotEmpty) {
           final p = placemarks.first;
-          final street = [p.street, p.subThoroughfare].where((e) => e != null && e.trim().isNotEmpty).join(' ');
-          final city = p.locality ?? p.subAdministrativeArea ?? '';
-          final postal = p.postalCode ?? '';
-          final country = p.country ?? '';
+
+          String street = (p.street ?? '').trim();
+          String number = (p.subThoroughfare ?? '').trim();
+
+          // ❌ verhindert doppelte Hausnummer (z.B. "96 96")
+          if (number.isNotEmpty && street.contains(number)) {
+            number = '';
+          }
+
+          final fullStreet = [street, number]
+              .where((e) => e.isNotEmpty)
+              .join(' ');
+
+          final city = (p.locality ?? p.subAdministrativeArea ?? '').trim();
+          final postal = (p.postalCode ?? '').trim();
+          final country = (p.country ?? '').trim();
 
           final addrParts = [
-            street.trim(),
-            [postal, city].where((e) => e.trim().isNotEmpty).join(' '),
-            country.trim(),
-          ].where((e) => e.trim().isNotEmpty).toList();
+            fullStreet,
+            [postal, city].where((e) => e.isNotEmpty).join(' '),
+            country,
+          ].where((e) => e.isNotEmpty).toList();
 
           if (addrParts.isNotEmpty) {
             _addressController.text = addrParts.join(', ');
           }
         }
       } catch (_) {}
-
       HapticFeedback.lightImpact();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: const Text("Standort übernommen"),
@@ -932,7 +946,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   }
 
   String _slugifyPartyName(String name) {
-    final lower = name.toLowerCase().trim();
+    final lower = name.toLowerCase().trim()
+        .replaceAll('ä', 'ae').replaceAll('ö', 'oe').replaceAll('ü', 'ue')
+        .replaceAll('ß', 'ss');
     final spaceToUnderscore = lower.replaceAll(RegExp(r'\s+'), '_');
     final cleaned = spaceToUnderscore.replaceAll(RegExp(r'[^a-z0-9_\-]'), '_');
     final trimmed = cleaned.replaceAll(RegExp(r'^_+'), '').replaceAll(RegExp(r'_+$'), '');

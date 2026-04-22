@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../Services/timestamp_ext.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -213,7 +214,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
   // ----------------------------
 
   DateTime? _readDate(dynamic v) {
-    if (v is Timestamp) return v.toDate();
+    if (v is Timestamp) return v.toLocalDateTime();
     if (v is String) return DateTime.tryParse(v);
     return null;
   }

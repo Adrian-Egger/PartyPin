@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    match /bars/{barId} {
+      allow read, write: if true;
+      match /{sub}/{docId} {
+        allow read, write: if true;
+      }
+    }
+
+    match /Party/{partyId} {
+      allow read, write: if true;
+      match /{sub}/{docId} {
+        allow read, write: if true;
+      }
+    }
+
+    match /chats/{chatId} {
+      allow read, write: if true;
+      match /messages/{messageId} {
+        allow read, write: if true;
+      }
+    }
+
+    match /friendRequests/{docId} {
+      allow read, write: if true;
+    }
+
+    match /friendships/{docId} {
+      allow read, write: if true;
+    }
+
+    match /Meldungen/{docId} {
+      allow read, write: if true;
+    }
+
+    match /reports/{docId} {
+      allow read, write: if true;
+    }
+
+    match /reportedFeedback/{docId} {
+      allow read, write: if true;
+    }
+
+    match /partyRatings/{docId} {
+      allow read, write: if true;
+    }
+
+    match /ratings/{docId} {
+      allow read, write: if true;
+    }
+
+    match /events/{docId} {
+      allow read, write: if true;
+    }
+
+    match /feedbacks/{docId} {
+      allow read, write: if true;
+    }
+
+    match /feedback_quota/{docId} {
+      allow read, write: if true;
+    }
+  }
+}

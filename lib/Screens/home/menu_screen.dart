@@ -14,6 +14,7 @@ import '../party/access_parties_screen.dart';
 // Passe den Importpfad an, falls deine Datei anders heisst:
 import 'home_shell.dart';
 import '../../Theme/app_theme.dart';
+import '../../Services/timestamp_ext.dart';
 
 // =======================
 // APPLE UGC 1.2 SETTINGS
@@ -401,142 +402,316 @@ class AdminReportsScreen extends StatelessWidget {
     }, SetOptions(merge: true));
   }
 
+  void _showReportDetail(BuildContext context, String reportId, Map<String, dynamic> r) {
+    final reason = (r['reason'] ?? '').toString();
+    final details = (r['details'] ?? '').toString();
+    final type = (r['type'] ?? '').toString();
+    final reporter = (r['reporterUsername'] ?? '').toString();
+    final reported = (r['reportedUsername'] ?? '').toString();
+    final targetType = (r['targetType'] ?? '').toString();
+    final targetId = (r['targetId'] ?? '').toString();
+    final contentPath = (r['contentPath'] ?? '').toString();
+
+    final createdAt = r['createdAt'];
+    DateTime? dt;
+    if (createdAt is Timestamp) dt = createdAt.toLocalDateTime();
+
+    String _fmt(DateTime d) {
+      final pad = (int n) => n.toString().padLeft(2, '0');
+      return '${pad(d.day)}.${pad(d.month)}.${d.year}  ${pad(d.hour)}:${pad(d.minute)}';
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.92,
+        builder: (_, ctrl) => Container(
+          decoration: const BoxDecoration(
+            color: _panel,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 10),
+              Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.accentBorder,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: ListView(
+                  controller: ctrl,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  children: [
+                    // Header
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            "Report${type.isEmpty ? "" : " · $type"}",
+                            style: const TextStyle(
+                              color: _accent,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 20,
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: Colors.orange.withOpacity(0.4)),
+                          ),
+                          child: const Text(
+                            "offen",
+                            style: TextStyle(color: Colors.orange, fontSize: 12, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+
+                    // Info rows
+                    _detailRow(Icons.person_outline_rounded, "Gemeldet von", reporter.isEmpty ? "—" : reporter),
+                    _detailRow(Icons.gpp_bad_outlined, "Gemeldeter User", reported.isEmpty ? "—" : reported),
+                    if (targetType.isNotEmpty)
+                      _detailRow(Icons.category_outlined, "Typ", targetType),
+                    if (targetId.isNotEmpty && targetId != reported)
+                      _detailRow(Icons.tag_rounded, "Ziel-ID", targetId),
+                    if (dt != null)
+                      _detailRow(Icons.access_time_rounded, "Zeitpunkt", _fmt(dt)),
+                    if (contentPath.isNotEmpty)
+                      _detailRow(Icons.link_rounded, "Content-Pfad", contentPath),
+
+                    const SizedBox(height: 16),
+                    const Divider(color: AppColors.accentBorder),
+                    const SizedBox(height: 12),
+
+                    // Reason
+                    const Text(
+                      "Grund",
+                      style: TextStyle(color: _textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      reason.isEmpty ? "Kein Grund angegeben" : reason,
+                      style: const TextStyle(color: _textPrimary, fontSize: 15, height: 1.4),
+                    ),
+
+                    // Details / Notiz
+                    if (details.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      const Text(
+                        "Notiz des Users",
+                        style: TextStyle(color: _textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.panel,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.accentBorder),
+                        ),
+                        child: Text(
+                          details,
+                          style: const TextStyle(color: _textPrimary, fontSize: 14, height: 1.5),
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 24),
+
+                    // Action buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: contentPath.isEmpty
+                                ? null
+                                : () async {
+                              await _hideContent(contentPath);
+                              await _closeReport(reportId: reportId, action: "hidden", moderatorUsername: kAdminUsername);
+                              if (sheetCtx.mounted) {
+                                Navigator.pop(sheetCtx);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: const Text("Content versteckt + Report geschlossen"),
+                                    backgroundColor: AppColors.success,
+                                    behavior: SnackBarBehavior.floating,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                );
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _accent,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: const Text("Hide Content"),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: reported.isEmpty
+                                ? null
+                                : () async {
+                              await _banUser(reported);
+                              await _closeReport(reportId: reportId, action: "banned", moderatorUsername: kAdminUsername);
+                              if (sheetCtx.mounted) {
+                                Navigator.pop(sheetCtx);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: const Text("User gebannt + Report geschlossen"),
+                                    backgroundColor: AppColors.success,
+                                    behavior: SnackBarBehavior.floating,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                );
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white,
+                              foregroundColor: _accent,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: const Text("User ban"),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: () async {
+                          await _closeReport(reportId: reportId, action: "none", moderatorUsername: kAdminUsername);
+                          if (sheetCtx.mounted) {
+                            Navigator.pop(sheetCtx);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: const Text("Report geschlossen"),
+                                backgroundColor: AppColors.panel,
+                                behavior: SnackBarBehavior.floating,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                            );
+                          }
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _textPrimary,
+                          side: const BorderSide(color: AppColors.accentBorder),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: const Text("Schließen ohne Aktion"),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _detailRow(IconData icon, String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 15, color: _accent),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: const TextStyle(color: _textSecondary, fontSize: 11, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(value, style: const TextStyle(color: _textPrimary, fontSize: 13)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+
   Widget _reportCard(BuildContext context, String reportId, Map<String, dynamic> r) {
     final reason = (r['reason'] ?? '').toString();
     final type = (r['type'] ?? '').toString();
     final reporter = (r['reporterUsername'] ?? '').toString();
     final reported = (r['reportedUsername'] ?? '').toString();
-    final contentPath = (r['contentPath'] ?? '').toString();
+    final details = (r['details'] ?? '').toString();
 
     final createdAt = r['createdAt'];
     DateTime? dt;
-    if (createdAt is Timestamp) dt = createdAt.toDate();
+    if (createdAt is Timestamp) dt = createdAt.toLocalDateTime();
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: _panel,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.accentBorder),
-      ),
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "Report${type.isEmpty ? "" : " ($type)"}",
-            style: const TextStyle(color: _accent, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            "Von: ${reporter.isEmpty ? "-" : reporter}  •  Gegen: ${reported.isEmpty ? "-" : reported}",
-            style: const TextStyle(color: _textSecondary),
-          ),
-          if (dt != null)
+    return GestureDetector(
+      onTap: () => _showReportDetail(context, reportId, r),
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: _panel,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.accentBorder),
+        ),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    "Report${type.isEmpty ? "" : " ($type)"}",
+                    style: const TextStyle(color: _accent, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded, color: _textSecondary, size: 18),
+              ],
+            ),
+            const SizedBox(height: 6),
             Text(
-              "Zeit: ${dt.toLocal()}",
+              "Von: ${reporter.isEmpty ? "-" : reporter}  •  Gegen: ${reported.isEmpty ? "-" : reported}",
               style: const TextStyle(color: _textSecondary),
             ),
-          const SizedBox(height: 8),
-          Text(
-            reason.isEmpty ? "Kein Grund angegeben" : reason,
-            style: const TextStyle(color: _textPrimary, height: 1.3),
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: contentPath.isEmpty
-                      ? null
-                      : () async {
-                    await _hideContent(contentPath);
-                    await _closeReport(
-                      reportId: reportId,
-                      action: "hidden",
-                      moderatorUsername: kAdminUsername,
-                    );
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Text("Content versteckt + Report geschlossen"),
-                          backgroundColor: AppColors.success,
-                          behavior: SnackBarBehavior.floating,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                      );
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _accent,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                  child: const Text("Hide Content"),
-                ),
+            if (dt != null)
+              Text(
+                "Zeit: ${dt.toLocal()}",
+                style: const TextStyle(color: _textSecondary, fontSize: 12),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: reported.isEmpty
-                      ? null
-                      : () async {
-                    await _banUser(reported);
-                    await _closeReport(
-                      reportId: reportId,
-                      action: "banned",
-                      moderatorUsername: kAdminUsername,
-                    );
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Text("User gebannt + Report geschlossen"),
-                          backgroundColor: AppColors.success,
-                          behavior: SnackBarBehavior.floating,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                      );
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: _accent,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                  child: const Text("User ban"),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () async {
-                    await _closeReport(
-                      reportId: reportId,
-                      action: "none",
-                      moderatorUsername: kAdminUsername,
-                    );
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Text("Report geschlossen"),
-                          backgroundColor: AppColors.panel,
-                          behavior: SnackBarBehavior.floating,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                      );
-                    }
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _textPrimary,
-                    side: const BorderSide(color: AppColors.accentBorder),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                  child: const Text("Close"),
-                ),
+            const SizedBox(height: 6),
+            Text(
+              reason.isEmpty ? "Kein Grund angegeben" : reason,
+              style: const TextStyle(color: _textPrimary, height: 1.3),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (details.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                "Notiz: $details",
+                style: const TextStyle(color: _textSecondary, fontSize: 12, fontStyle: FontStyle.italic),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

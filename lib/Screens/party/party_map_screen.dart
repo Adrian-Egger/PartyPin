@@ -17,6 +17,7 @@ import '../../Services/geocoding_services.dart';
 import '../../Social/friends_model.dart';
 import '../bar/bar_bottom_sheet.dart';
 import '../../Theme/app_theme.dart';
+import '../../Services/timestamp_ext.dart';
 import 'party_bottom_sheet.dart';
 
 class PartyMapScreen extends StatefulWidget {
@@ -111,6 +112,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   int? _minAgeFilter;
   double? _maxEntryFilter;
   bool _onlyFree = false;
+  double? _radiusKm = 25.0;
 
   // Party-Typ Filter
   bool _onlyClosedParties = false;
@@ -764,9 +766,9 @@ String _safeDocId(String input) => input
     DateTime? dt;
     final raw = bar['eventDate'];
     if (raw is Timestamp) {
-      dt = raw.toDate();
+      dt = raw.toLocalDateTime();
     } else if (raw is String) {
-      dt = DateTime.tryParse(raw);
+      dt = DateTime.tryParse(raw)?.toLocal();
     }
     if (dt == null) return false;
 
@@ -841,11 +843,21 @@ String _safeDocId(String input) => input
     return null;
   }
 
+  double _haversineKm(double lat1, double lng1, double lat2, double lng2) {
+    const R = 6371.0;
+    final dLat = (lat2 - lat1) * pi / 180;
+    final dLng = (lng2 - lng1) * pi / 180;
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) *
+            sin(dLng / 2) * sin(dLng / 2);
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a));
+  }
+
   DateTime? _partyStart(Map<String, dynamic> d) {
     DateTime? base;
     final v = d['date'];
     if (v is Timestamp) {
-      base = v.toDate();
+      base = v.toLocalDateTime();
     } else if (v is String) {
       base = DateTime.tryParse(v);
     }
@@ -1068,6 +1080,14 @@ String _safeDocId(String input) => input
         if (pos == null) continue;
 
         // =============================
+        // 📍 Radius-Filter
+        // =============================
+        if (_radiusKm != null) {
+          final distKm = _haversineKm(_currentLat, _currentLng, pos.latitude, pos.longitude);
+          if (distKm > _radiusKm!) continue;
+        }
+
+        // =============================
         // 🌍 friends-only Sichtbarkeit
         // =============================
         final visibility = (data['visibility'] ?? 'public').toString();
@@ -1181,7 +1201,7 @@ String _safeDocId(String input) => input
 
         // Event abgelaufen -> zurücksetzen
         if (data['eventActive'] == true && data['eventDate'] is Timestamp) {
-          final dt = (data['eventDate'] as Timestamp).toDate();
+          final dt = (data['eventDate'] as Timestamp).toLocalDateTime();
           final start = dt.subtract(const Duration(hours: 1));
           if (now.isAfter(start.add(const Duration(hours: _barEventHoursAfter)))) {
             FirebaseFirestore.instance.collection('bars').doc(doc.id).set(
@@ -1200,6 +1220,11 @@ String _safeDocId(String input) => input
 
         final pos = _parseLatLng(data);
         if (pos == null) continue;
+
+        if (_radiusKm != null) {
+          final distKm = _haversineKm(_currentLat, _currentLng, pos.latitude, pos.longitude);
+          if (distKm > _radiusKm!) continue;
+        }
 
         final barName = (data['barName'] ?? 'Bar').toString();
         final imageUrl = (data['profileImageUrl'] ?? '').toString().trim();
@@ -1625,7 +1650,7 @@ String _safeDocId(String input) => input
 
     DateTime? date;
     if (data['date'] is Timestamp) {
-      date = (data['date'] as Timestamp).toDate();
+      date = (data['date'] as Timestamp).toLocalDateTime();
     }
     final formattedDate =
     date != null ? "${date.day}. ${_monthName(date.month)} ${date.year}" : "";
@@ -1738,6 +1763,26 @@ String _safeDocId(String input) => input
     _openPartyStatus[partyId] = _normOpenStatus(status);
     _openPartyIsHost[partyId] = isHost;
     _setOpenMarkerColor(partyId, status: status, isHost: isHost);
+
+    // Push-Benachrichtigung an den Host
+    try {
+      final partyName = (data?['name'] ?? 'Party').toString();
+      final hostUsername =
+          ((data?['hostId'] ?? data?['hostUid']) ?? '').toString().trim();
+      if (hostUsername.isNotEmpty && hostUsername != username) {
+        final normStatus = _normOpenStatus(status);
+        await FirebaseFunctions.instanceFor(region: 'europe-west1')
+            .httpsCallable('sendPushNotification')
+            .call({
+          'toUsername': hostUsername,
+          'title': normStatus == 'going' ? '🎉 Neuer Gast' : '🤔 Vielleicht',
+          'body': normStatus == 'going'
+              ? '$username kommt zu deiner Party "$partyName"!'
+              : '$username kommt vielleicht zu deiner Party "$partyName".',
+          'data': {'partyId': partyId, 'type': 'rsvp_${normStatus ?? status}'},
+        });
+      }
+    } catch (_) {} // best-effort
   }
 
   Future<void> _clearRsvp(String partyId, String username) async {
@@ -1774,6 +1819,23 @@ String _safeDocId(String input) => input
     _openPartyStatus[partyId] = 'pending';
     _openPartyIsHost[partyId] = isHost;
     _setOpenMarkerColor(partyId, status: 'pending', isHost: isHost);
+
+    // Push-Benachrichtigung an den Host
+    try {
+      final partyName = (data?['name'] ?? 'Party').toString();
+      final hostUsername =
+          ((data?['hostId'] ?? data?['hostUid']) ?? '').toString().trim();
+      if (hostUsername.isNotEmpty && hostUsername != username) {
+        await FirebaseFunctions.instanceFor(region: 'europe-west1')
+            .httpsCallable('sendPushNotification')
+            .call({
+          'toUsername': hostUsername,
+          'title': '🔔 Neue Beitrittsanfrage',
+          'body': '$username möchte deiner Party "$partyName" beitreten.',
+          'data': {'partyId': partyId, 'type': 'join_request'},
+        });
+      }
+    } catch (_) {} // best-effort
   }
 
   Future<void> _updateRequestStatus(String partyId, String username, String status) async {
@@ -2099,14 +2161,14 @@ String _safeDocId(String input) => input
     bool onlyFree = _onlyFree;
     int? minAge = _minAgeFilter;
     double? maxEntry = _maxEntryFilter;
-
     bool onlyOpen = _onlyOpenParties;
     bool onlyClosed = _onlyClosedParties;
+    double? radius = _radiusKm;
 
-    // Age chips: null = Alle, 16, 18, 21
-    const ageOptions = <int?>[null, 16, 18, 21];
-    // Entry chips: null = Alle, 0 = Gratis, 5, 10, 20
-    const entryOptions = <double?>[null, 0, 5, 10, 20];
+    // Slider-Werte (für wenn der Slider aktiv ist)
+    double sliderAge = (minAge ?? 18).toDouble();
+    double sliderEntry = maxEntry ?? 20.0;
+    double sliderRadius = radius ?? 10.0;
 
     final result = await showModalBottomSheet<Map<String, dynamic>?>(
       context: context,
@@ -2116,9 +2178,12 @@ String _safeDocId(String input) => input
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
       builder: (ctx) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          child: StatefulBuilder(
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.7,
+          minChildSize: 0.5,
+          maxChildSize: 0.95,
+          builder: (_, scrollCtrl) => StatefulBuilder(
             builder: (ctx, setSB) {
               void turnOffPartySubFiltersIfNeeded() {
                 if (!showParties) {
@@ -2130,65 +2195,122 @@ String _safeDocId(String input) => input
                 }
               }
 
-              Widget chipRow<T>({
-                required List<T> options,
-                required T selected,
-                required String Function(T) label,
+              // ── Slider-Sektion ──────────────────────────────────────────
+              Widget filterSlider({
+                required String label,
+                required bool active,
+                required String activeLabel,
+                required String allLabel,
+                required double value,
+                required double min,
+                required double max,
+                required int divisions,
                 required bool enabled,
-                required void Function(T) onSelect,
+                required VoidCallback onActivate,
+                required VoidCallback onDeactivate,
+                required ValueChanged<double> onChanged,
               }) {
-                return Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: options.map((opt) {
-                    final active = opt == selected;
-                    return GestureDetector(
-                      onTap: enabled ? () => setSB(() => onSelect(opt)) : null,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 180),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: active ? _accent.withOpacity(0.18) : Colors.grey[800],
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(
-                            color: active ? _accent : Colors.white24,
-                            width: active ? 1.5 : 1,
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(label, style: const TextStyle(
+                          color: Colors.white54, fontSize: 12,
+                          fontWeight: FontWeight.w600, letterSpacing: .5,
+                        )),
+                        const Spacer(),
+                        GestureDetector(
+                          onTap: enabled
+                              ? () => setSB(() => active ? onDeactivate() : onActivate())
+                              : null,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 160),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: active
+                                  ? _accent.withOpacity(0.18)
+                                  : Colors.grey[800],
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: active ? _accent : Colors.white24,
+                                width: active ? 1.5 : 1,
+                              ),
+                            ),
+                            child: Text(
+                              active ? activeLabel : allLabel,
+                              style: TextStyle(
+                                color: active
+                                    ? _accent
+                                    : (enabled ? Colors.white60 : Colors.white24),
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
                           ),
                         ),
-                        child: Text(
-                          label(opt),
-                          style: TextStyle(
-                            color: active ? _accent : (enabled ? Colors.white70 : Colors.white30),
-                            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                            fontSize: 13,
+                      ],
+                    ),
+                    if (active) ...[
+                      const SizedBox(height: 4),
+                      SliderTheme(
+                        data: SliderTheme.of(ctx).copyWith(
+                          activeTrackColor: _accent,
+                          thumbColor: _accent,
+                          inactiveTrackColor: Colors.white12,
+                          overlayColor: _accent.withOpacity(0.15),
+                          trackHeight: 3,
+                        ),
+                        child: TweenAnimationBuilder<double>(
+                          tween: Tween<double>(end: value),
+                          duration: const Duration(milliseconds: 380),
+                          curve: Curves.easeOut,
+                          builder: (_, animVal, __) => Slider(
+                            value: animVal.clamp(min, max),
+                            min: min,
+                            max: max,
+                            divisions: divisions,
+                            onChanged: enabled ? (v) => setSB(() => onChanged(v)) : null,
                           ),
                         ),
                       ),
-                    );
-                  }).toList(),
+                    ],
+                  ],
                 );
               }
 
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+              return ListView(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
                 children: [
-                  // Header
-                  Row(children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  // Handle
+                  Center(
+                    child: Container(
+                      width: 36, height: 4,
+                      margin: const EdgeInsets.only(bottom: 16),
                       decoration: BoxDecoration(
-                        color: Colors.grey[850],
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: Colors.white24),
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2),
                       ),
-                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.filter_list_rounded, color: Colors.white, size: 16),
-                        SizedBox(width: 6),
-                        Text("Filter", style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-                      ]),
                     ),
-                  ]),
+                  ),
+
+                  // Header
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[850],
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.filter_list_rounded, color: Colors.white, size: 16),
+                      SizedBox(width: 6),
+                      Text("Filter", style: TextStyle(
+                        color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700,
+                      )),
+                    ]),
+                  ),
                   const SizedBox(height: 20),
 
                   // Toggles
@@ -2209,38 +2331,70 @@ String _safeDocId(String input) => input
                   const SizedBox(height: 4),
                   _filterToggle("Bars anzeigen", showBars, (v) => setSB(() => showBars = v)),
                   const SizedBox(height: 4),
-                  _filterToggle("Nur gratis Partys", onlyFree, showParties ? (v) => setSB(() => onlyFree = v) : null),
+                  _filterToggle("Nur gratis Partys", onlyFree, showParties ? (v) => setSB(() {
+                    onlyFree = v;
+                    if (v) { maxEntry = 0; sliderEntry = 0; } else if (maxEntry == 0) { maxEntry = null; }
+                  }) : null),
 
-                  const Divider(color: Colors.white12, height: 28),
+                  const Divider(color: Colors.white12, height: 32),
 
-                  // Age chips
-                  const Text("Mindestalter", style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: .5)),
-                  const SizedBox(height: 8),
-                  chipRow<int?>(
-                    options: ageOptions,
-                    selected: minAge,
-                    label: (v) => v == null ? "Alle" : "$v+",
+                  // ── Mindestalter Slider ──────────────────────────────────
+                  filterSlider(
+                    label: "MINDESTALTER",
+                    active: minAge != null,
+                    activeLabel: "max. ${sliderAge.toInt()}+",
+                    allLabel: "Alle",
+                    value: sliderAge,
+                    min: 14,
+                    max: 30,
+                    divisions: 16,
                     enabled: showParties,
-                    onSelect: (v) => minAge = v,
+                    onActivate: () { minAge = sliderAge.toInt(); },
+                    onDeactivate: () { minAge = null; },
+                    onChanged: (v) { sliderAge = v; minAge = v.toInt(); },
                   ),
 
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 20),
 
-                  // Entry chips
-                  const Text("Max. Eintritt", style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: .5)),
-                  const SizedBox(height: 8),
-                  chipRow<double?>(
-                    options: entryOptions,
-                    selected: maxEntry,
-                    label: (v) => v == null ? "Alle" : (v == 0 ? "Gratis" : "≤${v.toInt()}€"),
+                  // ── Max. Eintritt Slider ─────────────────────────────────
+                  filterSlider(
+                    label: "MAX. EINTRITT",
+                    active: maxEntry != null,
+                    activeLabel: maxEntry == 0 ? "Gratis" : "≤ ${sliderEntry.toInt()} €",
+                    allLabel: "Alle",
+                    value: sliderEntry,
+                    min: 0,
+                    max: 100,
+                    divisions: 20,
                     enabled: showParties,
-                    onSelect: (v) {
+                    onActivate: () { maxEntry = sliderEntry; },
+                    onDeactivate: () { maxEntry = null; onlyFree = false; },
+                    onChanged: (v) {
+                      sliderEntry = v;
                       maxEntry = v;
-                      if (v == 0) onlyFree = true;
+                      onlyFree = (v == 0);
                     },
                   ),
 
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 20),
+
+                  // ── Umkreis Slider ───────────────────────────────────────
+                  filterSlider(
+                    label: "UMKREIS  ${_currentCity.toUpperCase()}",
+                    active: radius != null,
+                    activeLabel: "≤ ${sliderRadius.toInt()} km",
+                    allLabel: "Kein Limit",
+                    value: sliderRadius,
+                    min: 1,
+                    max: 50,
+                    divisions: 49,
+                    enabled: true,
+                    onActivate: () { radius = sliderRadius; },
+                    onDeactivate: () { radius = null; },
+                    onChanged: (v) { sliderRadius = v; radius = v; },
+                  ),
+
+                  const SizedBox(height: 28),
 
                   // Action buttons
                   Row(children: [
@@ -2291,10 +2445,13 @@ String _safeDocId(String input) => input
                             'maxEntry': finalMaxEntry,
                             'onlyOpen': finalOnlyOpen,
                             'onlyClosed': finalOnlyClosed,
+                            'radiusKm': radius,
                             'reset': false,
                           });
                         },
-                        child: const Text("Übernehmen", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                        child: const Text("Übernehmen", style: TextStyle(
+                          fontWeight: FontWeight.w700, fontSize: 15,
+                        )),
                       ),
                     ),
                   ]),
@@ -2317,6 +2474,7 @@ String _safeDocId(String input) => input
         _maxEntryFilter = null;
         _onlyOpenParties = false;
         _onlyClosedParties = false;
+        _radiusKm = 25.0;
       });
       await _refreshMap();
       if (mounted) await _showCenterSuccess("Filter zurückgesetzt");
@@ -2326,13 +2484,12 @@ String _safeDocId(String input) => input
     setState(() {
       _showParties = result['showParties'] as bool? ?? _showParties;
       _showBars = result['showBars'] as bool? ?? _showBars;
-
       _onlyFree = result['onlyFree'] as bool? ?? _onlyFree;
       _minAgeFilter = result['minAge'] as int?;
       _maxEntryFilter = result['maxEntry'] as double?;
-
       _onlyOpenParties = result['onlyOpen'] as bool? ?? _onlyOpenParties;
       _onlyClosedParties = result['onlyClosed'] as bool? ?? _onlyClosedParties;
+      _radiusKm = result['radiusKm'] as double?;
 
       if (!_showParties) {
         _onlyOpenParties = false;
@@ -2341,10 +2498,7 @@ String _safeDocId(String input) => input
         _minAgeFilter = null;
         _maxEntryFilter = null;
       }
-
-      if (_onlyOpenParties && _onlyClosedParties) {
-        _onlyClosedParties = false;
-      }
+      if (_onlyOpenParties && _onlyClosedParties) _onlyClosedParties = false;
     });
 
     await _refreshMap();
@@ -2705,24 +2859,24 @@ class _SearchCardState extends State<_SearchCard> {
     final hasText = widget.controller.text.trim().isNotEmpty;
 
     return Container(
-      height: 44,
+      height: 46,
       decoration: BoxDecoration(
-        color: const Color(0xE6101318),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white12),
-        boxShadow: const [
-          BoxShadow(color: Color(0x50000000), blurRadius: 16, offset: Offset(0, 4)),
-        ],
+        color: AppColors.panelAlt,
+        borderRadius: AppRadius.smBr,
+        border: Border.all(
+          color: hasText ? AppColors.accentBorder3 : AppColors.accentBorder,
+          width: 1,
+        ),
       ),
       child: Row(
         children: [
-          const SizedBox(width: 16),
-          const Icon(Icons.search_rounded, color: AppColors.subtle, size: 18),
+          const SizedBox(width: 12),
+          const Icon(Icons.search_rounded, color: AppColors.subtle, size: 20),
           const SizedBox(width: 8),
           Expanded(
             child: TextField(
               controller: widget.controller,
-              style: const TextStyle(color: AppColors.text, fontSize: 14, fontWeight: FontWeight.w500),
+              style: const TextStyle(color: AppColors.text, fontSize: 14),
               textInputAction: TextInputAction.search,
               onSubmitted: widget.onSearch,
               decoration: const InputDecoration(
@@ -2730,7 +2884,6 @@ class _SearchCardState extends State<_SearchCard> {
                 hintStyle: TextStyle(color: AppColors.subtle, fontSize: 14),
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: EdgeInsets.zero,
               ),
             ),
           ),
@@ -2738,12 +2891,12 @@ class _SearchCardState extends State<_SearchCard> {
             GestureDetector(
               onTap: widget.onClear,
               child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 14),
-                child: Icon(Icons.close_rounded, color: AppColors.subtle, size: 16),
+                padding: EdgeInsets.symmetric(horizontal: 10),
+                child: Icon(Icons.close_rounded, color: AppColors.subtle, size: 18),
               ),
             )
           else
-            const SizedBox(width: 16),
+            const SizedBox(width: 12),
         ],
       ),
     );

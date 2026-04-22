@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../l10n/lang.dart';
 import '../home/home_shell.dart';
 import '../../Theme/app_theme.dart';
+import '../../Services/timestamp_ext.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Status
@@ -110,7 +111,7 @@ class _AccessPartiesScreenState extends State<AccessPartiesScreen> {
   DateTime? _startOf(Map<String, dynamic> d) {
     DateTime? base;
     final v = d['date'];
-    if (v is Timestamp) base = v.toDate();
+    if (v is Timestamp) base = v.toLocalDateTime();
     if (v is String) base = DateTime.tryParse(v);
     if (base == null) return null;
     final t = (d['time'] ?? '').toString().split(':');
@@ -541,56 +542,87 @@ class _PartyDetailSheet extends StatelessWidget {
                   ),
                   const SizedBox(height: 20),
 
-                  // Info rows
-                  if (party.start != null)
-                    _row(Icons.calendar_today_rounded, 'Datum & Uhrzeit', fmtDate(party.start!)),
-                  if (party.address.isNotEmpty)
-                    _row(Icons.location_on_rounded, 'Adresse', party.address),
-                  if (party.host.isNotEmpty)
-                    _row(Icons.person_rounded, 'Host', party.host),
-                  if (party.description.isNotEmpty)
-                    _row(Icons.notes_rounded, 'Beschreibung', party.description),
+                  // For pending closed-party requests only show limited info
+                  if (s == _Status.pending && party.type.toLowerCase() == 'closed') ...[
+                    if (party.start != null)
+                      _row(Icons.calendar_today_rounded, 'Datum & Uhrzeit', fmtDate(party.start!)),
+                    if (party.minAge != null) ...[
+                      const SizedBox(height: 8),
+                      _chip(Icons.cake_rounded, 'Ab ${party.minAge}'),
+                    ],
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppColors.panel,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.accentBorder),
+                      ),
+                      child: Row(
+                        children: const [
+                          Icon(Icons.lock_outline_rounded, size: 16, color: AppColors.muted),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Weitere Details werden nach Freigabe sichtbar.',
+                              style: TextStyle(color: AppColors.muted, fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    // Info rows
+                    if (party.start != null)
+                      _row(Icons.calendar_today_rounded, 'Datum & Uhrzeit', fmtDate(party.start!)),
+                    if (party.address.isNotEmpty)
+                      _row(Icons.location_on_rounded, 'Adresse', party.address),
+                    if (party.host.isNotEmpty)
+                      _row(Icons.person_rounded, 'Host', party.host),
+                    if (party.description.isNotEmpty)
+                      _row(Icons.notes_rounded, 'Beschreibung', party.description),
 
-                  // Extras
-                  if (party.guestLimit != null || party.minAge != null || (party.price != null && party.price! > 0)) ...[
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        if (party.guestLimit != null)
-                          _chip(Icons.group_rounded, '${party.guestLimit} Gäste'),
-                        if (party.minAge != null) ...[
-                          const SizedBox(width: 8),
-                          _chip(Icons.cake_rounded, 'Ab ${party.minAge}'),
+                    // Extras
+                    if (party.guestLimit != null || party.minAge != null || (party.price != null && party.price! > 0)) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          if (party.guestLimit != null)
+                            _chip(Icons.group_rounded, '${party.guestLimit} Gäste'),
+                          if (party.minAge != null) ...[
+                            const SizedBox(width: 8),
+                            _chip(Icons.cake_rounded, 'Ab ${party.minAge}'),
+                          ],
+                          if (party.price != null && party.price! > 0) ...[
+                            const SizedBox(width: 8),
+                            _chip(Icons.euro_rounded, '${party.price!.toStringAsFixed(2)} €'),
+                          ],
                         ],
-                        if (party.price != null && party.price! > 0) ...[
-                          const SizedBox(width: 8),
-                          _chip(Icons.euro_rounded, '${party.price!.toStringAsFixed(2)} €'),
-                        ],
-                      ],
+                      ),
+                    ],
+
+                    const SizedBox(height: 28),
+
+                    // Map button
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: onOpenMap,
+                        icon: const Icon(Icons.map_rounded),
+                        label: const Text(
+                          'Auf Karte öffnen',
+                          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.accent,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          elevation: 0,
+                        ),
+                      ),
                     ),
                   ],
-
-                  const SizedBox(height: 28),
-
-                  // Map button
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: onOpenMap,
-                      icon: const Icon(Icons.map_rounded),
-                      label: const Text(
-                        'Auf Karte öffnen',
-                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.accent,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        elevation: 0,
-                      ),
-                    ),
-                  ),
                   const SizedBox(height: 24),
                 ],
               ),

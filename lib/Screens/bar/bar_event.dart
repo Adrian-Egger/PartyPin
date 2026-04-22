@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../Services/timestamp_ext.dart';
 
 class BarEvent {
   final String id;
@@ -48,7 +49,7 @@ class BarEvent {
   });
 
   static DateTime _readDate(dynamic v) {
-    if (v is Timestamp) return v.toDate();
+    if (v is Timestamp) return v.toLocalDateTime();
     if (v is DateTime) return v;
     if (v is String) return DateTime.parse(v);
     return DateTime.fromMillisecondsSinceEpoch(0);

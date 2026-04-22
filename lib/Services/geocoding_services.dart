@@ -102,7 +102,7 @@ class GeocodingService {
             latitude: l.latitude,
             longitude: l.longitude,
             countryCode: null,
-            displayName: asciiQ,
+            displayName: q,
           );
         }
       } catch (_) {}

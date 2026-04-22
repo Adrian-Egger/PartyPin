@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'friends_model.dart';
 import '../Theme/app_theme.dart';
 import '../l10n/lang.dart';
+import '../Screens/profile/chat_detail_screen.dart';
 
 class FriendsScreen extends StatefulWidget {
   final String currentUsername;
@@ -30,9 +31,28 @@ class _FriendsScreenState extends State<FriendsScreen> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _blockedSub;
   final Map<String, bool> _blockedByOtherCache = {};
 
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _chatSub;
+  Map<String, Timestamp?> _chatLastTs = {};
+  Map<String, int> _chatUnread = {};
+
   String get _me => widget.currentUsername.trim();
 
   void _dismissKeyboard() => FocusManager.instance.primaryFocus?.unfocus();
+
+  void _openChat(BuildContext context, String other) {
+    final s = [_me, other]..sort();
+    final chatId = '${s[0]}__${s[1]}';
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatDetailScreen(
+          chatId: chatId,
+          currentUsername: _me,
+          otherUsername: other,
+        ),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -42,15 +62,45 @@ class _FriendsScreenState extends State<FriendsScreen> {
       if (mounted) setState(() {});
     });
     _bindBlocked();
+    _bindChats();
   }
 
   @override
   void dispose() {
+    _chatSub?.cancel();
     _blockedSub?.cancel();
     _debounce?.cancel();
     _searchCtrl.removeListener(_onSearchChanged);
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  void _bindChats() {
+    _chatSub?.cancel();
+    final me = _me;
+    if (me.isEmpty) return;
+    _chatSub = FirebaseFirestore.instance
+        .collection('chats')
+        .where('members', arrayContains: me)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      final tsMap = <String, Timestamp?>{};
+      final unreadMap = <String, int>{};
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        final members = List<String>.from(d['members'] ?? []);
+        final other = members.firstWhere((m) => m != me, orElse: () => '');
+        if (other.isNotEmpty) {
+          tsMap[other] = d['lastTs'] as Timestamp?;
+          unreadMap[other] = ((d['unread_$me'] ?? 0) as num).toInt();
+        }
+      }
+      setState(() {
+        _chatLastTs = tsMap;
+        _chatUnread = unreadMap;
+      });
+    });
   }
 
   void _bindBlocked() {
@@ -817,10 +867,24 @@ class _FriendsScreenState extends State<FriendsScreen> {
                         );
                       }
 
-                      // Filter by current query (existing friends search)
+                      // Filter by current query
                       final all = fSnap.data!;
                       final q = _query;
-                      final filtered = q.isEmpty ? all : all.where((vm) => vm.searchBlob.contains(q)).toList();
+                      var filtered = q.isEmpty ? all : all.where((vm) => vm.searchBlob.contains(q)).toList();
+
+                      // Sort by chat activity: unread first, then by lastTs desc
+                      filtered = filtered.toList()..sort((a, b) {
+                        final aU = _chatUnread[a.username] ?? 0;
+                        final bU = _chatUnread[b.username] ?? 0;
+                        if (aU > 0 && bU == 0) return -1;
+                        if (bU > 0 && aU == 0) return 1;
+                        final aTs = _chatLastTs[a.username];
+                        final bTs = _chatLastTs[b.username];
+                        if (aTs != null && bTs != null) return bTs.compareTo(aTs);
+                        if (aTs != null) return -1;
+                        if (bTs != null) return 1;
+                        return 0;
+                      });
 
                       if (filtered.isEmpty) {
                         return _EmptyHint(text: Lang.t('friends_no_match'));
@@ -836,7 +900,9 @@ class _FriendsScreenState extends State<FriendsScreen> {
                               photoUrl: vm.photoUrl,
                               displayName: vm.displayName,
                               username: vm.username,
+                              unreadChat: _chatUnread[vm.username] ?? 0,
                               onRemove: () => _confirmAndUnfriend(vm.username),
+                              onChat: () => _openChat(context, vm.username),
                               menu: _userMenu(username: vm.username, isBlockedByMe: _blockedIds.contains(vm.username)),
                             ),
                           );
@@ -905,54 +971,69 @@ class _FriendCard extends StatelessWidget {
   final String photoUrl;
   final String displayName;
   final String username;
+  final int unreadChat;
   final VoidCallback onRemove;
+  final VoidCallback onChat;
   final Widget menu;
 
   const _FriendCard({
     required this.photoUrl,
     required this.displayName,
     required this.username,
+    required this.unreadChat,
     required this.onRemove,
+    required this.onChat,
     required this.menu,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.panel,
-        borderRadius: AppRadius.mdBr,
-        border: Border.all(color: AppColors.accentBorder, width: 1),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Row(
-          children: [
-            _Avatar(photoUrl: photoUrl),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(displayName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 15)),
-                  const SizedBox(height: 2),
-                  Text('@$username',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: AppColors.muted, fontSize: 13)),
-                ],
+    return InkWell(
+      onTap: onChat,
+      borderRadius: AppRadius.mdBr,
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.panel,
+          borderRadius: AppRadius.mdBr,
+          border: Border.all(
+            color: unreadChat > 0 ? AppColors.accentBorder3 : AppColors.accentBorder,
+            width: unreadChat > 0 ? 1.5 : 1,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Badge(
+                isLabelVisible: unreadChat > 0,
+                label: Text('$unreadChat'),
+                child: _Avatar(photoUrl: photoUrl),
               ),
-            ),
-            menu,
-            IconButton(
-              tooltip: 'Entfernen',
-              onPressed: onRemove,
-              icon: const Icon(Icons.person_remove_outlined, color: AppColors.muted, size: 20),
-            ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 15)),
+                    const SizedBox(height: 2),
+                    Text('@$username',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+                  ],
+                ),
+              ),
+              menu,
+              IconButton(
+                tooltip: 'Entfernen',
+                onPressed: onRemove,
+                icon: const Icon(Icons.person_remove_outlined, color: AppColors.muted, size: 20),
+              ),
+            ],
+          ),
         ),
       ),
     );

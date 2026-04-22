@@ -1,6 +1,8 @@
 // lib/Screens/home_shell.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../profile/feedback_screen.dart';
@@ -46,6 +48,8 @@ class _HomeShellState extends State<HomeShell> {
   _GateState _gate = _GateState.loading;
 
   int _currentIndex = 2;
+  int _unreadChats = 0;
+  StreamSubscription? _unreadChatSub;
 
   /// ✅ Wichtig: IndexedStack baut alle Tabs sofort.
   /// MyBarTab öffnet nur, wenn _tabIndex wirklich auf 3 wechselt.
@@ -66,6 +70,7 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   void dispose() {
+    _unreadChatSub?.cancel();
     _tabIndex.dispose();
     super.dispose();
   }
@@ -175,6 +180,22 @@ class _HomeShellState extends State<HomeShell> {
         }
       }
     });
+
+    // Unread-Chat-Badge für normalen Account
+    if (!_isBarAccount && u.isNotEmpty) {
+      _unreadChatSub?.cancel();
+      _unreadChatSub = FirebaseFirestore.instance
+          .collection('chats')
+          .where('members', arrayContains: u)
+          .snapshots()
+          .listen((snap) {
+        int total = 0;
+        for (final doc in snap.docs) {
+          total += ((doc.data()['unread_$u'] ?? 0) as num).toInt();
+        }
+        if (mounted) setState(() => _unreadChats = total);
+      });
+    }
   }
 
   void _onBottomNavTapped(int i) {
@@ -248,13 +269,21 @@ class _HomeShellState extends State<HomeShell> {
               ]
             : [
                 NavigationDestination(
-                  icon: const Icon(Icons.chat_bubble_outline),
-                  selectedIcon: const Icon(Icons.chat_bubble),
+                  icon: const Icon(Icons.star_outline),
+                  selectedIcon: const Icon(Icons.star),
                   label: Lang.t('nav_feedback'),
                 ),
                 NavigationDestination(
-                  icon: const Icon(Icons.people_outline),
-                  selectedIcon: const Icon(Icons.people),
+                  icon: Badge(
+                    isLabelVisible: _unreadChats > 0,
+                    label: Text('$_unreadChats'),
+                    child: const Icon(Icons.people_outline),
+                  ),
+                  selectedIcon: Badge(
+                    isLabelVisible: _unreadChats > 0,
+                    label: Text('$_unreadChats'),
+                    child: const Icon(Icons.people),
+                  ),
                   label: Lang.t('nav_friends'),
                 ),
                 NavigationDestination(
