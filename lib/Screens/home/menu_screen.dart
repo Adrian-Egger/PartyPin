@@ -1126,31 +1126,6 @@ class MenuScreen extends StatelessWidget {
                 },
               ),
 
-              /*
-              // Premium (deaktiviert)
-              FutureBuilder<bool>(
-                future: _isBarAccount(),
-                builder: (context, snap) {
-                  if (snap.connectionState != ConnectionState.done) {
-                    return const SizedBox.shrink();
-                  }
-                  final isBar = snap.data == true;
-                  if (isBar) return const SizedBox.shrink();
-
-                  return _menuTile(
-                    icon: Icons.workspace_premium,
-                    title: "Premium ⭐",
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => const PremiumScreen()),
-                      );
-                    },
-                  );
-                },
-              );
-              */
-
               _menuTile(
                 icon: Icons.language,
                 title: Lang.t('menu_language_location'),

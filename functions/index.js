@@ -365,15 +365,6 @@ exports.captureTicketOrder = ticketCapture.captureTicketOrder;
 exports.cleanupExpiredEvents = eventsCleanup.cleanupExpiredEvents;
 
 // =======================
-// PayPal Premium Exports (HTTP + Scheduler)  ✅ HIER MUSS ES REIN
-// =======================
-const paypalPremium = require("./paypal/index");
-
-exports.paypalWebhook = paypalPremium.paypalWebhook;
-exports.createPayPalCheckout = paypalPremium.createPayPalCheckout;
-exports.syncPayPalPremiumDaily = paypalPremium.syncPayPalPremiumDaily;
-
-// =======================
 // Nearby Party Notifications (Scheduled — Thu + Fri 17:00 CET)
 // =======================
 

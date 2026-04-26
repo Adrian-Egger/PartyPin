@@ -14,8 +14,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:geocoding/geocoding.dart' as geo;
 
-// ✅ (Coming soon) Bilder-Funktionalität bleibt im Code,
-// aber UI ist komplett deaktiviert und es gibt keinen Premium-/Payment-Flow.
+// ✅ (Coming soon) Bilder-Funktionalität bleibt im Code, UI ist gesperrt.
 import 'package:image_picker/image_picker.dart';
 
 import '../../Services/geocoding_services.dart';
@@ -120,8 +119,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   // ===========================
   // ✅ Coming soon: Party Bilder
   // ===========================
-  // Premium/Payment ist komplett deaktiviert. Der Code bleibt,
-  // aber UI ist gesperrt und es gibt keinen Link zu PremiumScreen.
   static const bool _partyImagesComingSoon = true;
 
   final ImagePicker _picker = ImagePicker();
@@ -1091,7 +1088,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
 // ===========================
 
   Widget _partyImagesSection() {
-    // ✅ dauerhaft gesperrt (kein Premium, kein Redirect)
     final locked = _partyImagesComingSoon;
 
     Widget plusRow() {
@@ -1211,10 +1207,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       ],
     );
 
-    // ✅ “Verschlossen”, aber noch sichtbar:
-    // - leichte Abdunkelung
-    // - klares Lock + Coming soon + Mini-Werbetext
-    // - KEIN onTap, KEIN Premium-Screen
     return _section(
       title: "Party Bilder 🔒",
       icon: Icons.photo_camera_back_outlined,
@@ -1419,8 +1411,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
         savedDocId = widget.docId!;
         await ref.set({'docId': savedDocId}, SetOptions(merge: true));
       }
-
-      // ✅ Coming soon: kein Upload / kein Premium speichern
 
       await _deleteDraftSilently();
 

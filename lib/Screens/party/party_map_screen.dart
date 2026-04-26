@@ -137,16 +137,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   final Map<String, String?> _openPartyStatus = {};
   final Map<String, bool> _openPartyIsHost = {};
 
-  // =========================
-  // ✅ PREMIUM (Firestore live)
-  // =========================
-  bool _isPremium = false;
-  StreamSubscription? _premiumSub;
-
-  bool _premiumWelcomeDialogOpen = false;
-  static const String _prefsSeenPremiumWelcomeKey = 'seen_premium_welcome_v1';
-  static const String _prefsLastPremiumStateKey = 'last_premium_state_v1';
-
   @override
   void initState() {
     super.initState();
@@ -155,7 +145,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   @override
   void dispose() {
-    _premiumSub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -163,7 +152,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   Future<void> _init() async {
     await _loadSavedLocation();
     await _loadCurrentUser();
-    await _bindPremiumStatusFromFirestore();
     await _loadLegalWarnState();
     await _prepareIcons();
     await _refreshMap();
@@ -271,134 +259,6 @@ String _safeDocId(String input) => input
       }
     }
   }
-
-  // =========================
-  // ✅ PREMIUM: Firestore binden + Welcome
-  // =========================
-  Future<void> _bindPremiumStatusFromFirestore() async {
-    _premiumSub?.cancel();
-
-    final prefs = await SharedPreferences.getInstance();
-    final uname =
-    (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '')
-        .trim();
-
-    if (uname.isEmpty) {
-      if (!mounted) return;
-      setState(() => _isPremium = false);
-      return;
-    }
-
-    final fs = FirebaseFirestore.instance;
-
-    final directRef = fs.collection('users').doc(_safeUserDocId(uname));
-    try {
-      final directSnap = await directRef.get();
-      if (directSnap.exists) {
-        final initial = (directSnap.data()?['premium'] == true);
-        if (mounted) setState(() => _isPremium = initial);
-
-        await _maybeShowPremiumWelcomeIfNeeded(initial);
-
-        _premiumSub = directRef.snapshots().listen((snap) async {
-          final p = (snap.data()?['premium'] == true);
-          if (!mounted) return;
-          setState(() => _isPremium = p);
-          await _maybeShowPremiumWelcomeIfNeeded(p);
-        });
-        return;
-      }
-    } catch (_) {}
-
-    final q =
-    fs.collection('users').where('username', isEqualTo: uname).limit(1);
-
-    try {
-      final qs = await q.get();
-      final p =
-      qs.docs.isNotEmpty ? (qs.docs.first.data()['premium'] == true) : false;
-      if (mounted) setState(() => _isPremium = p);
-      await _maybeShowPremiumWelcomeIfNeeded(p);
-    } catch (_) {
-      if (mounted) setState(() => _isPremium = false);
-    }
-
-    _premiumSub = q.snapshots().listen((qs) async {
-      final p =
-      qs.docs.isNotEmpty ? (qs.docs.first.data()['premium'] == true) : false;
-      if (!mounted) return;
-      setState(() => _isPremium = p);
-      await _maybeShowPremiumWelcomeIfNeeded(p);
-    });
-  }
-
-  Future<void> _maybeShowPremiumWelcomeIfNeeded(bool currentPremium) async {
-    final prefs = await SharedPreferences.getInstance();
-    final last = prefs.getBool(_prefsLastPremiumStateKey) ?? false;
-
-    await prefs.setBool(_prefsLastPremiumStateKey, currentPremium);
-
-    if (!currentPremium) return;
-    if (last == true) return;
-
-    final seen = prefs.getBool(_prefsSeenPremiumWelcomeKey) ?? false;
-    if (seen) return;
-
-    if (!mounted) return;
-    if (_premiumWelcomeDialogOpen) return;
-
-    _premiumWelcomeDialogOpen = true;
-
-    await showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (ctx) {
-        return AlertDialog(
-          backgroundColor: AppColors.panel,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Row(
-            children: [
-              Icon(Icons.workspace_premium, color: Colors.amber),
-              SizedBox(width: 10),
-              Text(
-                "Premium aktiviert",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
-          ),
-          content: const Text(
-            "Du bist jetzt ein Premium-Mitglied.\nHerzlichen Glückwunsch und viel Spaß!",
-            style: TextStyle(
-              color: Colors.white70,
-              height: 1.25,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          actions: [
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _accent,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text("OK"),
-            ),
-          ],
-        );
-      },
-    );
-
-    await prefs.setBool(_prefsSeenPremiumWelcomeKey, true);
-    _premiumWelcomeDialogOpen = false;
-  }
-
-  // =========================
 
   Future<void> _loadLegalWarnState() async {
     final prefs = await SharedPreferences.getInstance();
@@ -2567,7 +2427,7 @@ String _safeDocId(String input) => input
                     border: Border.all(color: AppColors.accentBorder2, width: 1),
                   ),
                   child: Text(
-                    _isPremium ? "Premium Map" : "PartyPin",
+                    "PartyPin",
                     style: const TextStyle(
                       color: AppColors.text,
                       fontSize: 15,

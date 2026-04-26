@@ -11,7 +11,6 @@
 // - Closed Party: Wenn Anfrage gesendet (pending) -> Button wird ORANGE (deaktiviert)
 // - ✅ Timer unten entfernt (kein "Wird automatisch gelöscht in ...")
 // - ✅ FIX: Wenn Closed Party freigegeben (canSeeFull == true) -> "Anfrage senden" verschwindet
-// - ✅ FIX PREMIUM: Premium-Check stabil & kompatibel (UID -> username-doc -> username-query)
 // - ✅ FIX CLOSED REQUEST UI: "Anfrage gesendet" wird sofort angezeigt + Request-Status wird robust gefunden
 //      Priorität:
 //        1) requests/{uid}
@@ -29,7 +28,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'new_party.dart';
 import '../../Services/app_draggable_sheet.dart';
 import '../profile/chat_detail_screen.dart';
-import '../profile/premium_screen.dart';
 import '../../Social/friends_model.dart';
 import '../../Theme/app_theme.dart';
 
@@ -196,37 +194,6 @@ class PartyBottomSheet extends StatelessWidget {
     );
   }
 
-  // ------------------ PREMIUM helpers ------------------
-
-  bool _parsePremium(dynamic v) {
-    if (v == true) return true;
-    if (v is String) return v.trim().toLowerCase() == 'true';
-    if (v is num) return v == 1;
-    return false;
-  }
-
-  Stream<DocumentSnapshot<Map<String, dynamic>>> _userDocByUidStream() {
-    final uid = _uid();
-    if (uid == null || uid.trim().isEmpty) return const Stream.empty();
-    return FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
-  }
-
-  Stream<DocumentSnapshot<Map<String, dynamic>>> _userDocByUsernameStream() {
-    final u = (currentUsername ?? '').trim();
-    if (u.isEmpty) return const Stream.empty();
-    return FirebaseFirestore.instance.collection('users').doc(u).snapshots();
-  }
-
-  Stream<QuerySnapshot<Map<String, dynamic>>> _userByUsernameQueryStream() {
-    final u = (currentUsername ?? '').trim();
-    if (u.isEmpty) return const Stream.empty();
-    return FirebaseFirestore.instance
-        .collection('users')
-        .where('username', isEqualTo: u)
-        .limit(1)
-        .snapshots();
-  }
-
   Future<Set<String>> _loadFriendUsernames() async {
     final me = (currentUsername ?? '').trim();
     if (me.isEmpty) return <String>{};
@@ -247,14 +214,9 @@ class PartyBottomSheet extends StatelessWidget {
     return out;
   }
 
-  /// ✅ Premium-Section:
-  /// 1) users/{uid}
-  /// 2) users/{username}
-  /// 3) users where username == me (limit 1)
-  Widget _friendsGoingPremiumSection(BuildContext context) {
+  Widget _friendsGoingSection(BuildContext context) {
     if ((currentUsername ?? '').trim().isEmpty) return const SizedBox.shrink();
 
-    // ✅ Premium-Gate entfernt: immer "freigeschaltet"
     return FutureBuilder<Set<String>>(
       future: _loadFriendUsernames(),
       builder: (context, friendSnap) {
@@ -1042,7 +1004,7 @@ class PartyBottomSheet extends StatelessWidget {
               _imagesSection(data),
             ],
             const SizedBox(height: 14),
-            _friendsGoingPremiumSection(context),
+            _friendsGoingSection(context),
             const SizedBox(height: 20),
             const Divider(color: Color(0x33FF3B30)),
             const SizedBox(height: 12),

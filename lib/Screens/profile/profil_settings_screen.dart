@@ -48,9 +48,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   TextEditingController();
   final TextEditingController _newPasswordController = TextEditingController();
 
-  bool _editingUsername = false;
-  bool _editingBio = false;
-  bool _editingPassword = false;
+  // null = nothing open; 'username' | 'bio' | 'password'
+  String? _editing;
 
   bool _busyAvatar = false;
 
@@ -163,20 +162,38 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       final cred = await auth.signInAnonymously();
       return cred.user;
     } catch (e) {
-      _showSnack("Firebase Login fehlgeschlagen: $e", color: Colors.redAccent);
+      _showSnack('${Lang.t('profile_firebase_fail')}: $e', color: Colors.redAccent);
       return null;
     }
   }
 
   // ---------- Avatar / Foto ----------
   Future<bool> _ensureCameraPermission() async {
-    final status = await Permission.camera.request();
+    // Check current status WITHOUT triggering a request first.
+    // On iOS: .notDetermined → isDenied, .denied → isPermanentlyDenied
+    var status = await Permission.camera.status;
+
     if (status.isGranted) return true;
-    if (status.isPermanentlyDenied) {
-      _showPermissionSettingsDialog('Kamera');
+
+    // Screen Time / MDM restriction — can't change from within the app
+    if (status.isRestricted) {
+      if (mounted) _showSnack(Lang.t('profile_cam_restricted'), color: Colors.redAccent);
       return false;
     }
-    _showSnack("Kamera-Zugriff wurde verweigert.", color: Colors.redAccent);
+
+    // Already permanently denied — go straight to settings
+    if (status.isPermanentlyDenied) {
+      _showPermissionSettingsDialog(Lang.t('perm_camera'));
+      return false;
+    }
+
+    // Not yet asked (isDenied = notDetermined on iOS) — show the native dialog
+    status = await Permission.camera.request();
+
+    if (status.isGranted) return true;
+
+    // After the dialog: still not granted → guide to settings
+    _showPermissionSettingsDialog(Lang.t('perm_camera'));
     return false;
   }
 
@@ -187,17 +204,19 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.panel,
         title: Text(
-          '$permissionName-Zugriff verweigert',
+          '$permissionName${Lang.t('perm_access_denied')}',
           style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w700),
         ),
         content: Text(
-          'Bitte erlaube den $permissionName-Zugriff in den App-Einstellungen.',
-          style: const TextStyle(color: AppColors.muted),
+          Platform.isIOS
+              ? '${Lang.t('perm_ios_instruction')}$permissionName'
+              : Lang.t('perm_android_instruction'),
+          style: const TextStyle(color: AppColors.muted, height: 1.5),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Abbrechen', style: TextStyle(color: AppColors.muted)),
+            child: Text(Lang.t('cancel'), style: const TextStyle(color: AppColors.muted)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -209,7 +228,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
               Navigator.pop(ctx);
               openAppSettings();
             },
-            child: const Text('Einstellungen öffnen'),
+            child: Text(Lang.t('perm_open_settings')),
           ),
         ],
       ),
@@ -219,7 +238,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   Future<void> _pickFromSource(ImageSource source) async {
     if (_busyAvatar) return;
 
-    // Camera needs an explicit runtime permission; gallery uses system photo picker (no grant needed on Android 13+)
     if (source == ImageSource.camera) {
       final ok = await _ensureCameraPermission();
       if (!ok) return;
@@ -233,15 +251,20 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         maxWidth: 900,
       );
     } catch (e) {
-      // Likely a permission issue on older Android — offer to open settings
-      _showPermissionSettingsDialog('Fotos');
+      if (!mounted) return;
+      // Only show the Fotos-dialog for gallery errors, not for camera failures
+      if (source == ImageSource.gallery) {
+        _showPermissionSettingsDialog(Lang.t('perm_photos'));
+      } else {
+        _showSnack(Lang.t('profile_cam_unavailable'), color: Colors.redAccent);
+      }
       return;
     }
 
     if (image == null) return;
 
     if (_docId.isEmpty) {
-      _showSnack("Dokument nicht gefunden. Bitte neu einloggen.", color: Colors.redAccent);
+      _showSnack(Lang.t('profile_doc_not_found'), color: Colors.redAccent);
       return;
     }
 
@@ -278,11 +301,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('avatar', url);
 
-      _showSnack("Profilbild aktualisiert.", color: AppColors.success);
+      _showSnack(Lang.t('profile_updated'), color: AppColors.success);
     } on FirebaseException catch (e) {
-      _showSnack("Upload fehlgeschlagen: ${e.code}", color: Colors.redAccent);
+      _showSnack('${Lang.t('profile_upload_failed')}: ${e.code}', color: Colors.redAccent);
     } catch (e) {
-      _showSnack("Upload fehlgeschlagen: $e", color: Colors.redAccent);
+      _showSnack('${Lang.t('profile_upload_failed')}: $e', color: Colors.redAccent);
     } finally {
       if (mounted) setState(() => _busyAvatar = false);
     }
@@ -293,18 +316,18 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   Future<void> _saveUsername() async {
     final newUsername = _usernameController.text.trim();
     if (newUsername.isEmpty) {
-      _showSnack("Username darf nicht leer sein.", color: Colors.redAccent);
+      _showSnack(Lang.t('profile_username_empty'), color: Colors.redAccent);
       return;
     }
 
     if (newUsername == _username) {
       if (!mounted) return;
-      setState(() => _editingUsername = false);
+      setState(() => _editing = null);
       return;
     }
 
     if (_docId.isEmpty) {
-      _showSnack("Dokument nicht gefunden.", color: Colors.redAccent);
+      _showSnack(Lang.t('profile_doc_not_found_short'), color: Colors.redAccent);
       return;
     }
 
@@ -317,7 +340,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         .get();
 
     if (dup.docs.isNotEmpty && dup.docs.first.id != _docId) {
-      _showSnack("Dieser Username ist bereits vergeben.", color: Colors.redAccent);
+      _showSnack(Lang.t('profile_username_taken'), color: Colors.redAccent);
       return;
     }
 
@@ -337,10 +360,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     if (!mounted) return;
     setState(() {
       _username = newUsername;
-      _editingUsername = false;
+      _editing = null;
     });
 
-    _showSnack("Username erfolgreich geändert.", color: AppColors.success);
+    _showSnack(Lang.t('profile_username_saved'), color: AppColors.success);
   }
 
   Future<void> _migrateUsernameReferences(
@@ -445,12 +468,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final newPass = _newPasswordController.text.trim();
 
     if (newPass.isEmpty) {
-      _showSnack("Neues Passwort darf nicht leer sein.", color: Colors.redAccent);
+      _showSnack(Lang.t('profile_password_empty'), color: Colors.redAccent);
       return;
     }
 
     if (_docId.isEmpty) {
-      _showSnack("Dokument nicht gefunden.", color: Colors.redAccent);
+      _showSnack(Lang.t('profile_doc_not_found_short'), color: Colors.redAccent);
       return;
     }
 
@@ -459,7 +482,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final pwInDb = (data?['password'] ?? '').toString();
 
     if (current != pwInDb) {
-      _showSnack("Aktuelles Passwort ist falsch.", color: Colors.redAccent);
+      _showSnack(Lang.t('profile_password_wrong'), color: Colors.redAccent);
       return;
     }
 
@@ -467,13 +490,13 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
     if (!mounted) return;
     setState(() {
-      _editingPassword = false;
+      _editing = null;
       _currentPasswordController.clear();
       _newPasswordController.clear();
       _passwordFromDb = newPass;
     });
 
-    _showSnack("Passwort erfolgreich geändert.", color: AppColors.success);
+    _showSnack(Lang.t('profile_password_saved'), color: AppColors.success);
   }
 
   // ---------- Logout / Account löschen ----------
@@ -482,22 +505,22 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppColors.panel,
-        title: const Text(
-          "Logout bestätigen",
-          style: TextStyle(color: AppColors.text),
+        title: Text(
+          Lang.t('profile_logout_title'),
+          style: const TextStyle(color: AppColors.text),
         ),
-        content: const Text(
-          "Willst du dich wirklich ausloggen?",
-          style: TextStyle(color: AppColors.muted),
+        content: Text(
+          Lang.t('profile_logout_msg'),
+          style: const TextStyle(color: AppColors.muted),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Abbrechen", style: TextStyle(color: AppColors.muted)),
+            child: Text(Lang.t('cancel'), style: const TextStyle(color: AppColors.muted)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Ja", style: TextStyle(color: AppColors.success)),
+            child: Text(Lang.t('yes'), style: const TextStyle(color: AppColors.success)),
           ),
         ],
       ),
@@ -520,22 +543,22 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppColors.panel,
-        title: const Text(
-          "Account löschen",
-          style: TextStyle(color: AppColors.text),
+        title: Text(
+          Lang.t('profile_delete_title'),
+          style: const TextStyle(color: AppColors.text),
         ),
-        content: const Text(
-          "Bist du sicher, dass du deinen Account löschen willst?",
-          style: TextStyle(color: AppColors.muted),
+        content: Text(
+          Lang.t('profile_delete_msg'),
+          style: const TextStyle(color: AppColors.muted),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Nein", style: TextStyle(color: AppColors.muted)),
+            child: Text(Lang.t('cancel'), style: const TextStyle(color: AppColors.muted)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("Ja", style: TextStyle(color: AppColors.accent)),
+            child: Text(Lang.t('yes'), style: const TextStyle(color: AppColors.accent)),
           ),
         ],
       ),
@@ -547,24 +570,24 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppColors.panel,
-        title: const Text(
-          "Letzte Warnung",
-          style: TextStyle(color: AppColors.accent),
+        title: Text(
+          Lang.t('profile_delete_title2'),
+          style: const TextStyle(color: AppColors.accent),
         ),
-        content: const Text(
-          "Dieser Vorgang ist endgültig und alle Daten werden gelöscht. Willst du wirklich fortfahren?",
-          style: TextStyle(color: AppColors.muted),
+        content: Text(
+          Lang.t('profile_delete_msg2'),
+          style: const TextStyle(color: AppColors.muted),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("Abbrechen", style: TextStyle(color: AppColors.muted)),
+            child: Text(Lang.t('cancel'), style: const TextStyle(color: AppColors.muted)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text(
-              "Ja, löschen",
-              style: TextStyle(color: AppColors.accent),
+            child: Text(
+              Lang.t('profile_delete_confirm'),
+              style: const TextStyle(color: AppColors.accent),
             ),
           ),
         ],
@@ -597,9 +620,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     if (!mounted) return;
     setState(() {
       _bio = newBio;
-      _editingBio = false;
+      _editing = null;
     });
-    _showSnack('Bio gespeichert.', color: AppColors.success);
+    _showSnack(Lang.t('profile_bio_saved'), color: AppColors.success);
   }
 
   void _viewProfilePicture() {
@@ -638,11 +661,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                   borderRadius: BorderRadius.circular(999),
                 ),
               ),
-              const Padding(
-                padding: EdgeInsets.only(bottom: 6),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
                 child: Text(
-                  "Profilbild",
-                  style: TextStyle(
+                  Lang.t('profile_avatar_title'),
+                  style: const TextStyle(
                     color: _textPrimary,
                     fontWeight: FontWeight.w700,
                     fontSize: 15,
@@ -653,14 +676,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
               _avatarOption(
                 ctx: ctx,
                 icon: Icons.photo_library_outlined,
-                label: "Aus Galerie wählen",
+                label: Lang.t('profile_avatar_gallery'),
                 onTap: () => _pickFromSource(ImageSource.gallery),
               ),
               const Divider(height: 1, indent: 56, color: Color(0xFF2A2D35)),
               _avatarOption(
                 ctx: ctx,
                 icon: Icons.photo_camera_outlined,
-                label: "Foto aufnehmen",
+                label: Lang.t('profile_avatar_camera'),
                 onTap: () => _pickFromSource(ImageSource.camera),
               ),
               if (hasAvatar) ...[
@@ -668,7 +691,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                 _avatarOption(
                   ctx: ctx,
                   icon: Icons.image_search_outlined,
-                  label: "Profilbild ansehen",
+                  label: Lang.t('profile_avatar_view'),
                   onTap: _viewProfilePicture,
                 ),
               ],
@@ -823,7 +846,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                 const SizedBox(height: 28),
 
                 // ── Account-Einstellungen ────────────────────────
-                _sectionLabel("Account"),
+                _sectionLabel(Lang.t('profile_section_account')),
                 const SizedBox(height: 8),
                 Container(
                   decoration: BoxDecoration(
@@ -836,17 +859,17 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                       // Username row
                       _settingRow(
                         icon: Icons.person_outline_rounded,
-                        label: "Username",
-                        editing: _editingUsername,
-                        displayValue: _usernameController.text.isEmpty ? "Nicht gesetzt" : _usernameController.text,
+                        label: Lang.t('profile_username_label'),
+                        editing: _editing == 'username',
+                        displayValue: _usernameController.text.isEmpty ? Lang.t('profile_username_not_set') : _usernameController.text,
                         editChild: _inputField(
                           controller: _usernameController,
-                          hint: "Neuer Username",
+                          hint: Lang.t('profile_username_hint'),
                         ),
-                        onEdit: () => setState(() => _editingUsername = true),
+                        onEdit: () => setState(() => _editing = 'username'),
                         onSave: _saveUsername,
                         onCancel: () => setState(() {
-                          _editingUsername = false;
+                          _editing = null;
                           _usernameController.text = _username;
                         }),
                       ),
@@ -854,20 +877,20 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                       // Password row
                       _settingRow(
                         icon: Icons.lock_outline_rounded,
-                        label: "Passwort",
-                        editing: _editingPassword,
+                        label: Lang.t('profile_password_label'),
+                        editing: _editing == 'password',
                         displayValue: "••••••••",
                         editChild: Column(
                           children: [
-                            _inputField(controller: _currentPasswordController, hint: "Aktuelles Passwort", obscure: true),
+                            _inputField(controller: _currentPasswordController, hint: Lang.t('profile_password_current'), obscure: true),
                             const SizedBox(height: 10),
-                            _inputField(controller: _newPasswordController, hint: "Neues Passwort", obscure: true),
+                            _inputField(controller: _newPasswordController, hint: Lang.t('profile_password_new'), obscure: true),
                           ],
                         ),
-                        onEdit: () => setState(() => _editingPassword = true),
+                        onEdit: () => setState(() => _editing = 'password'),
                         onSave: _savePassword,
                         onCancel: () => setState(() {
-                          _editingPassword = false;
+                          _editing = null;
                           _currentPasswordController.clear();
                           _newPasswordController.clear();
                         }),
@@ -876,16 +899,16 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                       // Bio row
                       _settingRow(
                         icon: Icons.edit_note_rounded,
-                        label: "Bio",
-                        editing: _editingBio,
-                        displayValue: _bio.isEmpty ? "Noch keine Bio" : _bio,
+                        label: Lang.t('profile_bio_label'),
+                        editing: _editing == 'bio',
+                        displayValue: _bio.isEmpty ? Lang.t('profile_bio_none') : _bio,
                         editChild: TextField(
                           controller: _bioController,
                           maxLength: 80,
                           maxLengthEnforcement: MaxLengthEnforcement.truncateAfterCompositionEnds,
                           style: const TextStyle(color: _textPrimary, fontSize: 14),
                           decoration: InputDecoration(
-                            hintText: "Kurze Beschreibung...",
+                            hintText: Lang.t('profile_bio_hint'),
                             hintStyle: const TextStyle(color: _textSecondary, fontSize: 14),
                             counterStyle: const TextStyle(color: _textSecondary, fontSize: 11),
                             filled: true,
@@ -905,10 +928,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                             ),
                           ),
                         ),
-                        onEdit: () => setState(() => _editingBio = true),
+                        onEdit: () => setState(() => _editing = 'bio'),
                         onSave: _saveBio,
                         onCancel: () => setState(() {
-                          _editingBio = false;
+                          _editing = null;
                           _bioController.text = _bio;
                         }),
                       ),
@@ -924,7 +947,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                   child: ElevatedButton.icon(
                     onPressed: _logout,
                     icon: const Icon(Icons.logout_rounded, size: 18),
-                    label: const Text("Abmelden", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                    label: Text(Lang.t('profile_logout_btn'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _accent,
                       foregroundColor: Colors.white,
@@ -940,7 +963,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                 TextButton.icon(
                   onPressed: _deleteAccount,
                   icon: const Icon(Icons.delete_outline_rounded, size: 16, color: Colors.redAccent),
-                  label: const Text("Account löschen", style: TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
+                  label: Text(Lang.t('profile_delete_btn'), style: const TextStyle(color: Colors.redAccent, fontSize: 13, fontWeight: FontWeight.w600)),
                   style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 10)),
                 ),
               ],
@@ -1042,7 +1065,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                 TextButton(
                   onPressed: onCancel,
                   style: TextButton.styleFrom(foregroundColor: _textSecondary, padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
-                  child: const Text("Abbrechen", style: TextStyle(fontSize: 13)),
+                  child: Text(Lang.t('cancel'), style: const TextStyle(fontSize: 13)),
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton(
@@ -1054,7 +1077,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     elevation: 0,
                   ),
-                  child: const Text("Speichern", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  child: Text(Lang.t('save'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
                 ),
               ],
             ),

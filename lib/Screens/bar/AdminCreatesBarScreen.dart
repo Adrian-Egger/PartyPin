@@ -1454,49 +1454,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
     return _mergeUserQueryStreams([s1, s2, s3]);
   }
 
-  Future<void> _setUserPremium(DocumentReference<Map<String, dynamic>> ref, bool value) async {
-    final ok = await _doubleConfirm(
-      title1: value ? "Premium aktivieren?" : "Premium beenden?",
-      msg1: value
-          ? "Willst du diesem User Premium geben (Firestore: premium=true)?"
-          : "Willst du Premium für diesen User wirklich beenden?",
-      title2: "Wirklich durchführen?",
-      msg2: "Diese Aktion wird sofort in Firebase gespeichert.",
-      okText: value ? "Premium aktivieren" : "Premium beenden",
-    );
-    if (!ok) return;
-
-    try {
-      await ref.set({
-        'premium': value,
-        'premiumUpdatedAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-        if (value) 'premiumSince': FieldValue.serverTimestamp(),
-        if (!value) 'premiumUntil': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(value ? "Premium aktiviert (Firestore)." : "Premium beendet (Firestore)."),
-          backgroundColor: AppColors.success,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Fehler: $e"),
-          backgroundColor: AppColors.accent,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-      );
-    }
-  }
-
   // ✅ FIX: Ban + Feedbacks hidden=true (Batch/Paging) => weniger "connection lost"
   Future<void> _banUserAndHideFeedbacks(
       DocumentReference<Map<String, dynamic>> userRef,
@@ -1812,7 +1769,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                 final birthdayStr = _fmtDateOnly(_getBirthday(data));
                 final createdAtStr = _fmtTs(data['createdAt']);
 
-                final premium = data['premium'] == true;
                 final banned = data['banned'] == true;
 
                 final title = username.isNotEmpty ? username : (fullName.isNotEmpty ? fullName : doc.id);
@@ -1857,7 +1813,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                               row("Alter", age?.toString() ?? ""),
                               row("Geburtsdatum", birthdayStr),
                               row("Passwort", password),
-                              row("Premium", premium ? "true" : "false"),
                               row("Banned", banned ? "true" : "false"),
                               row("Created at", createdAtStr),
                             ],
@@ -1906,40 +1861,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                           ),
                           const SizedBox(height: 10),
 
-                          if (!premium)
-                            ElevatedButton.icon(
-                              onPressed: () => _setUserPremium(ref, true),
-                              icon: const Icon(Icons.workspace_premium),
-                              label: const Text(
-                                "Premium geben",
-                                style: TextStyle(fontWeight: FontWeight.w800),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.green,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            )
-                          else
-                            ElevatedButton.icon(
-                              onPressed: () => _setUserPremium(ref, false),
-                              icon: const Icon(Icons.block),
-                              label: const Text(
-                                "Premium beenden",
-                                style: TextStyle(fontWeight: FontWeight.w800),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.orangeAccent,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                            ),
                         ],
                       ),
                     ],
@@ -2035,20 +1956,17 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
                     final username = (d['username'] ?? d['currentUsername'] ?? d['userName'] ?? '').toString();
                     final firstName = (d['firstName'] ?? '').toString();
                     final lastName = (d['lastName'] ?? '').toString();
-                    final premium = d['premium'] == true;
-
                     final title = username.isNotEmpty ? username : "${firstName.trim()} ${lastName.trim()}".trim();
 
                     final subtitleParts = <String>[];
                     final fullName = "${firstName.trim()} ${lastName.trim()}".trim();
                     if (fullName.isNotEmpty) subtitleParts.add(fullName);
-                    subtitleParts.add(premium ? "Premium" : "Free");
 
                     return ListTile(
                       dense: true,
-                      leading: Icon(
-                        premium ? Icons.workspace_premium : Icons.person,
-                        color: premium ? Colors.amberAccent : _secondary,
+                      leading: const Icon(
+                        Icons.person,
+                        color: _secondary,
                       ),
                       title: Text(
                         title.isEmpty ? doc.id : title,
