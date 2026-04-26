@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'friends_model.dart';
 import '../Theme/app_theme.dart';
@@ -35,6 +36,13 @@ class _FriendsScreenState extends State<FriendsScreen> {
   Map<String, Timestamp?> _chatLastTs = {};
   Map<String, int> _chatUnread = {};
 
+  String? _myCity;
+  String? _myLanguage;
+  String? _myCountry;
+  Set<String> _friendUsernames = {};
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _friendsSub;
+  Future<QuerySnapshot<Map<String, dynamic>>>? _suggestionsFuture;
+
   String get _me => widget.currentUsername.trim();
 
   void _dismissKeyboard() => FocusManager.instance.primaryFocus?.unfocus();
@@ -63,12 +71,15 @@ class _FriendsScreenState extends State<FriendsScreen> {
     });
     _bindBlocked();
     _bindChats();
+    _bindFriendNames();
+    _loadMyCity();
   }
 
   @override
   void dispose() {
     _chatSub?.cancel();
     _blockedSub?.cancel();
+    _friendsSub?.cancel();
     _debounce?.cancel();
     _searchCtrl.removeListener(_onSearchChanged);
     _searchCtrl.dispose();
@@ -118,6 +129,42 @@ class _FriendsScreenState extends State<FriendsScreen> {
         _blockedIds = qs.docs.map((d) => d.id).toSet();
         _blockedByOtherCache.clear();
       });
+    });
+  }
+
+  void _bindFriendNames() {
+    _friendsSub?.cancel();
+    final me = _me;
+    if (me.isEmpty) return;
+    _friendsSub = FirebaseFirestore.instance
+        .collection('friendships')
+        .where('members', arrayContains: me)
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      final names = <String>{};
+      for (final doc in snap.docs) {
+        final members = List<String>.from(doc.data()['members'] ?? []);
+        final other = members.firstWhere((u) => u != me, orElse: () => '');
+        if (other.isNotEmpty) names.add(other);
+      }
+      setState(() => _friendUsernames = names);
+    });
+  }
+
+  Future<void> _loadMyCity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final city = prefs.getString('city');
+    if (!mounted || city == null || city.isEmpty) return;
+    setState(() {
+      _myCity = city;
+      _myLanguage = prefs.getString('language');
+      _myCountry = prefs.getString('country');
+      _suggestionsFuture = FirebaseFirestore.instance
+          .collection('users')
+          .where('city', isEqualTo: city)
+          .limit(25)
+          .get();
     });
   }
 
@@ -451,7 +498,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
         final vm = _FriendVM(
           username: other,
           displayName: full.isEmpty ? other : full,
-          photoUrl: (user['photoUrl'] ?? '').toString().trim(),
+          photoUrl: ((user['avatarUrl'] ?? user['photoUrl'] ?? '') as Object).toString().trim(),
           searchBlob: _buildSearchBlob(username: other, first: first, last: last),
         );
         _friendVmCache[other.toLowerCase()] = vm;
@@ -611,6 +658,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
         _buildFriendsSliver(me),
         if (_query.isNotEmpty) _buildSearchResultsSliver(me),
+        if (_query.isEmpty) _buildSuggestionsSliver(me),
 
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
       ],
@@ -682,7 +730,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
                         final last = (user['nachname'] ?? '').toString().trim();
                         final full = ('$first $last').trim();
                         final name = full.isEmpty ? fromU : full;
-                        final photo = (user['photoUrl'] ?? '').toString().trim();
+                        final photo = ((user['avatarUrl'] ?? user['photoUrl'] ?? '') as Object).toString().trim();
 
                         return _RequestCard(
                           photoUrl: photo,
@@ -915,6 +963,106 @@ class _FriendsScreenState extends State<FriendsScreen> {
           ),
         );
       },
+    );
+  }
+
+  // ─── Vorschläge ──────────────────────────────────────────────────────────────
+
+  Widget _buildSuggestionsSliver(String me) {
+    final city = _myCity;
+    final future = _suggestionsFuture;
+    if (city == null || city.isEmpty || future == null) {
+      return const SliverToBoxAdapter(child: SizedBox.shrink());
+    }
+
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+        child: FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          future: future,
+          builder: (ctx, snap) {
+            if (!snap.hasData) return const SizedBox.shrink();
+
+            final candidates = snap.data!.docs
+                .where((d) {
+                  final data = d.data();
+                  if (_myLanguage != null && _myLanguage!.isNotEmpty) {
+                    final docLang = (data['language'] ?? '').toString();
+                    if (docLang != _myLanguage) return false;
+                  }
+                  if (_myCountry != null && _myCountry!.isNotEmpty) {
+                    final docCountry = (data['country'] ?? '').toString();
+                    if (docCountry != _myCountry) return false;
+                  }
+                  return true;
+                })
+                .map((d) => (d.data()['username'] ?? '').toString())
+                .where((u) =>
+                    u.isNotEmpty &&
+                    u.toLowerCase() != me.toLowerCase() &&
+                    !_friendUsernames.contains(u) &&
+                    !_blockedIds.contains(u))
+                .toList();
+
+            if (candidates.isEmpty) return const SizedBox.shrink();
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SectionHeader(
+                  title: 'Leute aus deiner Umgebung',
+                  icon: Icons.location_city_outlined,
+                ),
+                const SizedBox(height: 8),
+                ...candidates.asMap().entries.map((entry) {
+                  final i = entry.key;
+                  final uname = candidates[i];
+                  final isBlockedByMe = _blockedIds.contains(uname);
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: i < candidates.length - 1 ? 8 : 0),
+                    child: FutureBuilder<bool>(
+                      future: _isBlockedByOther(uname),
+                      builder: (_, bSnap) {
+                        final blockedByOther = bSnap.data == true;
+                        return FutureBuilder<RelStatus>(
+                          future: _model.relationWith(me, uname),
+                          builder: (_, rSnap) {
+                            final rel = rSnap.data;
+                            if (rel == RelStatus.friends) return const SizedBox.shrink();
+                            return _SearchUserCard(
+                              username: uname,
+                              rel: rel,
+                              isBlockedByMe: isBlockedByMe,
+                              blockedByOther: blockedByOther,
+                              onAdd: () {
+                                _dismissKeyboard();
+                                _sendFriendRequest(uname);
+                              },
+                              onAccept: () {
+                                _dismissKeyboard();
+                                _accept(uname, me);
+                              },
+                              onDecline: () {
+                                _dismissKeyboard();
+                                _decline(uname, me);
+                              },
+                              onUnblock: () {
+                                _dismissKeyboard();
+                                _unblockUser(uname);
+                              },
+                              menu: _userMenu(username: uname, isBlockedByMe: isBlockedByMe),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  );
+                }),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 }

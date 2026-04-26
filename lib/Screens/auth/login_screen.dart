@@ -10,6 +10,7 @@ import '../home/home_shell.dart';
 import 'package:party_pin/Upgrade/phone_upgrade_screen.dart';
 import '../../Theme/app_theme.dart';
 import '../../l10n/lang.dart';
+import '../../Services/notification_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
@@ -296,6 +297,9 @@ class _LoginScreenState extends State<LoginScreen> {
       //   );
       //   return;
       // }
+
+      // Save FCM token now that username is known
+      try { await NotificationService.saveCurrentToken(); } catch (_) {}
 
       await _checkNavigation();
     } catch (e) {

@@ -9,6 +9,7 @@
 // =======================
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
@@ -373,6 +374,216 @@ exports.createPayPalCheckout = paypalPremium.createPayPalCheckout;
 exports.syncPayPalPremiumDaily = paypalPremium.syncPayPalPremiumDaily;
 
 // =======================
+// Nearby Party Notifications (Scheduled — Thu + Fri 17:00 CET)
+// =======================
+
+function _haversineKm(lat1, lng1, lat2, lng2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+exports.sendNearbyPartyNotifications = onSchedule(
+    {
+        region: "europe-west1",
+        schedule: "0 17 * * 4,5", // Thu + Fri at 17:00
+        timeZone: "Europe/Vienna",
+    },
+    async () => {
+        const now = new Date();
+        const nowMs = now.getTime();
+        const windowEndMs = nowMs + 3 * 24 * 60 * 60 * 1000;
+
+        // --- Load upcoming parties (next 3 days) ---
+        const partySnap = await db.collection("Party").get();
+        const upcoming = [];
+        for (const doc of partySnap.docs) {
+            const p = doc.data() || {};
+            const start = parsePartyStart(p);
+            if (!start) continue;
+            const startMs = start.getTime();
+            if (startMs < nowMs || startMs > windowEndMs) continue;
+            const lat = parseFloat(p.lat ?? p.latitude ?? "");
+            const lng = parseFloat(p.lng ?? p.longitude ?? "");
+            if (!isFinite(lat) || !isFinite(lng)) continue;
+            upcoming.push({ id: doc.id, name: (p.name || "Party").trim(), lat, lng, start });
+        }
+        console.log("[weekend] Upcoming parties:", upcoming.length);
+
+        // --- Load approved bars ---
+        const barSnap = await db.collection("bars").where("status", "==", "approved").get();
+        const approvedBars = [];
+        for (const doc of barSnap.docs) {
+            const b = doc.data() || {};
+            const lat = parseFloat(b.lat ?? b.latitude ?? "");
+            const lng = parseFloat(b.lng ?? b.longitude ?? "");
+            if (!isFinite(lat) || !isFinite(lng)) continue;
+            const name = (b.barName || b.name || "Bar").trim();
+            approvedBars.push({ id: doc.id, name, lat, lng });
+        }
+        console.log("[weekend] Approved bars:", approvedBars.length);
+
+        if (upcoming.length === 0 && approvedBars.length === 0) {
+            console.log("[weekend] Nothing to notify — done.");
+            return null;
+        }
+
+        // --- Merge user queries (notifNearbyParties OR notifNearbyBars) ---
+        const [partyUsersSnap, barUsersSnap] = await Promise.all([
+            db.collection("users").where("notifNearbyParties", "==", true).get(),
+            db.collection("users").where("notifNearbyBars", "==", true).get(),
+        ]);
+        const userMap = new Map();
+        for (const doc of [...partyUsersSnap.docs, ...barUsersSnap.docs]) {
+            userMap.set(doc.id, doc);
+        }
+        console.log("[weekend] Users to process:", userMap.size);
+
+        // --- Process each user ---
+        for (const userDoc of userMap.values()) {
+            const u = userDoc.data() || {};
+            const fcmToken = u.fcmToken;
+            if (!fcmToken) continue;
+
+            const userLat = parseFloat(u.selectedLat ?? "");
+            const userLng = parseFloat(u.selectedLng ?? "");
+            if (!isFinite(userLat) || !isFinite(userLng)) continue;
+
+            let title, body, channelId;
+            let notified = false;
+
+            // 1. Party notification (takes priority)
+            if (u.notifNearbyParties === true && upcoming.length > 0) {
+                const nearby = upcoming.filter(p => _haversineKm(userLat, userLng, p.lat, p.lng) <= 50);
+                if (nearby.length > 0) {
+                    const count = nearby.length;
+                    const soonest = nearby.reduce((a, b) => a.start < b.start ? a : b);
+                    const daysUntil = Math.floor((soonest.start.getTime() - nowMs) / (24 * 60 * 60 * 1000));
+                    const nameList = nearby.slice(0, 2).map(p => p.name).join(", ");
+
+                    if (daysUntil === 0) {
+                        title = count === 1 ? "Party heute in deiner Nähe! 🎉" : `${count} Partys heute in deiner Nähe! 🎉`;
+                        body = count === 1 ? `${soonest.name} findet heute statt.` : `${nameList}${count > 2 ? " und mehr" : ""} finden heute statt.`;
+                    } else if (daysUntil === 1) {
+                        title = count === 1 ? "Party morgen in deiner Nähe! 🎉" : `${count} Partys morgen in deiner Nähe! 🎉`;
+                        body = count === 1 ? `${soonest.name} findet morgen statt.` : `${nameList}${count > 2 ? " und mehr" : ""} finden morgen statt.`;
+                    } else {
+                        title = count === 1 ? `Party in ${daysUntil} Tagen in deiner Nähe! 🎉` : `${count} Partys in deiner Nähe! 🎉`;
+                        body = count === 1 ? `${soonest.name} findet in ${daysUntil} Tagen statt.` : `${nameList}${count > 2 ? " und mehr" : ""}.`;
+                    }
+                    channelId = "nearby_parties";
+                    notified = true;
+                }
+            }
+
+            // 2. Bar suggestion fallback (only if no party notification was sent)
+            if (!notified && u.notifNearbyBars === true && approvedBars.length > 0) {
+                const nearbyBars = approvedBars.filter(b => _haversineKm(userLat, userLng, b.lat, b.lng) <= 50);
+                if (nearbyBars.length > 0) {
+                    const bar = nearbyBars[Math.floor(Math.random() * nearbyBars.length)];
+                    const count = nearbyBars.length;
+                    const nameList = nearbyBars.slice(0, 2).map(b => b.name).join(", ");
+
+                    title = count === 1
+                        ? `Heute Abend in ${bar.name}? 🍺`
+                        : `${count} Bars heute Abend in deiner Nähe 🍺`;
+                    body = count === 1
+                        ? `Keine Partys – aber ${bar.name} ist in deiner Nähe.`
+                        : `${nameList}${count > 2 ? " und mehr" : ""} – perfekt für heute Abend.`;
+                    channelId = "nearby_bars";
+                    notified = true;
+                }
+            }
+
+            if (!notified) continue;
+
+            try {
+                await admin.messaging().send({
+                    token: fcmToken,
+                    notification: { title, body },
+                    android: {
+                        priority: "high",
+                        notification: { channelId, sound: "default" },
+                    },
+                    apns: {
+                        headers: { "apns-priority": "10" },
+                        payload: { aps: { sound: "default", badge: 1, "content-available": 1 } },
+                    },
+                });
+                console.log("[weekend] Sent to", userDoc.id, "—", title);
+            } catch (e) {
+                console.log("[weekend] Failed for", userDoc.id, ":", e?.message || e);
+            }
+        }
+
+        return null;
+    }
+);
+
+// =======================
+// sendFriendRequest (Callable v2) — idempotent, race-condition-safe
+// =======================
+exports.sendFriendRequest = onCall({ region: "europe-west1" }, async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "Not logged in.");
+
+    const uid = request.auth.uid;
+    const to = (request.data?.to || "").trim();
+    if (!to) throw new HttpsError("invalid-argument", "Missing 'to' username.");
+
+    // Caller-Username aus users/{uid} holen
+    const mySnap = await db.collection("users").doc(uid).get();
+    let from = mySnap.exists ? (mySnap.data()?.username || "").trim() : "";
+
+    // Fallback: query by uid field
+    if (!from) {
+        const q = await db.collection("users").where("uid", "==", uid).limit(1).get();
+        if (!q.empty) from = (q.docs[0].data()?.username || "").trim();
+    }
+    if (!from) throw new HttpsError("not-found", "Caller has no username.");
+    if (from === to) throw new HttpsError("invalid-argument", "Cannot add yourself.");
+
+    // Ziel-User prüfen
+    const toQuery = await db.collection("users").where("username", "==", to).limit(1).get();
+    if (toQuery.empty) throw new HttpsError("not-found", `User "${to}" not found.`);
+    const toDocId = toQuery.docs[0].id;
+
+    const shipId = [from, to].sort().join("__");
+    const reqId  = `${from}__${to}`;
+    const reqRef  = db.collection("friendRequests").doc(reqId);
+    const shipRef = db.collection("friendships").doc(shipId);
+
+    return await db.runTransaction(async (tx) => {
+        const [reqSnap, shipSnap] = await Promise.all([tx.get(reqRef), tx.get(shipRef)]);
+
+        // Bereits befreundet
+        if (shipSnap.exists) return { status: "already_friends" };
+
+        // Anfrage existiert schon (pending oder anderer Status)
+        if (reqSnap.exists) {
+            const s = reqSnap.data()?.status;
+            if (s === "pending") return { status: "already_sent" };
+            // declined / accepted → neu anlegen erlaubt (überschreiben)
+        }
+
+        tx.set(reqRef, {
+            from,
+            fromDocId: uid,
+            to,
+            toDocId,
+            status: "pending",
+            ts: FieldValue.serverTimestamp(),
+        });
+
+        return { status: "sent" };
+    });
+});
+
+// =======================
 // Friend Request Push Notification
 // =======================
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
@@ -410,18 +621,41 @@ exports.sendPushNotification = onCall({ region: "europe-west1" }, async (request
   const { toUsername, title, body, data: extraData } = request.data || {};
   if (!toUsername || !title || !body) return { ok: false, reason: "missing fields" };
 
-  const userSnap = await db.collection("users").doc(toUsername).get();
-  if (!userSnap.exists) return { ok: false, reason: "user not found" };
+  // 1) Try token-doc (username as doc-ID, written by NotificationService._saveToken)
+  let fcmToken = null;
+  const tokenSnap = await db.collection("users").doc(toUsername).get();
+  if (tokenSnap.exists && tokenSnap.data()?.fcmToken) {
+    fcmToken = tokenSnap.data().fcmToken;
+  }
 
-  const fcmToken = userSnap.data()?.fcmToken;
+  // 2) Fallback: query main user doc by username_lower
+  if (!fcmToken) {
+    const q = await db.collection("users")
+      .where("username_lower", "==", toUsername.toLowerCase())
+      .limit(1).get();
+    if (!q.empty) fcmToken = q.docs[0].data()?.fcmToken;
+  }
+
   if (!fcmToken) return { ok: false, reason: "no fcm token" };
 
   await admin.messaging().send({
     token: fcmToken,
     notification: { title, body },
     data: extraData || {},
-    android: { priority: "high", notification: { channelId: "party_requests" } },
-    apns: { payload: { aps: { sound: "default" } } },
+    android: {
+      priority: "high",
+      notification: { channelId: "party_requests", sound: "default" },
+    },
+    apns: {
+      headers: { "apns-priority": "10" },
+      payload: {
+        aps: {
+          sound: "default",
+          badge: 1,
+          "content-available": 1,
+        },
+      },
+    },
   });
 
   return { ok: true };

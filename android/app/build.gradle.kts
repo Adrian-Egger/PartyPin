@@ -23,8 +23,8 @@ android {
         applicationId = "com.partypin.party_pin"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 5
+        versionName = "1.4.0"
     }
 
     // --- Upload-Keystore ist Pflicht ---

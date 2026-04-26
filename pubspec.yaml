@@ -12,6 +12,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   geocoding: ^3.0.0
   google_maps_flutter: ^2.7.0
+  google_maps_flutter_android: any
+  google_maps_flutter_platform_interface: any
   shared_preferences: ^2.3.2
   intl: ^0.19.0
   permission_handler: ^11.3.1

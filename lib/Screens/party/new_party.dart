@@ -303,20 +303,17 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       _minAgeController,
     ]) {
       c.addListener(() {
-        if (_triedSubmit) _formKey.currentState?.validate();
         if (c == _addressController) _addressCountryError = null;
       });
     }
 
     _guestLimitController.addListener(() {
       if (_guestLimitController.text.isNotEmpty) _isUnlimitedGuests = false;
-      if (_triedSubmit) _formKey.currentState?.validate();
       setState(() {});
     });
 
     _priceController.addListener(() {
       if (_priceController.text.isNotEmpty) _isFreeEntry = false;
-      if (_triedSubmit) _formKey.currentState?.validate();
       setState(() {});
     });
   }

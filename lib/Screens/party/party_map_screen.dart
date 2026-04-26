@@ -2165,302 +2165,279 @@ String _safeDocId(String input) => input
     bool onlyClosed = _onlyClosedParties;
     double? radius = _radiusKm;
 
-    // Slider-Werte (für wenn der Slider aktiv ist)
-    double sliderAge = (minAge ?? 18).toDouble();
-    double sliderEntry = maxEntry ?? 20.0;
-    double sliderRadius = radius ?? 10.0;
+    // Lokale Slider-Werte (falls gerade "Kein Limit" aktiv, trotzdem einen sinnvollen Wert merken)
+    double sliderAge    = (minAge   ?? 18).toDouble();
+    double sliderEntry  = (maxEntry ?? 20.0);
+    double sliderRadius = (radius   ?? 25.0);
 
     final result = await showModalBottomSheet<Map<String, dynamic>?>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.grey[900],
+      useSafeArea: true,
+      backgroundColor: const Color(0xFF111111),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) {
-        return DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.7,
-          minChildSize: 0.5,
-          maxChildSize: 0.95,
-          builder: (_, scrollCtrl) => StatefulBuilder(
-            builder: (ctx, setSB) {
-              void turnOffPartySubFiltersIfNeeded() {
-                if (!showParties) {
-                  onlyOpen = false;
-                  onlyClosed = false;
-                  onlyFree = false;
-                  minAge = null;
-                  maxEntry = null;
-                }
-              }
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSB) {
+          void turnOff() {
+            if (!showParties) {
+              onlyOpen = false; onlyClosed = false;
+              onlyFree = false; minAge = null; maxEntry = null;
+            }
+          }
 
-              // ── Slider-Sektion ──────────────────────────────────────────
-              Widget filterSlider({
-                required String label,
-                required bool active,
-                required String activeLabel,
-                required String allLabel,
-                required double value,
-                required double min,
-                required double max,
-                required int divisions,
-                required bool enabled,
-                required VoidCallback onActivate,
-                required VoidCallback onDeactivate,
-                required ValueChanged<double> onChanged,
-              }) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(label, style: const TextStyle(
-                          color: Colors.white54, fontSize: 12,
-                          fontWeight: FontWeight.w600, letterSpacing: .5,
-                        )),
-                        const Spacer(),
-                        GestureDetector(
-                          onTap: enabled
-                              ? () => setSB(() => active ? onDeactivate() : onActivate())
-                              : null,
-                          child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 160),
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: active
-                                  ? _accent.withOpacity(0.18)
-                                  : Colors.grey[800],
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: active ? _accent : Colors.white24,
-                                width: active ? 1.5 : 1,
-                              ),
-                            ),
-                            child: Text(
-                              active ? activeLabel : allLabel,
-                              style: TextStyle(
-                                color: active
-                                    ? _accent
-                                    : (enabled ? Colors.white60 : Colors.white24),
-                                fontWeight: FontWeight.w600,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (active) ...[
-                      const SizedBox(height: 4),
-                      SliderTheme(
-                        data: SliderTheme.of(ctx).copyWith(
-                          activeTrackColor: _accent,
-                          thumbColor: _accent,
-                          inactiveTrackColor: Colors.white12,
-                          overlayColor: _accent.withOpacity(0.15),
-                          trackHeight: 3,
-                        ),
-                        child: TweenAnimationBuilder<double>(
-                          tween: Tween<double>(end: value),
-                          duration: const Duration(milliseconds: 380),
-                          curve: Curves.easeOut,
-                          builder: (_, animVal, __) => Slider(
-                            value: animVal.clamp(min, max),
-                            min: min,
-                            max: max,
-                            divisions: divisions,
-                            onChanged: enabled ? (v) => setSB(() => onChanged(v)) : null,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                );
-              }
+          void applyAndClose() {
+            bool fo = onlyOpen, fc = onlyClosed, ff = onlyFree;
+            int? fa = minAge;
+            double? fe = maxEntry;
+            if (!showParties) { fo = false; fc = false; ff = false; fa = null; fe = null; }
+            if (fo && fc) fc = false;
+            Navigator.of(ctx).pop(<String, dynamic>{
+              'showParties': showParties, 'showBars': showBars,
+              'onlyFree': ff, 'minAge': fa, 'maxEntry': fe,
+              'onlyOpen': fo, 'onlyClosed': fc,
+              'radiusKm': radius, 'reset': false,
+            });
+          }
 
-              return ListView(
-                controller: scrollCtrl,
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          // ── Slider-Box ────────────────────────────────────────────────
+          // hasLimit=true  → Slider aktiv, Wert anzeigen
+          // hasLimit=false → "Kein Limit" aktiv, Slider versteckt
+          Widget sliderBox({
+            required String label,
+            required bool hasLimit,
+            required double sliderVal,
+            required double min,
+            required double max,
+            required int divisions,
+            required bool enabled,
+            required String Function(double) valueFmt,
+            required void Function(double) onSlide,
+            required void Function() onActivate,   // Kein Limit → Limit
+            required void Function() onDeactivate, // Limit → Kein Limit
+          }) {
+            final active = hasLimit;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              decoration: BoxDecoration(
+                color: const Color(0xFF181818),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: active && enabled ? _accent.withOpacity(0.45) : Colors.white12,
+                  width: active && enabled ? 1.5 : 1,
+                ),
+              ),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Handle
-                  Center(
-                    child: Container(
-                      width: 36, height: 4,
-                      margin: const EdgeInsets.only(bottom: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-
-                  // Header
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[850],
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.white24),
-                    ),
-                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.filter_list_rounded, color: Colors.white, size: 16),
-                      SizedBox(width: 6),
-                      Text("Filter", style: TextStyle(
-                        color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700,
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: enabled
+                        ? () => setSB(() => active ? onDeactivate() : onActivate())
+                        : null,
+                    child: Row(children: [
+                      Text(label, style: TextStyle(
+                        color: enabled ? Colors.white54 : Colors.white24,
+                        fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8,
                       )),
+                      const Spacer(),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: active && enabled
+                              ? _accent.withOpacity(0.15)
+                              : Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: active && enabled ? _accent : Colors.white24,
+                            width: active && enabled ? 1.5 : 1,
+                          ),
+                        ),
+                        child: Text(
+                          active ? valueFmt(sliderVal) : "Kein Limit",
+                          style: TextStyle(
+                            color: active && enabled ? _accent : Colors.white38,
+                            fontSize: 12, fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                     ]),
                   ),
-                  const SizedBox(height: 20),
-
-                  // Toggles
-                  _filterToggle("Partys anzeigen", showParties, (v) => setSB(() {
-                    showParties = v;
-                    turnOffPartySubFiltersIfNeeded();
-                  })),
-                  const SizedBox(height: 4),
-                  _filterToggle("Nur offene Partys", onlyOpen, showParties ? (v) => setSB(() {
-                    onlyOpen = v;
-                    if (v) onlyClosed = false;
-                  }) : null),
-                  const SizedBox(height: 4),
-                  _filterToggle("Nur geschlossene Partys", onlyClosed, showParties ? (v) => setSB(() {
-                    onlyClosed = v;
-                    if (v) onlyOpen = false;
-                  }) : null),
-                  const SizedBox(height: 4),
-                  _filterToggle("Bars anzeigen", showBars, (v) => setSB(() => showBars = v)),
-                  const SizedBox(height: 4),
-                  _filterToggle("Nur gratis Partys", onlyFree, showParties ? (v) => setSB(() {
-                    onlyFree = v;
-                    if (v) { maxEntry = 0; sliderEntry = 0; } else if (maxEntry == 0) { maxEntry = null; }
-                  }) : null),
-
-                  const Divider(color: Colors.white12, height: 32),
-
-                  // ── Mindestalter Slider ──────────────────────────────────
-                  filterSlider(
-                    label: "MINDESTALTER",
-                    active: minAge != null,
-                    activeLabel: "max. ${sliderAge.toInt()}+",
-                    allLabel: "Alle",
-                    value: sliderAge,
-                    min: 14,
-                    max: 30,
-                    divisions: 16,
-                    enabled: showParties,
-                    onActivate: () { minAge = sliderAge.toInt(); },
-                    onDeactivate: () { minAge = null; },
-                    onChanged: (v) { sliderAge = v; minAge = v.toInt(); },
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // ── Max. Eintritt Slider ─────────────────────────────────
-                  filterSlider(
-                    label: "MAX. EINTRITT",
-                    active: maxEntry != null,
-                    activeLabel: maxEntry == 0 ? "Gratis" : "≤ ${sliderEntry.toInt()} €",
-                    allLabel: "Alle",
-                    value: sliderEntry,
-                    min: 0,
-                    max: 100,
-                    divisions: 20,
-                    enabled: showParties,
-                    onActivate: () { maxEntry = sliderEntry; },
-                    onDeactivate: () { maxEntry = null; onlyFree = false; },
-                    onChanged: (v) {
-                      sliderEntry = v;
-                      maxEntry = v;
-                      onlyFree = (v == 0);
-                    },
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // ── Umkreis Slider ───────────────────────────────────────
-                  filterSlider(
-                    label: "UMKREIS  ${_currentCity.toUpperCase()}",
-                    active: radius != null,
-                    activeLabel: "≤ ${sliderRadius.toInt()} km",
-                    allLabel: "Kein Limit",
-                    value: sliderRadius,
-                    min: 1,
-                    max: 50,
-                    divisions: 49,
-                    enabled: true,
-                    onActivate: () { radius = sliderRadius; },
-                    onDeactivate: () { radius = null; },
-                    onChanged: (v) { sliderRadius = v; radius = v; },
-                  ),
-
-                  const SizedBox(height: 28),
-
-                  // Action buttons
-                  Row(children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white54,
-                          side: const BorderSide(color: Colors.white24),
-                          padding: const EdgeInsets.symmetric(vertical: 13),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        onPressed: () => Navigator.of(ctx).pop(<String, dynamic>{'reset': true}),
-                        child: const Text("Zurücksetzen", style: TextStyle(fontWeight: FontWeight.w600)),
+                  if (active) ...[
+                    const SizedBox(height: 2),
+                    SliderTheme(
+                      data: SliderTheme.of(ctx).copyWith(
+                        activeTrackColor: _accent,
+                        thumbColor: _accent,
+                        inactiveTrackColor: Colors.white12,
+                        overlayColor: _accent.withOpacity(0.15),
+                        trackHeight: 3,
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+                      ),
+                      child: Slider(
+                        value: sliderVal.clamp(min, max),
+                        min: min,
+                        max: max,
+                        divisions: divisions,
+                        // Kein TweenAnimationBuilder → Finger geht direkt mit
+                        onChanged: enabled ? (v) => setSB(() => onSlide(v)) : null,
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 2,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _accent,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 13),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          elevation: 0,
-                        ),
-                        onPressed: () {
-                          bool finalOnlyOpen = onlyOpen;
-                          bool finalOnlyClosed = onlyClosed;
-                          bool finalOnlyFree = onlyFree;
-                          int? finalMinAge = minAge;
-                          double? finalMaxEntry = maxEntry;
-
-                          if (!showParties) {
-                            finalOnlyOpen = false;
-                            finalOnlyClosed = false;
-                            finalOnlyFree = false;
-                            finalMinAge = null;
-                            finalMaxEntry = null;
-                          }
-                          if (finalOnlyOpen && finalOnlyClosed) finalOnlyClosed = false;
-
-                          Navigator.of(ctx).pop(<String, dynamic>{
-                            'showParties': showParties,
-                            'showBars': showBars,
-                            'onlyFree': finalOnlyFree,
-                            'minAge': finalMinAge,
-                            'maxEntry': finalMaxEntry,
-                            'onlyOpen': finalOnlyOpen,
-                            'onlyClosed': finalOnlyClosed,
-                            'radiusKm': radius,
-                            'reset': false,
-                          });
-                        },
-                        child: const Text("Übernehmen", style: TextStyle(
-                          fontWeight: FontWeight.w700, fontSize: 15,
-                        )),
-                      ),
-                    ),
-                  ]),
+                  ],
                 ],
-              );
-            },
-          ),
-        );
-      },
+              ),
+            );
+          }
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle
+              Padding(
+                padding: const EdgeInsets.only(top: 12, bottom: 4),
+                child: Container(
+                  width: 36, height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              // Header
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 0),
+                child: Row(children: const [
+                  Icon(Icons.filter_list_rounded, color: Colors.white, size: 20),
+                  SizedBox(width: 8),
+                  Text("Filter", style: TextStyle(
+                    color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800,
+                  )),
+                ]),
+              ),
+              // ── Scrollbarer Inhalt ───────────────────────────────────
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _filterToggle("Partys anzeigen", showParties,
+                          (v) => setSB(() { showParties = v; turnOff(); })),
+                      const SizedBox(height: 4),
+                      _filterToggle("Nur offene Partys", onlyOpen,
+                          showParties ? (v) => setSB(() { onlyOpen = v; if (v) onlyClosed = false; }) : null),
+                      const SizedBox(height: 4),
+                      _filterToggle("Nur geschlossene Partys", onlyClosed,
+                          showParties ? (v) => setSB(() { onlyClosed = v; if (v) onlyOpen = false; }) : null),
+                      const SizedBox(height: 4),
+                      _filterToggle("Bars anzeigen", showBars,
+                          (v) => setSB(() => showBars = v)),
+                      const SizedBox(height: 4),
+                      _filterToggle("Nur gratis Partys", onlyFree,
+                          showParties ? (v) => setSB(() {
+                            onlyFree = v;
+                            if (v) { maxEntry = 0.0; sliderEntry = 0.0; }
+                            else if (maxEntry == 0.0) { maxEntry = null; }
+                          }) : null),
+
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 18),
+                        child: Divider(color: Colors.white12, height: 1),
+                      ),
+
+                      // Mindestalter
+                      sliderBox(
+                        label: "MINDESTALTER",
+                        hasLimit: minAge != null,
+                        sliderVal: sliderAge,
+                        min: 14, max: 30, divisions: 16,
+                        enabled: showParties,
+                        valueFmt: (v) => "${v.toInt()}+",
+                        onSlide: (v) { sliderAge = v; minAge = v.toInt(); },
+                        onActivate: () { minAge = sliderAge.toInt(); },
+                        onDeactivate: () { minAge = null; },
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Max. Eintritt
+                      sliderBox(
+                        label: "MAX. EINTRITT",
+                        hasLimit: maxEntry != null,
+                        sliderVal: sliderEntry,
+                        min: 0, max: 100, divisions: 20,
+                        enabled: showParties,
+                        valueFmt: (v) => v == 0 ? "Gratis" : "≤ ${v.toInt()} €",
+                        onSlide: (v) {
+                          sliderEntry = v; maxEntry = v;
+                          onlyFree = (v == 0);
+                        },
+                        onActivate: () { maxEntry = sliderEntry; onlyFree = (sliderEntry == 0); },
+                        onDeactivate: () { maxEntry = null; onlyFree = false; },
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Umkreis
+                      sliderBox(
+                        label: "UMKREIS${_currentCity.isNotEmpty ? '  –  ${_currentCity.toUpperCase()}' : ''}",
+                        hasLimit: radius != null,
+                        sliderVal: sliderRadius,
+                        min: 1, max: 100, divisions: 99,
+                        enabled: true,
+                        valueFmt: (v) => "≤ ${v.toInt()} km",
+                        onSlide: (v) { sliderRadius = v; radius = v; },
+                        onActivate: () { radius = sliderRadius; },
+                        onDeactivate: () { radius = null; },
+                      ),
+
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ),
+              // ── Sticky Buttons ───────────────────────────────────────
+              Container(
+                padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: Colors.white12)),
+                ),
+                child: Row(children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white54,
+                        side: const BorderSide(color: Colors.white24),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () => Navigator.of(ctx).pop(<String, dynamic>{'reset': true}),
+                      child: const Text("Zurücksetzen", style: TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _accent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                      onPressed: applyAndClose,
+                      child: const Text("Übernehmen", style: TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 15,
+                      )),
+                    ),
+                  ),
+                ]),
+              ),
+            ],
+          );
+        },
+      ),
     );
 
     if (result == null) return;
@@ -2529,6 +2506,7 @@ String _safeDocId(String input) => input
               markers: _markers,
               circles: _circles,
               padding: EdgeInsets.only(top: topPad + 130, bottom: 80),
+              myLocationButtonEnabled: false,
               onMapCreated: (controller) async {
                 mapController = controller;
                 try {
@@ -2813,7 +2791,7 @@ String _safeDocId(String input) => input
   }
 }
 
-class _SearchCard extends StatefulWidget {
+class _SearchCard extends StatelessWidget {
   final TextEditingController controller;
   final Future<void> Function(String) onSearch;
   final VoidCallback onClear;
@@ -2825,80 +2803,57 @@ class _SearchCard extends StatefulWidget {
   });
 
   @override
-  State<_SearchCard> createState() => _SearchCardState();
-}
-
-class _SearchCardState extends State<_SearchCard> {
-  @override
-  void initState() {
-    super.initState();
-    widget.controller.addListener(_rebuild);
-  }
-
-  @override
-  void didUpdateWidget(covariant _SearchCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.removeListener(_rebuild);
-      widget.controller.addListener(_rebuild);
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.controller.removeListener(_rebuild);
-    super.dispose();
-  }
-
-  void _rebuild() {
-    if (mounted) setState(() {});
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final hasText = widget.controller.text.trim().isNotEmpty;
-
-    return Container(
-      height: 46,
-      decoration: BoxDecoration(
-        color: AppColors.panelAlt,
-        borderRadius: AppRadius.smBr,
-        border: Border.all(
-          color: hasText ? AppColors.accentBorder3 : AppColors.accentBorder,
-          width: 1,
+    // TextField is passed as child so it is built once and never rebuilt
+    // when text changes — preserving the IME connection for umlauts (ü/ä/ö).
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      child: Expanded(
+        child: TextField(
+          controller: controller,
+          style: const TextStyle(color: AppColors.text, fontSize: 14),
+          textInputAction: TextInputAction.search,
+          onSubmitted: onSearch,
+          decoration: const InputDecoration(
+            hintText: "Adresse suchen...",
+            hintStyle: TextStyle(color: AppColors.subtle, fontSize: 14),
+            border: InputBorder.none,
+            isDense: true,
+          ),
         ),
       ),
-      child: Row(
-        children: [
-          const SizedBox(width: 12),
-          const Icon(Icons.search_rounded, color: AppColors.subtle, size: 20),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: widget.controller,
-              style: const TextStyle(color: AppColors.text, fontSize: 14),
-              textInputAction: TextInputAction.search,
-              onSubmitted: widget.onSearch,
-              decoration: const InputDecoration(
-                hintText: "Adresse suchen...",
-                hintStyle: TextStyle(color: AppColors.subtle, fontSize: 14),
-                border: InputBorder.none,
-                isDense: true,
-              ),
+      builder: (context, value, child) {
+        final hasText = value.text.trim().isNotEmpty;
+        return Container(
+          height: 46,
+          decoration: BoxDecoration(
+            color: AppColors.panelAlt,
+            borderRadius: AppRadius.smBr,
+            border: Border.all(
+              color: hasText ? AppColors.accentBorder3 : AppColors.accentBorder,
+              width: 1,
             ),
           ),
-          if (hasText)
-            GestureDetector(
-              onTap: widget.onClear,
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10),
-                child: Icon(Icons.close_rounded, color: AppColors.subtle, size: 18),
-              ),
-            )
-          else
-            const SizedBox(width: 12),
-        ],
-      ),
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              const Icon(Icons.search_rounded, color: AppColors.subtle, size: 20),
+              const SizedBox(width: 8),
+              child!,
+              if (hasText)
+                GestureDetector(
+                  onTap: onClear,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 10),
+                    child: Icon(Icons.close_rounded, color: AppColors.subtle, size: 18),
+                  ),
+                )
+              else
+                const SizedBox(width: 12),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart'; // ✅ anonymous auth (Storage)
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,6 +34,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   String _docId = "";
   String _username = "";
   String? _avatar; // URL (avatarUrl)
+  String _bio = "";
   String _passwordFromDb = "";
 
   // ✅ users vs bars
@@ -41,19 +43,18 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       FirebaseFirestore.instance.collection(_collection);
 
   final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _bioController = TextEditingController();
   final TextEditingController _currentPasswordController =
   TextEditingController();
   final TextEditingController _newPasswordController = TextEditingController();
 
   bool _editingUsername = false;
+  bool _editingBio = false;
   bool _editingPassword = false;
 
   bool _busyAvatar = false;
 
   final ImagePicker _picker = ImagePicker();
-
-  // ✅ Coming soon Toggle: Profilbild-Funktion komplett deaktiviert
-  final bool _avatarComingSoon = true;
 
   @override
   void initState() {
@@ -64,6 +65,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   @override
   void dispose() {
     _usernameController.dispose();
+    _bioController.dispose();
     _currentPasswordController.dispose();
     _newPasswordController.dispose();
     super.dispose();
@@ -99,6 +101,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
       avatarUrl = (data['avatarUrl'] ?? '').toString().trim();
       password = (data['password'] ?? '').toString();
+      final bio = (data['bio'] ?? '').toString();
 
       if (!mounted) return true;
       setState(() {
@@ -110,6 +113,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
             ? avatarUrl
             : cachedAvatar;
         _passwordFromDb = password;
+        _bio = bio;
+        _bioController.text = bio;
       });
 
       // ✅ merken, damit künftig sofort richtig gesucht wird
@@ -158,63 +163,67 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       final cred = await auth.signInAnonymously();
       return cred.user;
     } catch (e) {
-      _showSnack("Firebase Login fehlgeschlagen: $e");
+      _showSnack("Firebase Login fehlgeschlagen: $e", color: Colors.redAccent);
       return null;
     }
   }
 
   // ---------- Avatar / Foto ----------
-  Future<bool> _ensurePermissionForSource(ImageSource source) async {
-    if (source == ImageSource.camera) {
-      final status = await Permission.camera.request();
-      if (!status.isGranted) {
-        _showSnack("Kamera-Zugriff wurde verweigert.");
-        return false;
-      }
-      return true;
+  Future<bool> _ensureCameraPermission() async {
+    final status = await Permission.camera.request();
+    if (status.isGranted) return true;
+    if (status.isPermanentlyDenied) {
+      _showPermissionSettingsDialog('Kamera');
+      return false;
     }
+    _showSnack("Kamera-Zugriff wurde verweigert.", color: Colors.redAccent);
+    return false;
+  }
 
-    // Galerie (robust):
-    try {
-      if (Platform.isAndroid) {
-        final p = await Permission.photos.request();
-        if (p.isGranted) return true;
-
-        final s = await Permission.storage.request();
-        if (!s.isGranted) {
-          _showSnack("Zugriff auf Fotos wurde verweigert.");
-          return false;
-        }
-        return true;
-      } else {
-        final status = await Permission.photos.request();
-        if (!status.isGranted) {
-          _showSnack("Zugriff auf Fotos wurde verweigert.");
-          return false;
-        }
-        return true;
-      }
-    } catch (_) {
-      final s = await Permission.storage.request();
-      if (!s.isGranted) {
-        _showSnack("Zugriff auf Fotos wurde verweigert.");
-        return false;
-      }
-      return true;
-    }
+  void _showPermissionSettingsDialog(String permissionName) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.panel,
+        title: Text(
+          '$permissionName-Zugriff verweigert',
+          style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          'Bitte erlaube den $permissionName-Zugriff in den App-Einstellungen.',
+          style: const TextStyle(color: AppColors.muted),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Abbrechen', style: TextStyle(color: AppColors.muted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              openAppSettings();
+            },
+            child: const Text('Einstellungen öffnen'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _pickFromSource(ImageSource source) async {
     if (_busyAvatar) return;
 
-    // ✅ Coming soon: komplette Avatar-Funktion deaktiviert (kein Picker/Permissions/Upload)
-    if (_avatarComingSoon) {
-      _showSnack("Profilbild: Coming soon");
-      return;
+    // Camera needs an explicit runtime permission; gallery uses system photo picker (no grant needed on Android 13+)
+    if (source == ImageSource.camera) {
+      final ok = await _ensureCameraPermission();
+      if (!ok) return;
     }
-
-    final okPerm = await _ensurePermissionForSource(source);
-    if (!okPerm) return;
 
     XFile? image;
     try {
@@ -224,14 +233,15 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         maxWidth: 900,
       );
     } catch (e) {
-      _showSnack("Bild wählen fehlgeschlagen: $e");
+      // Likely a permission issue on older Android — offer to open settings
+      _showPermissionSettingsDialog('Fotos');
       return;
     }
 
     if (image == null) return;
 
     if (_docId.isEmpty) {
-      _showSnack("Dokument nicht gefunden. Bitte neu einloggen.");
+      _showSnack("Dokument nicht gefunden. Bitte neu einloggen.", color: Colors.redAccent);
       return;
     }
 
@@ -268,88 +278,22 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('avatar', url);
 
-      _showSnack("Profilbild aktualisiert.");
+      _showSnack("Profilbild aktualisiert.", color: AppColors.success);
     } on FirebaseException catch (e) {
-      _showSnack("Upload fehlgeschlagen: ${e.code}");
+      _showSnack("Upload fehlgeschlagen: ${e.code}", color: Colors.redAccent);
     } catch (e) {
-      _showSnack("Upload fehlgeschlagen: $e");
+      _showSnack("Upload fehlgeschlagen: $e", color: Colors.redAccent);
     } finally {
       if (mounted) setState(() => _busyAvatar = false);
     }
   }
 
-  Future<void> _pickAvatar() async {
-    // ✅ Coming soon: BottomSheet gar nicht mehr öffnen
-    if (_avatarComingSoon) {
-      _showSnack("Profilbild: Coming soon");
-      return;
-    }
-
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: _panel,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.symmetric(vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.only(bottom: 8.0),
-                child: Text(
-                  "Profilbild auswählen",
-                  style: TextStyle(
-                    color: _textPrimary,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_library, color: _accent),
-                title: const Text(
-                  "Aus Galerie wählen",
-                  style: TextStyle(color: _textPrimary),
-                ),
-                onTap: () async {
-                  Navigator.pop(ctx);
-                  await _pickFromSource(ImageSource.gallery);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_camera, color: _accent),
-                title: const Text(
-                  "Foto aufnehmen",
-                  style: TextStyle(color: _textPrimary),
-                ),
-                onTap: () async {
-                  Navigator.pop(ctx);
-                  await _pickFromSource(ImageSource.camera);
-                },
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
-  }
 
   // ---------- Username / Passwort ----------
   Future<void> _saveUsername() async {
     final newUsername = _usernameController.text.trim();
     if (newUsername.isEmpty) {
-      _showSnack("Username darf nicht leer sein.");
+      _showSnack("Username darf nicht leer sein.", color: Colors.redAccent);
       return;
     }
 
@@ -360,7 +304,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
 
     if (_docId.isEmpty) {
-      _showSnack("Dokument nicht gefunden.");
+      _showSnack("Dokument nicht gefunden.", color: Colors.redAccent);
       return;
     }
 
@@ -373,14 +317,18 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         .get();
 
     if (dup.docs.isNotEmpty && dup.docs.first.id != _docId) {
-      _showSnack("Dieser Username ist bereits vergeben.");
+      _showSnack("Dieser Username ist bereits vergeben.", color: Colors.redAccent);
       return;
     }
+
+    final oldUsername = _username;
 
     await _col.doc(_docId).update({
       "username": newUsername,
       "username_lower": lower,
     });
+
+    await _migrateUsernameReferences(oldUsername, newUsername);
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('username', newUsername);
@@ -392,7 +340,104 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       _editingUsername = false;
     });
 
-    _showSnack("Username erfolgreich geändert.");
+    _showSnack("Username erfolgreich geändert.", color: AppColors.success);
+  }
+
+  Future<void> _migrateUsernameReferences(
+      String oldName, String newName) async {
+    final db = FirebaseFirestore.instance;
+
+    // ── Chats: members-Array + dynamische Felder aktualisieren ──
+    final chatSnaps = await db
+        .collection('chats')
+        .where('members', arrayContains: oldName)
+        .get();
+
+    for (final chatDoc in chatSnaps.docs) {
+      final d = chatDoc.data();
+      final members = List<String>.from(d['members'] ?? []);
+      final newMembers =
+          members.map((m) => m == oldName ? newName : m).toList();
+
+      final update = <String, dynamic>{'members': newMembers};
+
+      if (d.containsKey('unread_$oldName')) {
+        update['unread_$newName'] = d['unread_$oldName'];
+        update['unread_$oldName'] = FieldValue.delete();
+      }
+      if (d.containsKey('lastRead_$oldName')) {
+        update['lastRead_$newName'] = d['lastRead_$oldName'];
+        update['lastRead_$oldName'] = FieldValue.delete();
+      }
+      if (d['lastFrom'] == oldName) {
+        update['lastFrom'] = newName;
+      }
+
+      await chatDoc.reference.update(update);
+    }
+
+    // ── Friendships: Doc-ID ist sortierter Username-Pair → neu erstellen ──
+    final shipSnaps = await db
+        .collection('friendships')
+        .where('members', arrayContains: oldName)
+        .get();
+
+    for (final shipDoc in shipSnaps.docs) {
+      final d = shipDoc.data();
+      final members = List<String>.from(d['members'] ?? []);
+      final newMembers =
+          members.map((m) => m == oldName ? newName : m).toList();
+      final newId = (List<String>.from(newMembers)..sort()).join('__');
+
+      final batch = db.batch();
+      batch.set(
+          db.collection('friendships').doc(newId), {...d, 'members': newMembers});
+      batch.delete(shipDoc.reference);
+      await batch.commit();
+    }
+
+    // ── FriendRequests: from-Seite ──
+    final fromSnaps = await db
+        .collection('friendRequests')
+        .where('from', isEqualTo: oldName)
+        .get();
+
+    for (final reqDoc in fromSnaps.docs) {
+      final d = reqDoc.data();
+      final to = (d['to'] as String?) ?? '';
+      final batch = db.batch();
+      batch.set(db.collection('friendRequests').doc('${newName}__$to'),
+          {...d, 'from': newName});
+      batch.delete(reqDoc.reference);
+      await batch.commit();
+    }
+
+    // ── FCM-Token-Doc (users/{username} als Doc-ID) ──────────
+    final tokenSnap =
+        await db.collection('users').doc(oldName).get();
+    if (tokenSnap.exists) {
+      final batch = db.batch();
+      batch.set(db.collection('users').doc(newName),
+          tokenSnap.data() ?? {});
+      batch.delete(tokenSnap.reference);
+      await batch.commit();
+    }
+
+    // ── FriendRequests: to-Seite ──
+    final toSnaps = await db
+        .collection('friendRequests')
+        .where('to', isEqualTo: oldName)
+        .get();
+
+    for (final reqDoc in toSnaps.docs) {
+      final d = reqDoc.data();
+      final from = (d['from'] as String?) ?? '';
+      final batch = db.batch();
+      batch.set(db.collection('friendRequests').doc('${from}__$newName'),
+          {...d, 'to': newName});
+      batch.delete(reqDoc.reference);
+      await batch.commit();
+    }
   }
 
   Future<void> _savePassword() async {
@@ -400,12 +445,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final newPass = _newPasswordController.text.trim();
 
     if (newPass.isEmpty) {
-      _showSnack("Neues Passwort darf nicht leer sein.");
+      _showSnack("Neues Passwort darf nicht leer sein.", color: Colors.redAccent);
       return;
     }
 
     if (_docId.isEmpty) {
-      _showSnack("Dokument nicht gefunden.");
+      _showSnack("Dokument nicht gefunden.", color: Colors.redAccent);
       return;
     }
 
@@ -414,7 +459,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final pwInDb = (data?['password'] ?? '').toString();
 
     if (current != pwInDb) {
-      _showSnack("Aktuelles Passwort ist falsch.");
+      _showSnack("Aktuelles Passwort ist falsch.", color: Colors.redAccent);
       return;
     }
 
@@ -428,7 +473,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       _passwordFromDb = newPass;
     });
 
-    _showSnack("Passwort erfolgreich geändert.");
+    _showSnack("Passwort erfolgreich geändert.", color: AppColors.success);
   }
 
   // ---------- Logout / Account löschen ----------
@@ -542,6 +587,138 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
   }
 
+  Future<void> _saveBio() async {
+    final newBio = _bioController.text.trim();
+    if (_docId.isNotEmpty) {
+      await _updateFirestoreField('bio', newBio);
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('bio', newBio);
+    if (!mounted) return;
+    setState(() {
+      _bio = newBio;
+      _editingBio = false;
+    });
+    _showSnack('Bio gespeichert.', color: AppColors.success);
+  }
+
+  void _viewProfilePicture() {
+    final url = _avatar;
+    if (url == null || url.isEmpty) return;
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black,
+        pageBuilder: (_, __, ___) => _FullscreenAvatarPage(imageUrl: url),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
+    );
+  }
+
+  Future<void> _showAvatarOptions() async {
+    final hasAvatar = _avatar != null && _avatar!.isNotEmpty;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: _panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.only(bottom: 6),
+                child: Text(
+                  "Profilbild",
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+              const Divider(height: 1, color: Color(0xFF2A2D35)),
+              _avatarOption(
+                ctx: ctx,
+                icon: Icons.photo_library_outlined,
+                label: "Aus Galerie wählen",
+                onTap: () => _pickFromSource(ImageSource.gallery),
+              ),
+              const Divider(height: 1, indent: 56, color: Color(0xFF2A2D35)),
+              _avatarOption(
+                ctx: ctx,
+                icon: Icons.photo_camera_outlined,
+                label: "Foto aufnehmen",
+                onTap: () => _pickFromSource(ImageSource.camera),
+              ),
+              if (hasAvatar) ...[
+                const Divider(height: 1, indent: 56, color: Color(0xFF2A2D35)),
+                _avatarOption(
+                  ctx: ctx,
+                  icon: Icons.image_search_outlined,
+                  label: "Profilbild ansehen",
+                  onTap: _viewProfilePicture,
+                ),
+              ],
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _avatarOption({
+    required BuildContext ctx,
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: () {
+        Navigator.pop(ctx);
+        onTap();
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: _accent.withAlpha(20),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: _accent, size: 19),
+            ),
+            const SizedBox(width: 16),
+            Text(
+              label,
+              style: const TextStyle(
+                color: _textPrimary,
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showSnack(String msg, {Color? color}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -607,36 +784,34 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
               children: [
                 // ── Avatar ──────────────────────────────────────
                 GestureDetector(
-                  onTap: () => _showSnack("Profilbild: Coming soon"),
+                  onTap: _busyAvatar ? null : _showAvatarOptions,
                   child: Stack(
-                    alignment: Alignment.bottomRight,
+                    alignment: Alignment.center,
                     children: [
                       Container(
                         padding: const EdgeInsets.all(3),
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white12, width: 2),
+                          gradient: LinearGradient(
+                            colors: [_accent, const Color(0xFF7B2FF7)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
                         ),
                         child: CircleAvatar(
                           radius: 46,
                           backgroundColor: _card,
                           backgroundImage: _buildAvatarImageProvider(),
+                          child: _buildAvatarImageProvider() == null
+                              ? const Icon(Icons.person, color: Colors.white38, size: 40)
+                              : null,
                         ),
                       ),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: _panel,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: Colors.white10),
+                      if (_busyAvatar)
+                        const SizedBox(
+                          width: 30, height: 30,
+                          child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        child: _busyAvatar
-                            ? const SizedBox(
-                                width: 12, height: 12,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
-                              )
-                            : const Text("soon", style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.w700)),
-                      ),
                     ],
                   ),
                 ),
@@ -697,6 +872,46 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                           _newPasswordController.clear();
                         }),
                       ),
+                      const Divider(height: 1, color: Color(0xFF2A2D35)),
+                      // Bio row
+                      _settingRow(
+                        icon: Icons.edit_note_rounded,
+                        label: "Bio",
+                        editing: _editingBio,
+                        displayValue: _bio.isEmpty ? "Noch keine Bio" : _bio,
+                        editChild: TextField(
+                          controller: _bioController,
+                          maxLength: 80,
+                          maxLengthEnforcement: MaxLengthEnforcement.truncateAfterCompositionEnds,
+                          style: const TextStyle(color: _textPrimary, fontSize: 14),
+                          decoration: InputDecoration(
+                            hintText: "Kurze Beschreibung...",
+                            hintStyle: const TextStyle(color: _textSecondary, fontSize: 14),
+                            counterStyle: const TextStyle(color: _textSecondary, fontSize: 11),
+                            filled: true,
+                            fillColor: const Color(0xFF0E0F12),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: Color(0xFF2A2D35)),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: Color(0xFF2A2D35)),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(color: _accent, width: 1.5),
+                            ),
+                          ),
+                        ),
+                        onEdit: () => setState(() => _editingBio = true),
+                        onSave: _saveBio,
+                        onCancel: () => setState(() {
+                          _editingBio = false;
+                          _bioController.text = _bio;
+                        }),
+                      ),
                     ],
                   ),
                 ),
@@ -736,18 +951,15 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     );
   }
 
-  ImageProvider _buildAvatarImageProvider() {
+  ImageProvider? _buildAvatarImageProvider() {
     final avatar = _avatar;
-    if (avatar == null || avatar.trim().isEmpty) {
-      return const AssetImage('lib/Pics/profile_pic.png');
-    }
+    if (avatar == null || avatar.trim().isEmpty) return null;
     if (avatar.startsWith('http://') || avatar.startsWith('https://')) {
       return NetworkImage(avatar);
     }
-    if (File(avatar).existsSync()) {
-      return FileImage(File(avatar));
-    }
-    return const AssetImage('lib/Pics/profile_pic.png');
+    final f = File(avatar);
+    if (f.existsSync()) return FileImage(f);
+    return null;
   }
 
   static Widget _sectionLabel(String label) => Align(
@@ -795,7 +1007,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     required VoidCallback onSave,
     required VoidCallback onCancel,
   }) {
-    return Padding(
+    return GestureDetector(
+      onTap: editing ? null : onEdit,
+      behavior: editing ? HitTestBehavior.deferToChild : HitTestBehavior.opaque,
+      child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -815,19 +1030,6 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                   ],
                 ),
               ),
-              if (!editing)
-                GestureDetector(
-                  onTap: onEdit,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: _accent.withAlpha(20),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: _accent.withAlpha(60)),
-                    ),
-                    child: const Text("Ändern", style: TextStyle(color: _accent, fontSize: 12, fontWeight: FontWeight.w700)),
-                  ),
-                ),
             ],
           ),
           if (editing) ...[
@@ -858,6 +1060,54 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
             ),
           ],
         ],
+      ),
+    ));
+  }
+}
+
+class _FullscreenAvatarPage extends StatefulWidget {
+  final String imageUrl;
+  const _FullscreenAvatarPage({required this.imageUrl});
+
+  @override
+  State<_FullscreenAvatarPage> createState() => _FullscreenAvatarPageState();
+}
+
+class _FullscreenAvatarPageState extends State<_FullscreenAvatarPage> {
+  double _dy = 0;
+  double get _bgOpacity => (1.0 - (_dy.abs() / 300)).clamp(0.0, 1.0);
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: GestureDetector(
+        onTap: () => Navigator.of(context).pop(),
+        onVerticalDragUpdate: (d) => setState(() => _dy += d.delta.dy),
+        onVerticalDragEnd: (d) {
+          if (_dy.abs() > 100 || (d.primaryVelocity ?? 0).abs() > 500) {
+            Navigator.of(context).pop();
+          } else {
+            setState(() => _dy = 0);
+          }
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 80),
+          color: Colors.black.withOpacity(_bgOpacity),
+          child: Transform.translate(
+            offset: Offset(0, _dy),
+            child: Center(
+              child: InteractiveViewer(
+                child: Image.network(
+                  widget.imageUrl,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) =>
+                      const Icon(Icons.broken_image, color: Colors.white38, size: 60),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

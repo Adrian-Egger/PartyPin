@@ -7,6 +7,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'selection_screen.dart';
 import '../../l10n/lang.dart';
 import '../profile/feedback_screen.dart';
+import '../profile/notification_settings_screen.dart';
 import '../bar/AdminCreatesBarScreen.dart';
 import '../party/access_parties_screen.dart';
 
@@ -1157,6 +1158,17 @@ class MenuScreen extends StatelessWidget {
                   Navigator.push(
                     context,
                     MaterialPageRoute(builder: (context) => const SelectionScreen()),
+                  );
+                },
+              ),
+
+              _menuTile(
+                icon: Icons.notifications_outlined,
+                title: 'Benachrichtigungen',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const NotificationSettingsScreen()),
                   );
                 },
               ),

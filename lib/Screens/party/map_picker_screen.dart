@@ -92,7 +92,7 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
                   target: _selected ?? widget.initial,
                   zoom: 13,
                 ),
-                myLocationButtonEnabled: true,
+                myLocationButtonEnabled: false,
                 myLocationEnabled: false,
                 zoomControlsEnabled: true,
                 markers: markers,

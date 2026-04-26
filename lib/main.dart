@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
+import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
 
 import 'firebase_options.dart';
 import 'Screens/home/home_shell.dart';
@@ -10,6 +12,14 @@ import 'l10n/lang.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Use SurfaceAndroidViewController so the GoogleMap native view does not
+  // intercept the IME connection — without this, the map steals text input
+  // focus on all screens when using IndexedStack, blocking ä/ö/ü input.
+  final mapsImpl = GoogleMapsFlutterPlatform.instance;
+  if (mapsImpl is GoogleMapsFlutterAndroid) {
+    await mapsImpl.initializeWithRenderer(AndroidMapRenderer.latest);
+  }
 
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,

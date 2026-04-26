@@ -21,6 +21,98 @@ String computeEventKey(dynamic rawDate) {
   return '0';
 }
 
+// ---------- Fullscreen image viewer ----------
+
+void _openFullscreenImage(BuildContext context, String imageUrl) {
+  Navigator.of(context).push(
+    PageRouteBuilder(
+      opaque: false,
+      barrierColor: Colors.black,
+      pageBuilder: (_, __, ___) => _FullscreenImageViewer(imageUrl: imageUrl),
+      transitionsBuilder: (_, anim, __, child) =>
+          FadeTransition(opacity: anim, child: child),
+    ),
+  );
+}
+
+class _FullscreenImageViewer extends StatefulWidget {
+  final String imageUrl;
+  const _FullscreenImageViewer({required this.imageUrl});
+
+  @override
+  State<_FullscreenImageViewer> createState() => _FullscreenImageViewerState();
+}
+
+class _FullscreenImageViewerState extends State<_FullscreenImageViewer> {
+  double _dy = 0;
+
+  double get _bgOpacity => (1.0 - (_dy.abs() / 300)).clamp(0.0, 1.0);
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onVerticalDragUpdate: (d) => setState(() => _dy += d.delta.dy),
+      onVerticalDragEnd: (d) {
+        if (_dy.abs() > 100 || d.velocity.pixelsPerSecond.dy.abs() > 500) {
+          Navigator.of(context).pop();
+        } else {
+          setState(() => _dy = 0);
+        }
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black.withOpacity(_bgOpacity),
+        body: GestureDetector(
+          onTap: () => Navigator.of(context).pop(),
+          child: Transform.translate(
+            offset: Offset(0, _dy),
+            child: Stack(
+              children: [
+                Center(
+                  child: InteractiveViewer(
+                    minScale: 0.5,
+                    maxScale: 5.0,
+                    child: Image.network(
+                      widget.imageUrl,
+                      fit: BoxFit.contain,
+                      loadingBuilder: (_, child, progress) {
+                        if (progress == null) return child;
+                        return const Center(
+                          child: CircularProgressIndicator(color: Colors.white38),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                SafeArea(
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: GestureDetector(
+                        onTap: () => Navigator.of(context).pop(),
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(
+                            color: Colors.black54,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.close, color: Colors.white, size: 22),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------- Bar bottom sheet ----------
+
 class BarBottomSheet extends StatefulWidget {
   final String barId;
 
@@ -574,84 +666,129 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                 children: [
                   const SizedBox(height: 8),
 
-                  Center(child: avatar),
-                  const SizedBox(height: 14),
+                  // Header hero card
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.fromLTRB(16, 24, 16, 20),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF1E0B3A), Color(0xFF0D1117)],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Stack(
+                      children: [
+                        Column(
+                          children: [
+                            // Avatar with accent ring — tappable when image exists
+                            GestureDetector(
+                              onTap: profileImageUrl.isNotEmpty
+                                  ? () => _openFullscreenImage(context, profileImageUrl)
+                                  : null,
+                              child: Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: LinearGradient(
+                                    colors: [AppColors.accent, const Color(0xFF7B2FF7)],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: AppColors.accent.withOpacity(0.3),
+                                      blurRadius: 18,
+                                      spreadRadius: 2,
+                                    ),
+                                  ],
+                                ),
+                                child: avatar,
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            Text(
+                              barName,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                            if (ratingAvg != null && ratingCount > 0) ...[
+                              const SizedBox(height: 8),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.star_rounded, color: Colors.amber, size: 17),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    ratingAvg.toStringAsFixed(1),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '($ratingCount)',
+                                    style: const TextStyle(
+                                      color: Colors.white54,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (fullAddress.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.location_on_rounded, color: AppColors.accent, size: 15),
+                                  const SizedBox(width: 5),
+                                  Flexible(
+                                    child: Text(
+                                      fullAddress,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        color: AppColors.muted,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
 
-                  Row(
-                    children: [
-                      const SizedBox(width: 40), // Balance links/rechts
-                      Expanded(
-                        child: Text(
-                          barName,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
+                            // Event status badge
+                            const SizedBox(height: 14),
+                            _buildEventBadge(
+                              running: eventRunning12hWindow,
+                              showEvent: showAnyEventUi,
+                              dateHint: showOnlyEventDateHint,
+                            ),
+                          ],
+                        ),
+                        Positioned(
+                          top: 0,
+                          right: 0,
+                          child: IconButton(
+                            tooltip: 'Bar melden',
+                            icon: const Icon(Icons.flag_rounded, color: AppColors.accent, size: 20),
+                            onPressed: () => _openBarReportSheet(context),
                           ),
                         ),
-                      ),
-                      IconButton(
-                        tooltip: 'Bar melden',
-                        icon: const Icon(Icons.flag, color: AppColors.accent, size: 22),
-
-                        onPressed: () {
-                          _openBarReportSheet(context);
-                        },
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
 
-
-                  if (ratingAvg != null && ratingCount > 0) ...[
-                    const SizedBox(height: 6),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.star, color: Colors.amber, size: 18),
-                        const SizedBox(width: 4),
-                        Text(
-                          ratingAvg.toStringAsFixed(1),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '($ratingCount)',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-
-                  const SizedBox(height: 8),
-
-                  if (fullAddress.isNotEmpty)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.location_on, color: AppColors.accent, size: 18),
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: Text(
-                            fullAddress,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: AppColors.muted,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 12),
 
                   if (visibleError != null)
                     Container(
@@ -716,53 +853,44 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                     const SizedBox(height: 18),
                   ],
 
-                  // ✅ Tabs nur wenn Event-Card sichtbar ist (wie vorher)
+                  // Tabs nur wenn Event-Card sichtbar ist
                   if (showAnyEventUi) ...[
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        ChoiceChip(
-                          label: const Text('Event 🎉'),
-                          selected: _showEventView,
-                          onSelected: (_) => setState(() => _showEventView = true),
-                          selectedColor: AppColors.accent,
-                          backgroundColor: AppColors.panel,
-                          labelStyle: TextStyle(
-                            color: _showEventView ? Colors.white : Colors.white70,
-                            fontWeight: FontWeight.w600,
-                          ),
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: AppColors.bgBottom,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: Colors.white12),
                         ),
-                        const SizedBox(width: 8),
-                        ChoiceChip(
-                          label: const Text('Bar-Infos 🍹'),
-                          selected: !_showEventView,
-                          onSelected: (_) => setState(() => _showEventView = false),
-                          selectedColor: AppColors.accent,
-                          backgroundColor: AppColors.panel,
-                          labelStyle: TextStyle(
-                            color: !_showEventView ? Colors.white : Colors.white70,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _tabPill('Event 🎉', _showEventView, () => setState(() => _showEventView = true)),
+                            const SizedBox(width: 4),
+                            _tabPill('Bar-Infos 🍹', !_showEventView, () => setState(() => _showEventView = false)),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 14),
                   ],
 
                   if (showAnyEventUi && _showEventView)
-                    _buildEventInfoCard(
-                      context: context,
+                    EventDetailsCard(
+                      barId: widget.barId,
+                      title: eventTitle,
+                      tagline: eventTagline,
+                      desc: eventDesc,
                       eventDateTime: eventDateTime!,
+                      rawEventDate: barDataForUi['eventDate'],
                       eventRunning: eventRunning12hWindow,
-                      eventData: barDataForUi,
                       entryText: entryText,
                       ageText: ageText,
                       musicText: musicText,
                       dresscodeText: dresscodeText,
                       sections: sections,
-                      eventTitle: eventTitle,
-                      eventTagline: eventTagline,
-                      eventDesc: eventDesc,
+                      ratingAllowed: eventRunning12hWindow,
                     )
                   else
                     _buildBarInfoContent(
@@ -935,27 +1063,99 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
     return [];
   }
 
-  Widget _smallInfoChip(IconData icon, String text) {
+  Widget _buildEventBadge({
+    required bool running,
+    required bool showEvent,
+    required bool dateHint,
+  }) {
+    final Color dot;
+    final Color bg;
+    final Color border;
+    final String label;
+
+    if (running) {
+      dot = Colors.greenAccent;
+      bg = Colors.green.withOpacity(0.15);
+      border = Colors.greenAccent.withOpacity(0.5);
+      label = 'Event läuft gerade';
+    } else if (showEvent) {
+      dot = Colors.orange;
+      bg = Colors.orange.withOpacity(0.13);
+      border = Colors.orange.withOpacity(0.45);
+      label = 'Event heute';
+    } else if (dateHint) {
+      dot = Colors.blueAccent;
+      bg = Colors.blueAccent.withOpacity(0.12);
+      border = Colors.blueAccent.withOpacity(0.4);
+      label = 'Event angekündigt';
+    } else {
+      dot = Colors.white30;
+      bg = Colors.white.withOpacity(0.05);
+      border = Colors.white12;
+      label = 'Kein aktuelles Event';
+    }
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: AppColors.bgBottom,
+        color: bg,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white24),
+        border: Border.all(color: border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: Colors.white70, size: 13),
-          const SizedBox(width: 3),
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: dot),
+          ),
+          const SizedBox(width: 7),
           Text(
-            text,
-            style: const TextStyle(color: Colors.white70, fontSize: 11),
+            label,
+            style: TextStyle(
+              color: running
+                  ? Colors.greenAccent
+                  : showEvent
+                      ? Colors.orange
+                      : dateHint
+                          ? Colors.blueAccent
+                          : Colors.white38,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
     );
   }
+
+  Widget _tabPill(String label, bool selected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.accent : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: selected
+              ? [BoxShadow(color: AppColors.accent.withOpacity(0.4), blurRadius: 8)]
+              : null,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : Colors.white54,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            fontSize: 13,
+          ),
+        ),
+      ),
+    );
+  }
+
+
 
   // ----------------- BAR INFOS + UPCOMING LIST -----------------
 
@@ -1230,39 +1430,79 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
       final text = (h['text'] ?? '').toString().trim();
       final imageUrl = (h['imageUrl'] ?? '').toString().trim();
 
+      final bottomRadius = text.isEmpty ? const Radius.circular(14) : Radius.zero;
+
       widgets.add(
         Container(
-          margin: const EdgeInsets.only(bottom: 10),
+          margin: const EdgeInsets.only(bottom: 12),
           decoration: BoxDecoration(
             color: AppColors.bgBottom,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(color: Colors.white12),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.3),
+                blurRadius: 8,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (imageUrl.isNotEmpty)
-                ClipRRect(
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(12),
-                    topRight: Radius.circular(12),
-                  ),
-                  child: Image.network(
-                    imageUrl,
-                    height: 140,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
+                GestureDetector(
+                  onTap: () => _openFullscreenImage(context, imageUrl),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(14),
+                      topRight: const Radius.circular(14),
+                      bottomLeft: bottomRadius,
+                      bottomRight: bottomRadius,
+                    ),
+                    child: Stack(
+                      children: [
+                        Image.network(
+                          imageUrl,
+                          height: 160,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          loadingBuilder: (_, child, progress) {
+                            if (progress == null) return child;
+                            return Container(
+                              height: 160,
+                              color: AppColors.panel,
+                              child: const Center(
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            );
+                          },
+                        ),
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Container(
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(Icons.fullscreen, color: Colors.white70, size: 16),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               if (text.isNotEmpty)
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                   child: Text(
                     text,
                     style: const TextStyle(
                       color: Colors.white70,
-                      fontSize: 12,
-                      height: 1.3,
+                      fontSize: 12.5,
+                      height: 1.4,
                     ),
                   ),
                 ),
@@ -1275,175 +1515,6 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
   }
 
   // -------------------------------- Event --------------------------------
-
-  Widget _buildEventInfoCard({
-    required BuildContext context,
-    required DateTime eventDateTime,
-    required bool eventRunning,
-    required Map<String, dynamic> eventData,
-    required String entryText,
-    required String ageText,
-    required String musicText,
-    required String dresscodeText,
-    required List<Map<String, dynamic>> sections,
-    required String eventTitle,
-    required String eventTagline,
-    required String eventDesc,
-  }) {
-    final now = DateTime.now();
-
-    final startRaw = eventDateTime;
-    final start = startRaw.subtract(const Duration(hours: 1));
-
-    // cleanupAt bevorzugt (aus Firestore), sonst fallback 12h
-    DateTime? cleanupAt;
-    final rawCleanupAt = eventData['eventCleanupAt'];
-    if (rawCleanupAt is Timestamp) cleanupAt = rawCleanupAt.toLocalDateTime();
-    if (rawCleanupAt is String) cleanupAt = DateTime.tryParse(rawCleanupAt);
-    cleanupAt ??= start.add(const Duration(hours: 12));
-
-    String label;
-    if (now.isBefore(start)) {
-      final diff = start.difference(now);
-      label = '⏱️ Event startet in ${_formatDuration(diff)}';
-    } else if (now.isAfter(start) && now.isBefore(cleanupAt)) {
-      final diff = cleanupAt.difference(now);
-      label = '🔥 Event läuft noch ${_formatDuration(diff)}';
-    } else {
-      label = 'Event ist bereits vorbei.';
-    }
-
-    final dateStr =
-        '${eventDateTime.day.toString().padLeft(2, '0')}.${eventDateTime.month.toString().padLeft(2, '0')}.${eventDateTime.year}';
-    final timeStr =
-        '${eventDateTime.hour.toString().padLeft(2, '0')}:${eventDateTime.minute.toString().padLeft(2, '0')}';
-
-    void openEventInfos() {
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        useSafeArea: true,
-        backgroundColor: Colors.transparent,
-        barrierColor: Colors.black.withOpacity(0.35),
-        builder: (_) => EventBottomSheet(
-          eventData: eventData,
-          barId: widget.barId,
-        ),
-      );
-    }
-
-    return InkWell(
-      onTap: openEventInfos,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: AppColors.panel,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.accent.withOpacity(0.45)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              eventRunning ? 'Live-Event 🔥' : 'Nächstes Event 🎉',
-              style: const TextStyle(
-                color: AppColors.accent,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              eventTitle.isEmpty ? 'Event' : eventTitle,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                const Icon(Icons.calendar_month, color: Colors.white70, size: 18),
-                const SizedBox(width: 6),
-                Text(
-                  '$dateStr · $timeStr',
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.35),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: AppColors.accent),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.timer, color: AppColors.accent, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                _smallInfoChip(Icons.attach_money, entryText),
-                _smallInfoChip(Icons.cake, ageText),
-                _smallInfoChip(Icons.music_note, musicText),
-                _smallInfoChip(Icons.checkroom, dresscodeText),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                ),
-                onPressed: openEventInfos,
-                child: const Text(
-                  'Event-Infos',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _formatDuration(Duration d) {
-    if (d.inSeconds <= 0) return '0 Min';
-    final days = d.inDays;
-    final hours = d.inHours.remainder(24);
-    final mins = d.inMinutes.remainder(60);
-
-    final parts = <String>[];
-    if (days > 0) parts.add('${days}T');
-    if (hours > 0) parts.add('${hours}h');
-    if (mins > 0) parts.add('${mins}m');
-
-    return parts.join(' ');
-  }
   void _showReportSuccessDialog(BuildContext context) {
     showDialog(
       context: context,
@@ -1690,20 +1761,29 @@ class EventDetailsCard extends StatelessWidget {
     final timeStr =
         '${eventDateTime.hour.toString().padLeft(2, '0')}:${eventDateTime.minute.toString().padLeft(2, '0')}';
 
-    final headline = eventRunning ? 'Event läuft gerade 🔥' : 'Nächstes Event 🎉';
+    final now = DateTime.now();
+    final startMinus1h = eventDateTime.subtract(const Duration(hours: 1));
+    final cleanupFallback = startMinus1h.add(const Duration(hours: 12));
 
-    final bool hasAnySectionImage = sections.any((s) {
-      final imageUrl = (s['imageUrl'] ?? '').toString().trim();
-      return imageUrl.isNotEmpty;
-    });
+    final String countdownLabel;
+    if (now.isBefore(startMinus1h)) {
+      countdownLabel = 'Startet in ${_fmtDuration(startMinus1h.difference(now))}';
+    } else if (now.isBefore(cleanupFallback)) {
+      countdownLabel = 'Läuft noch ${_fmtDuration(cleanupFallback.difference(now))}';
+    } else {
+      countdownLabel = 'Event ist vorbei';
+    }
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.panel,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.accent.withOpacity(0.45)),
+        border: Border.all(
+          color: eventRunning
+              ? Colors.greenAccent.withOpacity(0.35)
+              : AppColors.accent.withOpacity(0.35),
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.35),
@@ -1715,101 +1795,271 @@ class EventDetailsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Gradient header ──
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: eventRunning
+                    ? [Colors.green.withOpacity(0.18), Colors.transparent]
+                    : [AppColors.accent.withOpacity(0.12), Colors.transparent],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(20),
+                topRight: Radius.circular(20),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Status badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: eventRunning
+                        ? Colors.greenAccent.withOpacity(0.12)
+                        : AppColors.accent.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: eventRunning
+                          ? Colors.greenAccent.withOpacity(0.45)
+                          : AppColors.accent.withOpacity(0.45),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: eventRunning ? Colors.greenAccent : AppColors.accent,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        eventRunning ? 'Live Event 🔥' : 'Nächstes Event 🎉',
+                        style: TextStyle(
+                          color: eventRunning ? Colors.greenAccent : AppColors.accent,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  title.isEmpty ? 'Event' : title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                if (tagline.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    tagline,
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(Icons.calendar_month_rounded, color: Colors.white54, size: 15),
+                    const SizedBox(width: 6),
+                    Text(
+                      '$dateStr · $timeStr',
+                      style: const TextStyle(color: Colors.white70, fontSize: 13),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                // Countdown pill
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: eventRunning
+                        ? Colors.green.withOpacity(0.12)
+                        : Colors.black.withOpacity(0.3),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: eventRunning
+                          ? Colors.greenAccent.withOpacity(0.5)
+                          : AppColors.accent,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        eventRunning
+                            ? Icons.local_fire_department_rounded
+                            : Icons.timer_rounded,
+                        color: eventRunning ? Colors.greenAccent : AppColors.accent,
+                        size: 15,
+                      ),
+                      const SizedBox(width: 7),
+                      Text(
+                        countdownLabel,
+                        style: TextStyle(
+                          color: eventRunning ? Colors.greenAccent : Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const Divider(height: 1, color: Colors.white10),
+
+          // ── 2×2 info grid ──
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: _infoTile('💸', 'Eintritt', entryText)),
+                    const SizedBox(width: 8),
+                    Expanded(child: _infoTile('🎂', 'Mindestalter', ageText)),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(child: _infoTile('🎵', 'Musik', musicText)),
+                    const SizedBox(width: 8),
+                    Expanded(child: _infoTile('👗', 'Dresscode', dresscodeText)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // ── Rating summary ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: _EventRatingSummary(barId: barId, eventKey: _eventKey),
+          ),
+
+          if (desc.isNotEmpty || sections.isNotEmpty)
+            const Divider(height: 1, color: Colors.white10),
+
+          if (desc.isNotEmpty)
+            Padding(
+              padding: EdgeInsets.fromLTRB(14, 14, 14, sections.isNotEmpty ? 8 : 16),
+              child: Text(
+                desc,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 13.5,
+                  height: 1.4,
+                ),
+              ),
+            ),
+
+          if (sections.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Highlights ✨',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  ..._buildSections(sections, context),
+                ],
+              ),
+            ),
+
+          if (ratingAllowed) ...[
+            const Divider(height: 1, color: Colors.white10),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.accent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  onPressed: () async => _handleRatePressed(context),
+                  icon: const Icon(Icons.star_rate_rounded, size: 18),
+                  label: const Text(
+                    'Event / Bar bewerten ⭐',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _fmtDuration(Duration d) {
+    if (d.inSeconds <= 0) return '0 Min';
+    final days = d.inDays;
+    final hours = d.inHours.remainder(24);
+    final mins = d.inMinutes.remainder(60);
+    final parts = <String>[];
+    if (days > 0) parts.add('${days}T');
+    if (hours > 0) parts.add('${hours}h');
+    if (mins > 0) parts.add('${mins}m');
+    return parts.join(' ');
+  }
+
+  Widget _infoTile(String emoji, String label, String value) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppColors.bgBottom,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Text(
-            headline,
+            '$emoji  $label',
             style: const TextStyle(
-              color: AppColors.accent,
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
+              color: Colors.white54,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            title.isEmpty ? 'Event' : title,
+            value,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
             ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
-          if (tagline.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              tagline,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 14,
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              const Icon(Icons.calendar_month, color: Colors.white70, size: 18),
-              const SizedBox(width: 6),
-              Text(
-                '$dateStr · $timeStr',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _infoRow('💸', Colors.greenAccent, 'Eintritt', entryText),
-          const SizedBox(height: 6),
-          _infoRow('🎂', Colors.pinkAccent, 'Mindestalter', ageText),
-          const SizedBox(height: 6),
-          _infoRow('🎵', Colors.lightBlueAccent, 'Musik', musicText),
-          const SizedBox(height: 6),
-          _infoRow('👗', Colors.deepPurpleAccent, 'Dresscode', dresscodeText),
-          const SizedBox(height: 16),
-          _EventRatingSummary(barId: barId, eventKey: _eventKey),
-          const SizedBox(height: 16),
-          if (desc.isNotEmpty)
-            Align(
-              alignment: hasAnySectionImage ? Alignment.centerLeft : Alignment.center,
-              child: Text(
-                desc,
-                textAlign: hasAnySectionImage ? TextAlign.left : TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: hasAnySectionImage ? 13 : 14,
-                  height: 1.35,
-                ),
-              ),
-            ),
-          if (sections.isNotEmpty) ...[
-            const SizedBox(height: 18),
-            const Text(
-              'Highlights ✨',
-              style: TextStyle(
-                color: Colors.white70,
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(height: 10),
-            ..._buildSections(sections),
-          ],
-          if (ratingAllowed) ...[
-            const SizedBox(height: 20),
-            Align(
-              alignment: Alignment.center,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                ),
-                onPressed: () async => _handleRatePressed(context),
-                icon: const Icon(Icons.star_rate_rounded, size: 18),
-                label: const Text(
-                  'Event / Bar bewerten ⭐',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -2232,36 +2482,7 @@ class EventDetailsCard extends StatelessWidget {
     }
   }
 
-  Widget _infoRow(String emoji, Color emojiColor, String label, String value) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('$emoji ', style: TextStyle(fontSize: 16, color: emojiColor)),
-        Expanded(
-          child: RichText(
-            text: TextSpan(
-              children: [
-                TextSpan(
-                  text: '$label: ',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
-                  ),
-                ),
-                TextSpan(
-                  text: value,
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  List<Widget> _buildSections(List<Map<String, dynamic>> sections) {
+  List<Widget> _buildSections(List<Map<String, dynamic>> sections, BuildContext context) {
     final List<Widget> widgets = [];
     for (final s in sections) {
       final text = (s['text'] ?? '').toString();
@@ -2279,7 +2500,7 @@ class EventDetailsCard extends StatelessWidget {
       }
 
       final rowChildren = <Widget>[
-        Expanded(flex: 4, child: _sectionImage(imageUrl)),
+        Expanded(flex: 4, child: _sectionImage(imageUrl, context)),
         const SizedBox(width: 10),
         Expanded(flex: 6, child: _sectionText(text)),
       ];
@@ -2297,7 +2518,7 @@ class EventDetailsCard extends StatelessWidget {
     return widgets;
   }
 
-  Widget _sectionImage(String imageUrl) {
+  Widget _sectionImage(String imageUrl, BuildContext context) {
     if (imageUrl.isEmpty) {
       return Container(
         height: 90,
@@ -2311,13 +2532,16 @@ class EventDetailsCard extends StatelessWidget {
         ),
       );
     }
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Image.network(
-        imageUrl,
-        height: 90,
-        width: double.infinity,
-        fit: BoxFit.cover,
+    return GestureDetector(
+      onTap: () => _openFullscreenImage(context, imageUrl),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.network(
+          imageUrl,
+          height: 90,
+          width: double.infinity,
+          fit: BoxFit.cover,
+        ),
       ),
     );
   }

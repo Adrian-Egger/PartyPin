@@ -18,19 +18,24 @@
 //        2) requests/{username}
 //        3) requests/{safeDocId(username)}
 
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import 'new_party.dart';
 import '../../Services/app_draggable_sheet.dart';
+import '../profile/chat_detail_screen.dart';
 import '../profile/premium_screen.dart';
 import '../../Social/friends_model.dart';
 import '../../Theme/app_theme.dart';
+
+HttpsCallable get _friendRequestFn => FirebaseFunctions.instanceFor(region: 'europe-west1')
+    .httpsCallable('sendFriendRequest',
+        options: HttpsCallableOptions(timeout: const Duration(seconds: 15)));
 
 typedef VoidAsync = Future<void> Function();
 typedef StringAsync = Future<void> Function(String value);
@@ -1975,27 +1980,28 @@ class _HostFriendButtonState extends State<_HostFriendButton> {
   }
 
   Future<void> _sendRequest() async {
+    // Debounce: button bleibt disabled solange _sending == true
     if (_sending) return;
     setState(() => _sending = true);
     try {
-      final qs = await FirebaseFirestore.instance
-          .collection('users')
-          .where('username', isEqualTo: widget.hostUsername)
-          .limit(1)
-          .get();
-      if (qs.docs.isEmpty) throw Exception('User nicht gefunden');
+      final result = await _friendRequestFn.call({'to': widget.hostUsername});
+      final status = (result.data as Map?)?['status'] as String? ?? '';
 
-      final err = await _model.sendRequest(
-        me: widget.myUsername,
-        target: widget.hostUsername,
-        targetDoc: qs.docs.first.id,
-      );
-      if (err != null) throw Exception(err);
-
-      if (mounted) {
-        setState(() => _status = RelStatus.outgoingPending);
-        showStatusSnack(context, 'Freundschaftsanfrage gesendet!', positive: true);
+      if (!mounted) return;
+      switch (status) {
+        case 'sent':
+          setState(() => _status = RelStatus.outgoingPending);
+          showStatusSnack(context, 'Freundschaftsanfrage gesendet!', positive: true);
+        case 'already_sent':
+          setState(() => _status = RelStatus.outgoingPending);
+          // kein Snack nötig – UI zeigt schon "Anfrage gesendet"
+        case 'already_friends':
+          setState(() => _status = RelStatus.friends);
+        default:
+          showStatusSnack(context, 'Unbekannter Status: $status', positive: false);
       }
+    } on FirebaseFunctionsException catch (e) {
+      if (mounted) showStatusSnack(context, 'Fehler: ${e.message ?? e.code}', positive: false);
     } catch (e) {
       if (mounted) showStatusSnack(context, 'Fehler: $e', positive: false);
     } finally {
@@ -2005,28 +2011,63 @@ class _HostFriendButtonState extends State<_HostFriendButton> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const SizedBox.shrink();
-
+    // Während des Ladens Status-unabhängig den Button sofort zeigen.
+    // Nach dem Laden wird der Status gesetzt und der Button aktualisiert.
     final isPending = _status == RelStatus.outgoingPending;
     final isIncoming = _status == RelStatus.incomingPending;
     final isFriends = _status == RelStatus.friends;
 
     if (isFriends) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: AppColors.success.withAlpha(20),
-          borderRadius: AppRadius.smBr,
-          border: Border.all(color: AppColors.success.withAlpha(60)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(Icons.check_circle_rounded, color: AppColors.success, size: 16),
-            SizedBox(width: 8),
-            Text('Du bist mit dem Host befreundet', style: TextStyle(color: AppColors.success, fontSize: 13, fontWeight: FontWeight.w600)),
-          ],
-        ),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.success.withAlpha(20),
+              borderRadius: AppRadius.smBr,
+              border: Border.all(color: AppColors.success.withAlpha(60)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Icon(Icons.check_circle_rounded,
+                    color: AppColors.success, size: 16),
+                SizedBox(width: 8),
+                Text('Du bist mit dem Host befreundet',
+                    style: TextStyle(
+                        color: AppColors.success,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(46),
+              foregroundColor: AppColors.text,
+              side: const BorderSide(color: AppColors.accentBorder2),
+            ),
+            onPressed: () {
+              final parts = [widget.myUsername, widget.hostUsername]..sort();
+              final chatId = '${parts[0]}__${parts[1]}';
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ChatDetailScreen(
+                    chatId: chatId,
+                    currentUsername: widget.myUsername,
+                    otherUsername: widget.hostUsername,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.chat_bubble_outline_rounded, size: 17),
+            label: const Text('Host schreiben',
+                style: TextStyle(fontSize: 14)),
+          ),
+        ],
       );
     }
 
@@ -2038,8 +2079,8 @@ class _HostFriendButtonState extends State<_HostFriendButton> {
           color: isPending || isIncoming ? AppColors.accentBorder : AppColors.accentBorder2,
         ),
       ),
-      onPressed: (isPending || isIncoming || _sending) ? null : _sendRequest,
-      icon: _sending
+      onPressed: (isPending || isIncoming || _sending || _loading) ? null : _sendRequest,
+      icon: (_sending || _loading)
           ? const SizedBox(
               width: 16, height: 16,
               child: CircularProgressIndicator(color: AppColors.subtle, strokeWidth: 2),
@@ -2051,8 +2092,9 @@ class _HostFriendButtonState extends State<_HostFriendButton> {
               size: 17,
             ),
       label: Text(
-        isPending ? 'Anfrage gesendet'
+        isPending ? 'Freundschaftsanfrage gesendet'
             : isIncoming ? 'Hat dich hinzugefügt'
+            : _loading ? 'Laden…'
             : 'Host hinzufügen',
         style: const TextStyle(fontSize: 14),
       ),
