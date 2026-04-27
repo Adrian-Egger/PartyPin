@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../Theme/app_theme.dart';
 import '../../Social/friends_model.dart';
+import 'user_profile_screen.dart';
 
 class ChatDetailScreen extends StatefulWidget {
   final String chatId;
@@ -59,27 +61,27 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       final isFriend = await FriendsModel()
           .areFriends(widget.currentUsername, widget.otherUsername);
       if (!mounted) return;
-      if (!isFriend) {
-        setState(() => _isFriend = false);
-        return;
+      setState(() => _isFriend = isFriend);
+
+      final lower = widget.otherUsername.trim().toLowerCase();
+      for (final col in ['users', 'bars']) {
+        try {
+          for (final q in await Future.wait([
+            FirebaseFirestore.instance.collection(col).where('username_lower', isEqualTo: lower).limit(1).get(),
+            FirebaseFirestore.instance.collection(col).where('username', isEqualTo: widget.otherUsername.trim()).limit(1).get(),
+          ], eagerError: false)) {
+            if (q.docs.isNotEmpty) {
+              final data = q.docs.first.data();
+              if (!mounted) return;
+              setState(() {
+                _otherAvatarUrl = (data['avatarUrl'] ?? '').toString().trim();
+                _otherBio = (data['bio'] ?? '').toString().trim();
+              });
+              return;
+            }
+          }
+        } catch (_) {}
       }
-      final query = await FirebaseFirestore.instance
-          .collection('users')
-          .where('username_lower',
-              isEqualTo: widget.otherUsername.toLowerCase())
-          .limit(1)
-          .get();
-      if (!mounted) return;
-      if (query.docs.isEmpty) {
-        setState(() => _isFriend = true);
-        return;
-      }
-      final data = query.docs.first.data();
-      setState(() {
-        _isFriend = true;
-        _otherAvatarUrl = (data['avatarUrl'] ?? '').toString().trim();
-        _otherBio = (data['bio'] ?? '').toString().trim();
-      });
     } catch (_) {}
   }
 
@@ -277,69 +279,84 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         onPressed: () => Navigator.pop(context),
         splashRadius: 20,
       ),
-      title: Row(
-        children: [
-          CircleAvatar(
-            radius: 19,
-            backgroundColor: _avatarColor(widget.otherUsername),
-            backgroundImage: (_isFriend &&
-                    _otherAvatarUrl != null &&
-                    _otherAvatarUrl!.isNotEmpty)
-                ? NetworkImage(_otherAvatarUrl!)
-                : null,
-            child: (_isFriend &&
-                    _otherAvatarUrl != null &&
-                    _otherAvatarUrl!.isNotEmpty)
-                ? null
-                : Text(
-                    widget.otherUsername.isNotEmpty
-                        ? widget.otherUsername[0].toUpperCase()
-                        : '?',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14),
-                  ),
-          ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  widget.otherUsername,
-                  style: const TextStyle(
-                    color: AppColors.text,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  child: _otherIsTyping
-                      ? const Text('schreibt…',
-                          key: ValueKey('t'),
-                          style: TextStyle(
-                              color: AppColors.accent,
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w500))
-                      : (_isFriend &&
-                              _otherBio != null &&
-                              _otherBio!.isNotEmpty)
-                          ? Text(_otherBio!,
-                              key: const ValueKey('b'),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: AppColors.subtle, fontSize: 11.5))
-                          : const SizedBox.shrink(key: ValueKey('_')),
-                ),
-              ],
+      title: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => UserProfileScreen(
+              username: widget.otherUsername,
+              myUsername: widget.currentUsername,
+              initialAvatarUrl: _otherAvatarUrl,
+              initialBio: _otherBio,
             ),
           ),
-        ],
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 19,
+              backgroundColor: _avatarColor(widget.otherUsername),
+              backgroundImage: (_isFriend &&
+                      _otherAvatarUrl != null &&
+                      _otherAvatarUrl!.isNotEmpty)
+                  ? CachedNetworkImageProvider(_otherAvatarUrl!)
+                  : null,
+              child: (_isFriend &&
+                      _otherAvatarUrl != null &&
+                      _otherAvatarUrl!.isNotEmpty)
+                  ? null
+                  : Text(
+                      widget.otherUsername.isNotEmpty
+                          ? widget.otherUsername[0].toUpperCase()
+                          : '?',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14),
+                    ),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    widget.otherUsername,
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 16,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    child: _otherIsTyping
+                        ? const Text('schreibt…',
+                            key: ValueKey('t'),
+                            style: TextStyle(
+                                color: AppColors.accent,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w500))
+                        : (_isFriend &&
+                                _otherBio != null &&
+                                _otherBio!.isNotEmpty)
+                            ? Text(_otherBio!,
+                                key: const ValueKey('b'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: AppColors.subtle, fontSize: 11.5))
+                            : const SizedBox.shrink(key: ValueKey('_')),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: AppColors.subtle, size: 18),
+          ],
+        ),
       ),
     );
   }

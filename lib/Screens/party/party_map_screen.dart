@@ -867,7 +867,10 @@ String _safeDocId(String input) => input
   }
 
   Future<void> _loadPartiesFromFirebase() async {
-    final snapshot = await FirebaseFirestore.instance.collection('Party').get();
+    final snapshot = await FirebaseFirestore.instance
+        .collection('Party')
+        .limit(300)
+        .get();
     for (final doc in snapshot.docs) {
       try {
         final data = doc.data();

@@ -710,22 +710,13 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   }) {
     final bool twoLines = label.contains('\n');
 
-    final Widget labelWidget = twoLines
-        ? Text(
-      label,
-      maxLines: 2,
-      softWrap: true,
-      overflow: TextOverflow.visible,
-      style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
-    )
-        : FittedBox(
+    final Widget labelWidget = FittedBox(
       fit: BoxFit.scaleDown,
       alignment: Alignment.centerLeft,
       child: Text(
         label,
-        maxLines: 1,
-        softWrap: false,
-        overflow: TextOverflow.visible,
+        maxLines: twoLines ? 2 : 1,
+        softWrap: twoLines,
         style: const TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
       ),
     );

@@ -1,65 +1,40 @@
-// lib/Widgets/party_bottom_sheet.dart
-//
-// ✅ Änderungen:
-// - RSVP-Status-FIX (Button wird grün):
-//      Priorität:
-//        1) rsvps/{uid}
-//        2) rsvps/{username}
-//        3) coming/{username} -> going
-//        4) maybe/{username}  -> maybe
-// - SnackBars: positiv = grün, negativ = rot (floating + rounded)
-// - Closed Party: Wenn Anfrage gesendet (pending) -> Button wird ORANGE (deaktiviert)
-// - ✅ Timer unten entfernt (kein "Wird automatisch gelöscht in ...")
-// - ✅ FIX: Wenn Closed Party freigegeben (canSeeFull == true) -> "Anfrage senden" verschwindet
-// - ✅ FIX CLOSED REQUEST UI: "Anfrage gesendet" wird sofort angezeigt + Request-Status wird robust gefunden
-//      Priorität:
-//        1) requests/{uid}
-//        2) requests/{username}
-//        3) requests/{safeDocId(username)}
+// lib/Screens/party/party_bottom_sheet.dart
 
-import 'dart:convert';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:http/http.dart' as http;
-import 'package:url_launcher/url_launcher.dart';
 import 'new_party.dart';
 import '../../Services/app_draggable_sheet.dart';
-import '../profile/chat_detail_screen.dart';
-import '../../Social/friends_model.dart';
+import '../profile/user_profile_screen.dart';
 import '../../Theme/app_theme.dart';
 
-HttpsCallable get _friendRequestFn => FirebaseFunctions.instanceFor(region: 'europe-west1')
-    .httpsCallable('sendFriendRequest',
-        options: HttpsCallableOptions(timeout: const Duration(seconds: 15)));
-
-typedef VoidAsync = Future<void> Function();
-typedef StringAsync = Future<void> Function(String value);
+typedef VoidAsync     = Future<void> Function();
+typedef StringAsync   = Future<void> Function(String value);
 typedef UserStatusAsync = Future<void> Function(String user, String status);
-typedef VerifyFn = Future<bool> Function(String username);
-typedef DocStream = Stream<DocumentSnapshot<Map<String, dynamic>>>?;
-typedef QStream = Stream<QuerySnapshot<Map<String, dynamic>>>?;
+typedef VerifyFn      = Future<bool> Function(String username);
+typedef DocStream     = Stream<DocumentSnapshot<Map<String, dynamic>>>?;
+typedef QStream       = Stream<QuerySnapshot<Map<String, dynamic>>>?;
 
 String safeDocId(String input) =>
     input.trim().replaceAll('/', '_').replaceAll('#', '_').replaceAll('?', '_');
 
-/// ✅ Einheitliche SnackBars: positiv = grün, negativ = rot
-void showStatusSnack(
-    BuildContext context,
-    String message, {
-      required bool positive,
-    }) {
+void showStatusSnack(BuildContext context, String message, {required bool positive}) {
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(
       content: Text(message),
-      backgroundColor: positive ? Colors.green : Colors.redAccent,
+      backgroundColor: positive ? AppColors.success : AppColors.accent,
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
     ),
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PartyBottomSheet
+// ─────────────────────────────────────────────────────────────────────────────
 
 class PartyBottomSheet extends StatelessWidget {
   const PartyBottomSheet({
@@ -77,12 +52,12 @@ class PartyBottomSheet extends StatelessWidget {
     required this.onClearRsvp,
     required this.onSendJoinRequest,
     required this.onUpdateRequestStatus,
-    required this.onSetRating, // bleibt nur für Kompatibilität (nicht genutzt)
+    required this.onSetRating,
     required this.onReport,
-    required this.rsvpStream, // wird NICHT verwendet (wir nutzen UID/Username-stream fix)
+    required this.rsvpStream,
     required this.comingStream,
     required this.maybeStream,
-    required this.ratingsStream, // Anzeige: Party/{partyId}/ratings listen (Docs enthalten value)
+    required this.ratingsStream,
     required this.isUserVerified,
     required this.recolorOpenMarker,
     required this.setClosedLockIcon,
@@ -100,28 +75,26 @@ class PartyBottomSheet extends StatelessWidget {
   final bool inRatingWindow;
   final bool isActive;
 
-  final StringAsync onSetRsvp;
-  final VoidAsync onClearRsvp;
-  final VoidAsync onSendJoinRequest;
+  final StringAsync    onSetRsvp;
+  final VoidAsync      onClearRsvp;
+  final VoidAsync      onSendJoinRequest;
   final UserStatusAsync onUpdateRequestStatus;
-
-  final StringAsync onSetRating;
-  final VoidAsync onReport;
+  final StringAsync    onSetRating;
+  final VoidAsync      onReport;
 
   final DocStream Function() rsvpStream;
-  final QStream Function() comingStream;
-  final QStream Function() maybeStream;
-  final QStream Function() ratingsStream;
-  final VerifyFn isUserVerified;
+  final QStream   Function() comingStream;
+  final QStream   Function() maybeStream;
+  final QStream   Function() ratingsStream;
+  final VerifyFn  isUserVerified;
 
   final void Function(String? status) recolorOpenMarker;
   final void Function(String? status) setClosedLockIcon;
-
   final VoidAsync onEditedParty;
-
   final bool isBarAccount;
 
-  // ------------------ Helpers ------------------
+  // ── Firebase helpers ────────────────────────────────────────────────────────
+
   String? _uid() => FirebaseAuth.instance.currentUser?.uid;
 
   DocumentReference<Map<String, dynamic>> _partyRef() =>
@@ -151,28 +124,22 @@ class PartyBottomSheet extends StatelessWidget {
     return _partyRef().collection('maybe').doc(u).snapshots();
   }
 
-  /// ✅ Status lesen:
-  /// 1) rsvps/{uid}
-  /// 2) rsvps/{username}
-  /// 3) coming/{username} => going
-  /// 4) maybe/{username}  => maybe
+  /// Cascading RSVP status lookup: uid → username → coming → maybe
   Widget _rsvpStatusBuilder(
-      BuildContext context, {
-        required Widget Function(String? status) builder,
-      }) {
+    BuildContext context, {
+    required Widget Function(String? status) builder,
+  }) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: _myRsvpUidStream(),
       builder: (context, uidSnap) {
-        final uidExists = uidSnap.data?.exists == true;
         final s1 = uidSnap.data?.data()?['status'] as String?;
-        if (uidExists && s1 != null) return builder(s1);
+        if (uidSnap.data?.exists == true && s1 != null) return builder(s1);
 
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: _myRsvpUsernameStream(),
           builder: (context, userSnap) {
-            final userExists = userSnap.data?.exists == true;
             final s2 = userSnap.data?.data()?['status'] as String?;
-            if (userExists && s2 != null) return builder(s2);
+            if (userSnap.data?.exists == true && s2 != null) return builder(s2);
 
             return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
               stream: _myComingUsernameStream(),
@@ -194,19 +161,32 @@ class PartyBottomSheet extends StatelessWidget {
     );
   }
 
+  void _showHostProfile(BuildContext context, String hostUsername, {String? displayName}) {
+    if (hostUsername.isEmpty) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => UserProfileScreen(
+          username: hostUsername,
+          myUsername: currentUsername,
+          displayName: displayName,
+        ),
+      ),
+    );
+  }
+
+  // ── Friends ─────────────────────────────────────────────────────────────────
+
   Future<Set<String>> _loadFriendUsernames() async {
     final me = (currentUsername ?? '').trim();
-    if (me.isEmpty) return <String>{};
-
+    if (me.isEmpty) return {};
     final qs = await FirebaseFirestore.instance
         .collection('friendships')
         .where('members', arrayContains: me)
         .get();
-
     final out = <String>{};
     for (final d in qs.docs) {
-      final members = (d.data()['members'] as List?)?.cast<String>() ?? const [];
-      for (final m in members) {
+      for (final m in (d.data()['members'] as List?)?.cast<String>() ?? <String>[]) {
         final s = m.trim();
         if (s.isNotEmpty && s != me) out.add(s);
       }
@@ -220,371 +200,264 @@ class PartyBottomSheet extends StatelessWidget {
     return FutureBuilder<Set<String>>(
       future: _loadFriendUsernames(),
       builder: (context, friendSnap) {
-        final friends = friendSnap.data ?? <String>{};
-
         if (friendSnap.connectionState == ConnectionState.waiting) {
-          return _boxed(
-            Row(
-              children: const [
-                SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
-                SizedBox(width: 10),
-                Text("Lade Freunde…", style: TextStyle(color: Colors.white70)),
-              ],
-            ),
-          );
+          return const SizedBox.shrink();
         }
 
-        if (friends.isEmpty) {
-          return _boxed(
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  "👀 Freunde bei dieser Party",
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  "Du hast aktuell keine Freunde, die angezeigt werden können.",
-                  style: TextStyle(color: Colors.white70),
-                ),
-              ],
-            ),
-          );
-        }
+        final friends = friendSnap.data ?? {};
 
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: comingStream(),
-          builder: (context, comingSnap) {
-            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: maybeStream(),
-              builder: (context, maybeSnap) {
-                final comingDocs = comingSnap.data?.docs ?? const [];
-                final maybeDocs = maybeSnap.data?.docs ?? const [];
+          builder: (context, cs) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: maybeStream(),
+            builder: (context, ms) {
+              final goingFriends = (cs.data?.docs ?? [])
+                  .map((d) => d.id.trim())
+                  .where(friends.contains)
+                  .toList()..sort();
+              final maybeFriends = (ms.data?.docs ?? [])
+                  .map((d) => d.id.trim())
+                  .where(friends.contains)
+                  .toList()..sort();
 
-                final comingFriends = <String>[];
-                for (final d in comingDocs) {
-                  final u = d.id.trim();
-                  if (friends.contains(u)) comingFriends.add(u);
-                }
+              if (goingFriends.isEmpty && maybeFriends.isEmpty) return const SizedBox.shrink();
 
-                final maybeFriends = <String>[];
-                for (final d in maybeDocs) {
-                  final u = d.id.trim();
-                  if (friends.contains(u)) maybeFriends.add(u);
-                }
-
-                comingFriends.sort();
-                maybeFriends.sort();
-
-                return _boxed(
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: const [
-                          Icon(Icons.groups_rounded,
-                              color: Colors.redAccent, size: 20),
-                          SizedBox(width: 8),
-                          Text(
-                            "👀 Freunde bei dieser Party",
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800),
-                          ),
-                        ],
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _sectionLabel("Freunde hier"),
+                    const SizedBox(height: 10),
+                    if (goingFriends.isNotEmpty)
+                      Wrap(
+                        spacing: 6, runSpacing: 6,
+                        children: goingFriends
+                            .map((u) => _friendChip(u, AppColors.success))
+                            .toList(),
                       ),
-                      const SizedBox(height: 10),
-                      if (comingFriends.isEmpty && maybeFriends.isEmpty)
-                        const Text(
-                          "Keine deiner Freunde sind hier aktuell in 'Ich komme' oder 'Vielleicht'.",
-                          style: TextStyle(color: Colors.white70),
-                        )
-                      else ...[
-                        if (comingFriends.isNotEmpty) ...[
-                          const Text("✅ Kommen",
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800)),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: comingFriends
-                                .map((u) => _friendChip(u, Colors.greenAccent))
-                                .toList(),
-                          ),
-                          const SizedBox(height: 12),
-                        ],
-                        if (maybeFriends.isNotEmpty) ...[
-                          const Text("🤔 Vielleicht",
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800)),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: maybeFriends
-                                .map((u) =>
-                                _friendChip(u, Colors.orangeAccent))
-                                .toList(),
-                          ),
-                        ],
-                      ],
+                    if (maybeFriends.isNotEmpty) ...[
+                      if (goingFriends.isNotEmpty) const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6, runSpacing: 6,
+                        children: maybeFriends
+                            .map((u) => _friendChip(u, Colors.orangeAccent))
+                            .toList(),
+                      ),
                     ],
-                  ),
-                );
-              },
-            );
-          },
+                  ],
+                ),
+              );
+            },
+          ),
         );
       },
     );
   }
 
+  static Widget _friendChip(String username, Color c) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: c.withAlpha(20),
+      borderRadius: AppRadius.fullBr,
+      border: Border.all(color: c.withAlpha(80)),
+    ),
+    child: Text(username, style: TextStyle(color: c, fontWeight: FontWeight.w600, fontSize: 13)),
+  );
 
-  static Widget _friendChip(String username, Color c) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: c.withOpacity(.12),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: c.withOpacity(.6)),
-      ),
-      child: Text(username,
-          style: TextStyle(color: c, fontWeight: FontWeight.w800)),
-    );
-  }
+  // ── Rating ──────────────────────────────────────────────────────────────────
 
-  // ------------------ RATING (Cloud Function CALLABLE) ------------------
   Future<void> _setRatingViaFunction(BuildContext context, String value) async {
-    final uid = _uid();
-    final meName = (currentUsername ?? '').trim();
-
-    if (uid == null) {
-      showStatusSnack(context, "Nicht eingeloggt (auth.uid fehlt).",
-          positive: false);
+    if (_uid() == null || (currentUsername ?? '').trim().isEmpty || !inRatingWindow) {
+      showStatusSnack(context, "Bewertung nicht möglich.", positive: false);
       return;
     }
-    if (meName.isEmpty) {
-      showStatusSnack(context, "Username fehlt.", positive: false);
-      return;
-    }
-    if (!inRatingWindow) {
-      showStatusSnack(context, "Bewertung ist noch nicht möglich.",
-          positive: false);
-      return;
-    }
-
     try {
-      final functions = FirebaseFunctions.instanceFor(region: 'europe-west1');
-
-      final fn = functions.httpsCallable(
+      final fn = FirebaseFunctions.instanceFor(region: 'europe-west1').httpsCallable(
         'setPartyRating',
         options: HttpsCallableOptions(timeout: const Duration(seconds: 20)),
       );
-
-      await fn.call(<String, dynamic>{
-        'partyId': partyId,
-        'value': value, // good|bad
-      });
-
+      await fn.call({'partyId': partyId, 'value': value});
       if (!context.mounted) return;
-
       showStatusSnack(
         context,
-        value == 'good'
-            ? "Danke! Positive Bewertung gespeichert."
-            : "Danke! Negative Bewertung gespeichert.",
+        value == 'good' ? "Danke! Positive Bewertung gespeichert." : "Danke! Negative Bewertung gespeichert.",
         positive: value == 'good',
       );
     } on FirebaseFunctionsException catch (e) {
-      if (!context.mounted) return;
-      showStatusSnack(context,
-          "Function-Fehler: ${e.code} (${e.message ?? ''})",
-          positive: false);
-    } on FirebaseException catch (e) {
-      if (!context.mounted) return;
-      showStatusSnack(context,
-          "Firebase-Fehler: ${e.code} (${e.message ?? ''})",
-          positive: false);
+      if (context.mounted) showStatusSnack(context, "Fehler: ${e.code}", positive: false);
     } catch (e) {
-      if (!context.mounted) return;
-      showStatusSnack(context, "Fehler beim Bewerten: $e", positive: false);
+      if (context.mounted) showStatusSnack(context, "Fehler: $e", positive: false);
     }
   }
 
-  // -------- User ausladen --------
+  Widget _ratingGate(BuildContext context) {
+    if (currentUsername == null || isHost || !inRatingWindow) return const SizedBox.shrink();
+    return _rsvpStatusBuilder(
+      context,
+      builder: (status) => (status == 'going' || status == 'maybe')
+          ? _ratingButtons(context)
+          : const SizedBox.shrink(),
+    );
+  }
+
+  Widget _ratingButtons(BuildContext context) {
+    final canRate = currentUsername != null && _uid() != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sectionLabel("Bewertung (24h ab Partybeginn)"),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.success,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+                elevation: 0,
+              ),
+              onPressed: canRate ? () => _setRatingViaFunction(context, 'good') : null,
+              icon: const Icon(Icons.thumb_up_outlined, size: 16),
+              label: const Text("Gut", style: TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+                elevation: 0,
+              ),
+              onPressed: canRate ? () => _setRatingViaFunction(context, 'bad') : null,
+              icon: const Icon(Icons.thumb_down_outlined, size: 16),
+              label: const Text("Schlecht", style: TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: ratingsStream(),
+          builder: (context, snap) {
+            final docs = snap.data?.docs ?? [];
+            final good = docs.where((d) => d.data()['value'] == 'good').length;
+            final bad  = docs.where((d) => d.data()['value'] == 'bad').length;
+            return Text(
+              "$good positiv · $bad negativ",
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  // ── Kick user ───────────────────────────────────────────────────────────────
+
   Future<void> _confirmKickUser(BuildContext context, String username) async {
     final cleanUser = username.trim();
     if (cleanUser.isEmpty || cleanUser == 'Unbekannt') return;
 
-    final typeStr = (data['type'] ?? (isClosed ? 'Closed' : 'Open')).toString();
-    final bool isFriendsOnly = typeStr == 'Only4Friends';
+    final isFriendsOnly = (data['type'] ?? '').toString() == 'Only4Friends';
 
-    final bool confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        title:
-        const Text("Person ausladen?", style: TextStyle(color: Colors.white)),
-        content: Text(
-          isFriendsOnly
-              ? "Möchtest du \"$cleanUser\" wirklich ausladen? Die Person wird aus allen Listen entfernt und bei dieser Only4Friends-Party ausgeschlossen."
-              : "Möchtest du \"$cleanUser\" wirklich ausladen? Die Person wird aus allen Zusagen/Listen dieser Party entfernt.",
-          style: const TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child:
-            const Text("Abbrechen", style: TextStyle(color: Colors.white70)),
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: AppColors.panel,
+            shape: RoundedRectangleBorder(
+              borderRadius: AppRadius.lgBr,
+              side: const BorderSide(color: AppColors.accentBorder),
+            ),
+            title: const Text("Person ausladen?", style: TextStyle(color: AppColors.text)),
+            content: Text(
+              "Möchtest du \"$cleanUser\" wirklich ausladen?",
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text("Abbrechen", style: TextStyle(color: AppColors.muted)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text("Ausladen", style: TextStyle(color: AppColors.accent)),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text("Ausladen",
-                style: TextStyle(color: Colors.redAccent)),
-          ),
-        ],
-      ),
-    ) ??
+        ) ??
         false;
 
     if (!confirmed) return;
 
     try {
       final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
-
       await FirebaseFirestore.instance.runTransaction((tx) async {
-        final rsvpRef = partyRef.collection('rsvps').doc(cleanUser);
-        final comingRef = partyRef.collection('coming').doc(cleanUser);
-        final maybeRef = partyRef.collection('maybe').doc(cleanUser);
-        final apprRef = partyRef.collection('approved').doc(cleanUser);
-
+        for (final sub in ['rsvps', 'coming', 'maybe', 'approved']) {
+          tx.delete(partyRef.collection(sub).doc(cleanUser));
+        }
         final reqRef1 = partyRef.collection('requests').doc(cleanUser);
         final reqRef2 = partyRef.collection('requests').doc(safeDocId(cleanUser));
-
-        tx.delete(rsvpRef);
-        tx.delete(comingRef);
-        tx.delete(maybeRef);
-        tx.delete(apprRef);
         tx.delete(reqRef1);
         if (reqRef2.id != reqRef1.id) tx.delete(reqRef2);
 
-        tx.set(
-          partyRef,
-          {'approvedUsers': FieldValue.arrayRemove([cleanUser])},
-          SetOptions(merge: true),
-        );
-
+        tx.set(partyRef, {'approvedUsers': FieldValue.arrayRemove([cleanUser])}, SetOptions(merge: true));
         if (isFriendsOnly) {
-          tx.set(
-            partyRef,
-            {'excludedFriends': FieldValue.arrayUnion([cleanUser])},
-            SetOptions(merge: true),
-          );
+          tx.set(partyRef, {'excludedFriends': FieldValue.arrayUnion([cleanUser])}, SetOptions(merge: true));
         }
       });
-
       showStatusSnack(context, "\"$cleanUser\" wurde ausgeladen.", positive: true);
     } catch (e) {
-      showStatusSnack(context, "Fehler beim Ausladen: $e", positive: false);
+      showStatusSnack(context, "Fehler: $e", positive: false);
     }
   }
 
-  // ✅ Timer unten entfernt -> immer shrink
-  Widget _buildExpiryInfo() => const SizedBox.shrink();
+  // ── Images ──────────────────────────────────────────────────────────────────
 
-  // ✅ Rating-Gate
-  Widget _ratingGate(BuildContext context) {
-    if (currentUsername == null) return const SizedBox.shrink();
-
-    if (isHost) {
-      return _pill("Hosts können ihre eigene Party nicht bewerten.", Colors.white70);
-    }
-
-    if (!inRatingWindow) {
-      return _pill("Bewertung ist noch nicht freigeschaltet.", Colors.white70);
-    }
-
-    return _rsvpStatusBuilder(
-      context,
-      builder: (status) {
-        final canRate = status == 'going' || status == 'maybe';
-        if (!canRate) {
-          return _pill(
-            "Bewerten erst möglich, wenn du \"Ich komme\" oder \"Ich komme eventuell\" gesetzt hast.",
-            Colors.white70,
-          );
-        }
-        return _ratingButtons(context);
-      },
-    );
-  }
-
-  // ===========================
-  // ✅ Bilder anzeigen
-  // ===========================
   List<_UiImageBlock> _extractImageBlocks(Map<String, dynamic> partyData) {
     final blocks = <_UiImageBlock>[];
-
     final rawBlocks = partyData['imageBlocks'];
     if (rawBlocks is List) {
       for (final b in rawBlocks) {
         if (b is! Map) continue;
         final caption = (b['caption'] ?? '').toString().trim();
         final imgs = <String>[];
-
         final rawImgs = b['images'];
         if (rawImgs is List) {
           for (final it in rawImgs) {
             if (it is Map) {
               final url = (it['url'] ?? '').toString().trim();
               if (url.isNotEmpty) imgs.add(url);
-            } else if (it is String) {
-              final url = it.trim();
-              if (url.isNotEmpty) imgs.add(url);
+            } else if (it is String && it.trim().isNotEmpty) {
+              imgs.add(it.trim());
             }
           }
         }
-
-        if (caption.isEmpty && imgs.isEmpty) continue;
-        blocks.add(_UiImageBlock(caption: caption, urls: imgs));
+        if (caption.isNotEmpty || imgs.isNotEmpty) blocks.add(_UiImageBlock(caption: caption, urls: imgs));
       }
     }
-
     if (blocks.isEmpty) {
       final rawImages = partyData['images'];
       if (rawImages is List) {
         final urls = <String>[];
         String caption = '';
-
         for (final it in rawImages) {
           if (it is Map) {
             final url = (it['url'] ?? '').toString().trim();
             if (url.isNotEmpty) urls.add(url);
             final c = (it['caption'] ?? '').toString().trim();
             if (caption.isEmpty && c.isNotEmpty) caption = c;
-          } else if (it is String) {
-            final url = it.trim();
-            if (url.isNotEmpty) urls.add(url);
+          } else if (it is String && it.trim().isNotEmpty) {
+            urls.add(it.trim());
           }
         }
-
-        if (caption.isNotEmpty || urls.isNotEmpty) {
-          blocks.add(_UiImageBlock(caption: caption, urls: urls));
-        }
+        if (caption.isNotEmpty || urls.isNotEmpty) blocks.add(_UiImageBlock(caption: caption, urls: urls));
       }
     }
-
     return blocks;
   }
 
@@ -592,47 +465,23 @@ class PartyBottomSheet extends StatelessWidget {
     final blocks = _extractImageBlocks(partyData);
     if (blocks.isEmpty) return const SizedBox.shrink();
 
-    return _boxed(
-      Column(
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: const [
-              Icon(Icons.photo_library_outlined, color: Colors.white70, size: 20),
-              SizedBox(width: 8),
-              Text(
-                "📸 Bilder",
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800),
-              ),
-            ],
-          ),
+          _sectionLabel("Bilder"),
           const SizedBox(height: 10),
           ...List.generate(blocks.length, (i) {
             final b = blocks[i];
-
-            return Container(
-              margin: EdgeInsets.only(bottom: i == blocks.length - 1 ? 0 : 12),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey[850],
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.grey[700]!),
-              ),
+            return Padding(
+              padding: EdgeInsets.only(bottom: i < blocks.length - 1 ? 12 : 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (b.caption.isNotEmpty) ...[
-                    Text(
-                      b.caption,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          height: 1.25),
-                    ),
-                    const SizedBox(height: 10),
+                    Text(b.caption, style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 14)),
+                    const SizedBox(height: 8),
                   ],
                   if (b.urls.isNotEmpty)
                     SizedBox(
@@ -640,16 +489,10 @@ class PartyBottomSheet extends StatelessWidget {
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         itemCount: b.urls.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 10),
-                        itemBuilder: (context, idx) {
-                          final url = b.urls[idx];
-                          return _imageThumb(context, url);
-                        },
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (ctx, idx) => _imageThumb(ctx, b.urls[idx]),
                       ),
-                    )
-                  else
-                    const Text("Keine Bilder in diesem Block.",
-                        style: TextStyle(color: Colors.white70)),
+                    ),
                 ],
               ),
             );
@@ -663,25 +506,16 @@ class PartyBottomSheet extends StatelessWidget {
     return GestureDetector(
       onTap: () => _openImageViewer(context, url),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: AppRadius.mdBr,
         child: Container(
           width: 160,
           height: 120,
-          color: Colors.black12,
-          child: Image.network(
-            url,
+          color: AppColors.panelAlt,
+          child: CachedNetworkImage(
+            imageUrl: url,
             fit: BoxFit.cover,
-            loadingBuilder: (context, child, progress) {
-              if (progress == null) return child;
-              return const Center(
-                child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
-              );
-            },
-            errorBuilder: (context, _, __) => const Center(
-                child: Icon(Icons.broken_image_outlined, color: Colors.white54)),
+            placeholder: (_, __) => const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.muted))),
+            errorWidget: (_, __, ___) => const Center(child: Icon(Icons.broken_image_outlined, color: AppColors.subtle)),
           ),
         ),
       ),
@@ -691,111 +525,252 @@ class PartyBottomSheet extends StatelessWidget {
   void _openImageViewer(BuildContext context, String url) {
     showDialog(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.92),
-      builder: (ctx) {
-        return GestureDetector(
-          onTap: () => Navigator.of(ctx).pop(),
-          child: Dialog(
-            backgroundColor: Colors.transparent,
-            insetPadding: const EdgeInsets.all(14),
-            child: InteractiveViewer(
-              minScale: 0.8,
-              maxScale: 4,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Image.network(
-                  url,
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, _, __) => Container(
-                    color: Colors.grey[900],
-                    padding: const EdgeInsets.all(18),
-                    child: const Center(
-                      child: Icon(Icons.broken_image_outlined,
-                          color: Colors.white70, size: 36),
-                    ),
-                  ),
+      barrierColor: Colors.black.withAlpha(235),
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.of(ctx).pop(),
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(14),
+          child: InteractiveViewer(
+            minScale: 0.8,
+            maxScale: 4,
+            child: ClipRRect(
+              borderRadius: AppRadius.mdBr,
+              child: CachedNetworkImage(
+                imageUrl: url,
+                fit: BoxFit.contain,
+                errorWidget: (_, __, ___) => Container(
+                  color: AppColors.panel,
+                  padding: const EdgeInsets.all(18),
+                  child: const Center(child: Icon(Icons.broken_image_outlined, color: AppColors.muted, size: 36)),
                 ),
               ),
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  // ------------------ BUILD ------------------
+  // ── BUILD ───────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
-    final typeStr = (data['type'] ?? (isClosed ? 'Closed' : 'Open')).toString();
+    final typeStr    = (data['type'] ?? (isClosed ? 'Closed' : 'Open')).toString();
     final isFriendsOnly = typeStr == 'Only4Friends';
     final canSeeFull = isFriendsOnly ? true : (!isClosed || baseCanSeeFull);
 
     final hostNameStr = (data['hostName'] ?? '').toString();
-    final hostLabel = isHost ? "$hostNameStr (du)" : hostNameStr;
+    final hostIdStr   = (data['hostId']   ?? '').toString();
+    final hostLabel   = isHost ? "$hostNameStr (du)" : hostNameStr;
 
-    final Color badgeColor = isFriendsOnly
-        ? Colors.deepPurple[700]!
-        : (isClosed ? Colors.blueGrey[800]! : Colors.green[800]!);
-    final IconData badgeIcon =
-    isFriendsOnly ? Icons.group_rounded : (isClosed ? Icons.lock : Icons.public);
-    final String badgeLabel =
-    isFriendsOnly ? "👥 Only4Friends" : (isClosed ? "🔒 Closed" : "🌍 Open");
+    // Type badge
+    final Color badgeColor, badgeFg;
+    final IconData badgeIcon;
+    final String badgeLabel;
+    if (isFriendsOnly) {
+      badgeColor = AppColors.teal.withAlpha(30);
+      badgeFg    = AppColors.teal;
+      badgeIcon  = Icons.group_rounded;
+      badgeLabel = "Only4Friends";
+    } else if (isClosed) {
+      badgeColor = AppColors.accent.withAlpha(25);
+      badgeFg    = AppColors.accent;
+      badgeIcon  = Icons.lock_rounded;
+      badgeLabel = "Closed";
+    } else {
+      badgeColor = AppColors.success.withAlpha(25);
+      badgeFg    = AppColors.success;
+      badgeIcon  = Icons.public_rounded;
+      badgeLabel = "Open";
+    }
 
-    Future<void> _confirmAndDeleteParty() async {
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: Colors.grey[900],
-          title: const Text("Party löschen?",
-              style: TextStyle(color: Colors.white)),
-          content: const Text(
-            "Willst du diese Party wirklich löschen? Alle Zusagen, Anfragen und Bewertungen gehen verloren.",
-            style: TextStyle(color: Colors.white70),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text("Abbrechen",
-                  style: TextStyle(color: Colors.white70)),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text("Löschen",
-                  style: TextStyle(color: Colors.redAccent)),
-            ),
+    // ── Info chip ──────────────────────────────────────────────────────────
+    Widget infoChip(IconData icon, String label, String value) => Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.panel,
+          borderRadius: AppRadius.mdBr,
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(color: AppColors.subtle, fontSize: 11, fontWeight: FontWeight.w500, letterSpacing: 0.3)),
+            const SizedBox(height: 4),
+            Row(children: [
+              Icon(icon, color: AppColors.accent, size: 13),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(value,
+                    style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 13),
+                    overflow: TextOverflow.ellipsis),
+              ),
+            ]),
           ],
         ),
-      ) ??
-          false;
+      ),
+    );
 
-      if (!confirm) return;
+    final minAge     = (data['minAge']?.toString() ?? '').trim();
+    final guestLimit = (data['guestLimit']?.toString() ?? '').trim();
+    final price      = data['price'];
+    final address    = (data['address'] ?? '—').toString();
+    final description = (data['description'] ?? '').toString().trim();
 
+    // ── Full details ───────────────────────────────────────────────────────
+    final fullDetails = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          infoChip(Icons.calendar_today_rounded, "Datum", formattedDate),
+          const SizedBox(width: 8),
+          infoChip(Icons.schedule_rounded, "Uhrzeit", (data['time'] ?? '—').toString()),
+        ]),
+        const SizedBox(height: 8),
+        Row(children: [
+          infoChip(Icons.euro_rounded, "Eintritt", (price == null || price == 0) ? "Gratis" : "${price}€"),
+          const SizedBox(width: 8),
+          infoChip(Icons.cake_outlined, "Alter", minAge.isEmpty ? '—' : '${minAge}+'),
+          const SizedBox(width: 8),
+          infoChip(Icons.group_rounded, "Limit", guestLimit.isEmpty ? '∞' : guestLimit),
+        ]),
+        if (description.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.panel,
+              borderRadius: AppRadius.mdBr,
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Beschreibung', style: TextStyle(color: AppColors.subtle, fontSize: 11, fontWeight: FontWeight.w500, letterSpacing: 0.3)),
+                const SizedBox(height: 4),
+                Text(description, style: const TextStyle(color: AppColors.text, fontSize: 13, height: 1.5)),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppColors.panel,
+            borderRadius: AppRadius.mdBr,
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Adresse', style: TextStyle(color: AppColors.subtle, fontSize: 11, fontWeight: FontWeight.w500, letterSpacing: 0.3)),
+              const SizedBox(height: 4),
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.location_on_rounded, color: AppColors.accent, size: 13),
+                const SizedBox(width: 4),
+                Expanded(child: Text(address, style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 13))),
+              ]),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    // ── Partial (locked) — alles außer Adresse sichtbar ──────────────────
+    final closedPartial = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          infoChip(Icons.calendar_today_rounded, "Datum", formattedDate),
+          const SizedBox(width: 8),
+          infoChip(Icons.schedule_rounded, "Uhrzeit", (data['time'] ?? '—').toString()),
+        ]),
+        const SizedBox(height: 8),
+        Row(children: [
+          infoChip(Icons.euro_rounded, "Eintritt", (price == null || price == 0) ? "Gratis" : "${price}€"),
+          const SizedBox(width: 8),
+          infoChip(Icons.cake_outlined, "Alter", minAge.isEmpty ? '—' : '${minAge}+'),
+          const SizedBox(width: 8),
+          infoChip(Icons.group_rounded, "Limit", guestLimit.isEmpty ? '∞' : guestLimit),
+        ]),
+        if (description.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.panel,
+              borderRadius: AppRadius.mdBr,
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Beschreibung', style: TextStyle(color: AppColors.subtle, fontSize: 11, fontWeight: FontWeight.w500, letterSpacing: 0.3)),
+                const SizedBox(height: 4),
+                Text(description, style: const TextStyle(color: AppColors.text, fontSize: 13, height: 1.5)),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppColors.panel,
+            borderRadius: AppRadius.mdBr,
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Adresse', style: TextStyle(color: AppColors.subtle, fontSize: 11, fontWeight: FontWeight.w500, letterSpacing: 0.3)),
+              const SizedBox(height: 4),
+              const Row(children: [
+                Text('🔒', style: TextStyle(fontSize: 13)),
+                SizedBox(width: 6),
+                Expanded(child: Text("Erst nach Freigabe sichtbar.", style: TextStyle(color: AppColors.subtle, fontSize: 13))),
+              ]),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    // ── Delete dialog ──────────────────────────────────────────────────────
+    Future<void> confirmDelete() async {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.panel,
+          shape: RoundedRectangleBorder(borderRadius: AppRadius.lgBr, side: const BorderSide(color: AppColors.accentBorder)),
+          title: const Text("Party löschen?", style: TextStyle(color: AppColors.text)),
+          content: const Text("Alle Zusagen, Anfragen und Bewertungen gehen verloren.", style: TextStyle(color: AppColors.muted)),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text("Abbrechen", style: TextStyle(color: AppColors.muted))),
+            TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text("Löschen", style: TextStyle(color: AppColors.accent))),
+          ],
+        ),
+      ) ?? false;
+
+      if (!ok) return;
       try {
         final partyRef = FirebaseFirestore.instance.collection('Party').doc(partyId);
         final batch = FirebaseFirestore.instance.batch();
-
-        const subCollections = [
-          'rsvps',
-          'coming',
-          'maybe',
-          'requests',
-          'approved',
-          'ratings'
-        ];
-
-        for (final sub in subCollections) {
+        for (final sub in ['rsvps', 'coming', 'maybe', 'requests', 'approved', 'ratings']) {
           final qs = await partyRef.collection(sub).get();
-          for (final doc in qs.docs) {
-            batch.delete(doc.reference);
-          }
+          for (final doc in qs.docs) batch.delete(doc.reference);
         }
-
         batch.delete(partyRef);
         await batch.commit();
-
         if (!context.mounted) return;
         showStatusSnack(context, "Party gelöscht.", positive: true);
-
         await onEditedParty();
       } catch (e) {
         if (!context.mounted) return;
@@ -803,271 +778,138 @@ class PartyBottomSheet extends StatelessWidget {
       }
     }
 
-    const _redIcon = Color(0xAAFF3B30);
-    const _redBorder = Color(0x22FF3B30);
-
-    Widget _chip(IconData icon, String label, String value) => Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1A1215),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _redBorder),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(label, style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w500)),
-            const SizedBox(height: 4),
-            Row(children: [
-              Icon(icon, color: _redIcon, size: 13),
-              const SizedBox(width: 4),
-              Expanded(child: Text(value,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13),
-                overflow: TextOverflow.ellipsis)),
-            ]),
-          ],
-        ),
-      ),
-    );
-
-    final minAge = (data['minAge']?.toString() ?? '').trim();
-    final price = data['price'];
-    final guestLimit = (data['guestLimit']?.toString() ?? '').trim();
-    final address = (data['address'] ?? '—').toString();
-    final description = (data['description'] ?? '').toString().trim();
-
-    final Widget fullDetails = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(children: [
-          _chip(Icons.calendar_today_rounded, "📅  Datum", formattedDate),
-          const SizedBox(width: 8),
-          _chip(Icons.schedule_rounded, "🕐  Uhrzeit", (data['time'] ?? '—').toString()),
-        ]),
-        const SizedBox(height: 8),
-        Row(children: [
-          _chip(Icons.euro_rounded, "💶  Eintritt",
-              price == null || price == 0 ? "Gratis" : "${price}€"),
-          const SizedBox(width: 8),
-          _chip(Icons.cake_outlined, "🎂  Alter", minAge.isEmpty ? '—' : '${minAge}+'),
-          const SizedBox(width: 8),
-          _chip(Icons.group_rounded, "👥  Limit", guestLimit.isEmpty ? '∞' : guestLimit),
-        ]),
-        const SizedBox(height: 8),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1215),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _redBorder),
-          ),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Icon(Icons.location_on_rounded, color: _redIcon, size: 14),
-            const SizedBox(width: 6),
-            Expanded(child: Text(address,
-                style: const TextStyle(color: Colors.white70, fontSize: 13))),
-          ]),
-        ),
-        if (description.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1A1215),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _redBorder),
-            ),
-            child: Text(description,
-                style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5)),
-          ),
-        ],
-      ],
-    );
-
-    final Widget closedPartial = Column(
-      children: [
-        Row(children: [
-          _chip(Icons.calendar_today_rounded, "📅  Datum", formattedDate),
-          const SizedBox(width: 8),
-          _chip(Icons.cake_outlined, "🎂  Alter", minAge.isEmpty ? '—' : '${minAge}+'),
-        ]),
-        const SizedBox(height: 8),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1A1215),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _redBorder),
-          ),
-          child: const Row(children: [
-            Icon(Icons.lock_outline_rounded, color: _redIcon, size: 14),
-            SizedBox(width: 8),
-            Expanded(child: Text(
-              "Weitere Details werden nach Freigabe sichtbar.",
-              style: TextStyle(color: Colors.white38, fontSize: 12, fontStyle: FontStyle.italic),
-            )),
-          ]),
-        ),
-      ],
-    );
-
     return AppDraggableSheet(
-      panelColor: const Color(0xFF120D0F),
-      borderColor: const Color(0xFF2E1A1F),
+      panelColor: AppColors.bgTop,
+      borderColor: AppColors.border,
       childBuilder: (context, scrollController) {
         return ListView(
           controller: scrollController,
-          padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
           children: [
-            // Party name – full width, no competition with badge
+
+            // ── Party name ───────────────────────────────────────────────
             Text(
               (data['name'] ?? (isClosed ? "Geschlossene Party" : "Party")).toString(),
-              style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white),
-              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.text, letterSpacing: -0.4),
               maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 8),
-            // Badge + Host in same row
+
+            // ── Type badge + host chip ───────────────────────────────────
             Row(
               children: [
+                // Type badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                      color: badgeColor, borderRadius: BorderRadius.circular(999)),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(badgeIcon, color: Colors.white, size: 14),
-                      const SizedBox(width: 5),
-                      Text(badgeLabel,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13)),
-                    ],
+                    color: badgeColor,
+                    borderRadius: AppRadius.fullBr,
+                    border: Border.all(color: badgeFg.withAlpha(60)),
                   ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(badgeIcon, color: badgeFg, size: 13),
+                    const SizedBox(width: 5),
+                    Text(badgeLabel, style: TextStyle(color: badgeFg, fontWeight: FontWeight.w700, fontSize: 12)),
+                  ]),
                 ),
                 const SizedBox(width: 8),
-                FutureBuilder<bool>(
-                  future: isUserVerified(hostNameStr),
-                  builder: (context, snap) {
-                    final isVerified = snap.data == true;
-                    return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF2A1018),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: const Color(0x44FF3B30)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (isVerified) ...[
-                            const Icon(Icons.verified_rounded, color: Color(0xFFFF3B30), size: 14),
-                            const SizedBox(width: 5),
-                          ] else ...[
-                            const Text("🎤", style: TextStyle(fontSize: 12)),
-                            const SizedBox(width: 5),
-                          ],
-                          Text("$hostLabel",
-                              style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13)),
-                        ],
-                      ),
-                    );
-                  },
+                // Host chip — tappable → profile
+                GestureDetector(
+                  onTap: () => _showHostProfile(context, hostIdStr.isNotEmpty ? hostIdStr : hostNameStr, displayName: hostNameStr),
+                  child: FutureBuilder<bool>(
+                    future: isUserVerified(hostNameStr),
+                    builder: (context, snap) {
+                      final verified = snap.data == true;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: AppColors.accentBorder,
+                          borderRadius: AppRadius.fullBr,
+                          border: Border.all(color: AppColors.accentBorder2),
+                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(
+                            verified ? Icons.verified_rounded : Icons.mic_rounded,
+                            color: AppColors.accent,
+                            size: 13,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            hostLabel,
+                            style: const TextStyle(color: AppColors.muted, fontWeight: FontWeight.w600, fontSize: 12),
+                          ),
+                        ]),
+                      );
+                    },
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            if (isFriendsOnly)
-              _pill("👥 Nur für Freunde sichtbar.", Colors.deepPurpleAccent)
-            else if (isClosed && !canSeeFull)
-              _pill("🔒 Geschlossene Party – nur Datum & Mindestalter sichtbar.",
-                  Colors.redAccent)
-            else if (isClosed && canSeeFull)
-              _pill("✅ Zugriff freigegeben – alle Details sichtbar.",
-                  Colors.lightGreenAccent),
-            const SizedBox(height: 16),
-            if (canSeeFull) fullDetails else closedPartial,
-            if (canSeeFull) ...[
-              const SizedBox(height: 14),
-              _imagesSection(data),
-            ],
             const SizedBox(height: 14),
+
+            // ── Status pill ──────────────────────────────────────────────
+            if (isFriendsOnly)
+              _pill("Nur für Freunde sichtbar.", AppColors.teal)
+            else if (isClosed && canSeeFull)
+              _pill("Zugang freigegeben – alle Details sichtbar.", AppColors.success),
+            if (isFriendsOnly || isClosed) const SizedBox(height: 14),
+
+            // ── Details ──────────────────────────────────────────────────
+            if (canSeeFull) fullDetails else closedPartial,
+
+            // ── Images ───────────────────────────────────────────────────
+            if (canSeeFull) _imagesSection(data),
+
+            const SizedBox(height: 16),
+
+            // ── Friends ──────────────────────────────────────────────────
             _friendsGoingSection(context),
-            const SizedBox(height: 20),
-            const Divider(color: Color(0x33FF3B30)),
-            const SizedBox(height: 12),
+
+            // ── Divider ──────────────────────────────────────────────────
+            const Divider(color: AppColors.border),
+            const SizedBox(height: 16),
+
+            // ── Host view ────────────────────────────────────────────────
             if (isHost) ...[
               if (isClosed && !isFriendsOnly)
                 _hostClosedLists(context)
               else
                 _hostOpenLists(context),
               const SizedBox(height: 16),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orangeAccent,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      elevation: 0,
-                    ),
-                    icon: const Icon(Icons.edit_rounded, size: 18),
-                    label: const Text("Party bearbeiten", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                    onPressed: () async {
-                      await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => NewPartyScreen(existingData: data, docId: partyId),
-                        ),
-                      );
-                      await onEditedParty();
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  TextButton.icon(
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.redAccent,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    onPressed: _confirmAndDeleteParty,
-                    icon: const Icon(Icons.delete_outline_rounded, size: 16),
-                    label: const Text("Party löschen", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                  ),
-                ],
-              ),
-            ]
-            else ...[
-
-              // 🔥 1️⃣ Ticket kaufen Button (nur wenn Preis > 0)
-              if ((data['price'] ?? 0) > 0 && (!isClosed || canSeeFull)) ...[
-                ElevatedButton.icon(
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(52),
-                    backgroundColor: Colors.blueAccent,
+                    backgroundColor: Colors.orangeAccent,
                     foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+                    elevation: 0,
                   ),
-                  icon: const Icon(Icons.payment),
-                  label: Text("Ticket kaufen – ${(data['price']).toString()}€"),
-                  onPressed: () => _buyTicket(context),
+                  icon: const Icon(Icons.edit_rounded, size: 17),
+                  label: const Text("Party bearbeiten", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => NewPartyScreen(existingData: data, docId: partyId)),
+                    );
+                    await onEditedParty();
+                  },
                 ),
-                const SizedBox(height: 14),
-              ],
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton.icon(
+                  style: TextButton.styleFrom(foregroundColor: AppColors.accent, padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16)),
+                  onPressed: confirmDelete,
+                  icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                  label: const Text("Party löschen", style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                ),
+              ),
 
-              // 🔥 2️⃣ RSVP / Closed Logik bleibt darunter
+            // ── Guest view ───────────────────────────────────────────────
+            ] else ...[
               if (!isClosed || isFriendsOnly)
                 _guestOpenActions(context)
               else if (canSeeFull)
@@ -1075,29 +917,20 @@ class PartyBottomSheet extends StatelessWidget {
               else
                 _guestClosedActions(context),
 
-              // 🔥 3️⃣ Host als Freund hinzufügen
-              if (currentUsername != null &&
-                  (data['hostId'] ?? '').toString().trim().isNotEmpty &&
-                  currentUsername!.trim() !=
-                      (data['hostId'] ?? '').toString().trim()) ...[
-                const SizedBox(height: 10),
-                _HostFriendButton(
-                  myUsername: currentUsername!,
-                  hostUsername: (data['hostId'] ?? '').toString().trim(),
-                ),
-              ],
-
+              // Rating
               const SizedBox(height: 12),
-
               _ratingGate(context),
 
+              // Report
               if (isActive) ...[
-                const SizedBox(height: 8),
-                TextButton.icon(
-                  onPressed: onReport,
-                  icon: const Icon(Icons.flag_outlined, size: 15, color: Colors.redAccent),
-                  label: const Text("Melden", style: TextStyle(color: Colors.redAccent, fontSize: 13)),
-                  style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 10)),
+                const SizedBox(height: 4),
+                Center(
+                  child: TextButton.icon(
+                    onPressed: onReport,
+                    icon: const Icon(Icons.flag_outlined, size: 14, color: AppColors.subtle),
+                    label: const Text("Melden", style: TextStyle(color: AppColors.subtle, fontSize: 12)),
+                    style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 8)),
+                  ),
                 ),
               ],
             ],
@@ -1107,40 +940,25 @@ class PartyBottomSheet extends StatelessWidget {
     );
   }
 
-  // ---------- Guest Open ----------
+  // ── Guest Open ──────────────────────────────────────────────────────────────
+
   Widget _guestOpenActions(BuildContext context) {
     if (isBarAccount && !isHost) {
       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: comingStream(),
-        builder: (context, cs) {
-          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: maybeStream(),
-            builder: (context, ms) {
-              final cCount = (cs.data?.docs ?? []).length;
-              final mCount = (ms.data?.docs ?? []).length;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    "Bar-Accounts können bei fremden Partys keine Zusage setzen.",
-                    style: TextStyle(color: Colors.white60),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  _counter("🔔 $cCount kommen · $mCount vielleicht"),
-                ],
-              );
-            },
-          );
-        },
+        builder: (context, cs) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: maybeStream(),
+          builder: (context, ms) {
+            final cCount = (cs.data?.docs ?? []).length;
+            final mCount = (ms.data?.docs ?? []).length;
+            return _attendanceCounter(cCount, mCount);
+          },
+        ),
       );
     }
 
     if (currentUsername == null) {
-      return const Text(
-        "Bitte in den Einstellungen Vor- & Nachname setzen, um zuzusagen.",
-        style: TextStyle(color: Colors.redAccent),
-      );
+      return _pill("Bitte Username setzen, um zuzusagen.", AppColors.accent);
     }
 
     return _rsvpStatusBuilder(
@@ -1160,11 +978,10 @@ class PartyBottomSheet extends StatelessWidget {
           Expanded(
             child: _rsvpBtn(
               label: "Ich komme",
-              icon: Icons.check_circle_rounded,
+              icon: Icons.check_circle_outline_rounded,
               active: isGoing,
-              activeColor: Colors.green,
+              activeColor: AppColors.success,
               onTap: () async {
-                if (currentUsername == null) return;
                 try {
                   if (isGoing) {
                     await onClearRsvp();
@@ -1174,12 +991,11 @@ class PartyBottomSheet extends StatelessWidget {
                   } else {
                     await onSetRsvp('going');
                     if (!context.mounted) return;
-                    showStatusSnack(context, "Ich komme ✅", positive: true);
+                    showStatusSnack(context, "Ich komme!", positive: true);
                     recolorOpenMarker('going');
                   }
                 } catch (e) {
-                  if (!context.mounted) return;
-                  showStatusSnack(context, "Fehler: $e", positive: false);
+                  if (context.mounted) showStatusSnack(context, "Fehler: $e", positive: false);
                 }
               },
             ),
@@ -1192,7 +1008,6 @@ class PartyBottomSheet extends StatelessWidget {
               active: isMaybe,
               activeColor: Colors.orangeAccent,
               onTap: () async {
-                if (currentUsername == null) return;
                 try {
                   if (isMaybe) {
                     await onClearRsvp();
@@ -1202,12 +1017,11 @@ class PartyBottomSheet extends StatelessWidget {
                   } else {
                     await onSetRsvp('maybe');
                     if (!context.mounted) return;
-                    showStatusSnack(context, "Ich komme eventuell 👍", positive: true);
+                    showStatusSnack(context, "Ich komme eventuell.", positive: true);
                     recolorOpenMarker('maybe');
                   }
                 } catch (e) {
-                  if (!context.mounted) return;
-                  showStatusSnack(context, "Fehler: $e", positive: false);
+                  if (context.mounted) showStatusSnack(context, "Fehler: $e", positive: false);
                 }
               },
             ),
@@ -1216,29 +1030,13 @@ class PartyBottomSheet extends StatelessWidget {
         const SizedBox(height: 10),
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: comingStream(),
-          builder: (context, cs) {
-            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: maybeStream(),
-              builder: (context, ms) {
-                final cCount = (cs.data?.docs ?? []).length;
-                final mCount = (ms.data?.docs ?? []).length;
-                return Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[850],
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey[700]!),
-                  ),
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.people_rounded, color: Colors.white38, size: 14),
-                    const SizedBox(width: 6),
-                    Text("$cCount kommen  ·  $mCount vielleicht",
-                        style: const TextStyle(color: Colors.white54, fontSize: 13)),
-                  ]),
-                );
-              },
-            );
-          },
+          builder: (context, cs) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: maybeStream(),
+            builder: (context, ms) => _attendanceCounter(
+              (cs.data?.docs ?? []).length,
+              (ms.data?.docs ?? []).length,
+            ),
+          ),
         ),
       ],
     );
@@ -1257,71 +1055,80 @@ class PartyBottomSheet extends StatelessWidget {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(vertical: 13),
         decoration: BoxDecoration(
-          color: active ? activeColor.withAlpha(40) : Colors.grey[850],
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: active ? activeColor : Colors.grey[700]!),
+          color: active ? activeColor.withAlpha(35) : AppColors.panelAlt,
+          borderRadius: AppRadius.smBr,
+          border: Border.all(color: active ? activeColor.withAlpha(160) : AppColors.border),
         ),
         child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(icon, color: active ? activeColor : Colors.white54, size: 16),
+          Icon(icon, color: active ? activeColor : AppColors.subtle, size: 16),
           const SizedBox(width: 6),
-          Text(label, style: TextStyle(
-            color: active ? activeColor : Colors.white70,
-            fontWeight: FontWeight.w600,
-            fontSize: 14,
-          )),
+          Text(
+            label,
+            style: TextStyle(
+              color: active ? activeColor : AppColors.muted,
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+            ),
+          ),
         ]),
       ),
     );
   }
 
-  // ---------- Guest Closed ----------
-  // ✅ Robust: zeigt "Anfrage gesendet" sofort + findet Status egal ob DocId uid/username/safeDocId(username)
+  Widget _attendanceCounter(int coming, int maybe) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 10),
+    decoration: BoxDecoration(
+      color: AppColors.panelAlt,
+      borderRadius: AppRadius.smBr,
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+      const Icon(Icons.people_rounded, color: AppColors.subtle, size: 14),
+      const SizedBox(width: 6),
+      Text(
+        "$coming kommen  ·  $maybe vielleicht",
+        style: const TextStyle(color: AppColors.muted, fontSize: 13),
+      ),
+    ]),
+  );
+
+  // ── Guest Closed ────────────────────────────────────────────────────────────
+
   Widget _guestClosedActions(BuildContext context) {
     if (currentUsername == null) {
-      return const Text(
-        "Bitte in den Einstellungen Vor- & Nachname setzen, um eine Anfrage zu senden.",
-        style: TextStyle(color: Colors.redAccent),
-      );
+      return _pill("Bitte Username setzen, um eine Anfrage zu senden.", AppColors.accent);
     }
 
-    final uid = _uid();
-    final uname = currentUsername!.trim();
+    final uid      = _uid();
+    final uname    = currentUsername!.trim();
     final safeUname = safeDocId(uname);
 
-    Stream<DocumentSnapshot<Map<String, dynamic>>> _reqStream(String docId) {
+    Stream<DocumentSnapshot<Map<String, dynamic>>> reqStream(String docId) {
       if (docId.trim().isEmpty) return const Stream.empty();
       return FirebaseFirestore.instance
-          .collection('Party')
-          .doc(partyId)
-          .collection('requests')
-          .doc(docId)
+          .collection('Party').doc(partyId)
+          .collection('requests').doc(docId)
           .snapshots();
     }
 
-    Widget _requestStatusBuilder({
-      required Widget Function(String? status) builder,
-    }) {
-      // 1) requests/{uid}
+    Widget requestStatusBuilder({required Widget Function(String? status) builder}) {
       return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: uid == null ? const Stream.empty() : _reqStream(uid),
+        stream: uid == null ? const Stream.empty() : reqStream(uid),
         builder: (context, s1) {
           final st1 = s1.data?.data()?['status'] as String?;
           if (s1.data?.exists == true && st1 != null) return builder(st1);
 
-          // 2) requests/{username}
           return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-            stream: _reqStream(uname),
+            stream: reqStream(uname),
             builder: (context, s2) {
               final st2 = s2.data?.data()?['status'] as String?;
               if (s2.data?.exists == true && st2 != null) return builder(st2);
 
-              // 3) requests/{safeDocId(username)}
               return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                stream: _reqStream(safeUname),
+                stream: reqStream(safeUname),
                 builder: (context, s3) {
                   final st3 = s3.data?.data()?['status'] as String?;
                   if (s3.data?.exists == true && st3 != null) return builder(st3);
-
                   return builder(null);
                 },
               );
@@ -1334,128 +1141,116 @@ class PartyBottomSheet extends StatelessWidget {
     bool localPending = false;
 
     return StatefulBuilder(
-      builder: (context, setState) {
-        return _requestStatusBuilder(
-          builder: (statusFromDb) {
-            final status = statusFromDb ?? (localPending ? 'pending' : null);
+      builder: (context, setState) => requestStatusBuilder(
+        builder: (statusFromDb) {
+          final status = statusFromDb ?? (localPending ? 'pending' : null);
 
-            if (status == 'pending') {
-              SchedulerBinding.instance
-                  .addPostFrameCallback((_) => setClosedLockIcon('pending'));
-              return ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52),
-                  backgroundColor: Colors.orangeAccent,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: null,
-                icon: const Icon(Icons.hourglass_top_rounded),
-                label: const Text("Anfrage gesendet", style: TextStyle(fontSize: 18)),
-              );
-            }
-
-            if (status == null) {
-              return ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52),
-                  backgroundColor: Colors.redAccent,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: () async {
-                  try {
-                    setState(() => localPending = true); // ✅ sofort UI
-                    await onSendJoinRequest();
-                    if (!context.mounted) return;
-                    showStatusSnack(context, "Anfrage gesendet – warte auf Antwort",
-                        positive: true);
-                    setClosedLockIcon('pending');
-                  } catch (e) {
-                    setState(() => localPending = false);
-                    if (!context.mounted) return;
-                    showStatusSnack(context, "Fehler: $e", positive: false);
-                  }
-                },
-                icon: const Icon(Icons.lock_open_rounded),
-                label: const Text("Anfrage senden", style: TextStyle(fontSize: 18)),
-              );
-            }
-
-            if (status == 'approved') {
-              SchedulerBinding.instance
-                  .addPostFrameCallback((_) => setClosedLockIcon('approved'));
-              return Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.green.withAlpha(20),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.greenAccent.withAlpha(80)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 28),
-                    const SizedBox(width: 14),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text("Zugang genehmigt",
-                              style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w700, fontSize: 15)),
-                          SizedBox(height: 3),
-                          Text("Du kannst jetzt alle Party-Details sehen.",
-                              style: TextStyle(color: Colors.white70, fontSize: 13)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            // declined
-            SchedulerBinding.instance
-                .addPostFrameCallback((_) => setClosedLockIcon('declined'));
-            return Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.red.withAlpha(20),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.redAccent.withAlpha(80)),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.cancel_rounded, color: Colors.redAccent, size: 28),
-                  const SizedBox(width: 14),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text("Anfrage abgelehnt",
-                            style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w700, fontSize: 15)),
-                        SizedBox(height: 3),
-                        Text("Du kannst den Host direkt kontaktieren.",
-                            style: TextStyle(color: Colors.white70, fontSize: 13)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+          if (status == 'pending') {
+            SchedulerBinding.instance.addPostFrameCallback((_) => setClosedLockIcon('pending'));
+            return _statusCard(
+              icon: Icons.hourglass_top_rounded,
+              iconColor: Colors.orangeAccent,
+              title: "Anfrage gesendet",
+              subtitle: "Warte auf Antwort des Hosts.",
+              bgColor: Colors.orangeAccent.withAlpha(20),
+              borderColor: Colors.orangeAccent.withAlpha(60),
             );
-          },
-        );
-      },
+          }
+
+          if (status == 'approved') {
+            SchedulerBinding.instance.addPostFrameCallback((_) => setClosedLockIcon('approved'));
+            return _statusCard(
+              icon: Icons.check_circle_rounded,
+              iconColor: AppColors.success,
+              title: "Zugang genehmigt",
+              subtitle: "Du kannst jetzt alle Party-Details sehen.",
+              bgColor: AppColors.success.withAlpha(20),
+              borderColor: AppColors.success.withAlpha(60),
+            );
+          }
+
+          if (status == 'declined') {
+            SchedulerBinding.instance.addPostFrameCallback((_) => setClosedLockIcon('declined'));
+            return _statusCard(
+              icon: Icons.cancel_rounded,
+              iconColor: AppColors.accent,
+              title: "Anfrage abgelehnt",
+              subtitle: "Du kannst den Host direkt kontaktieren.",
+              bgColor: AppColors.accent.withAlpha(18),
+              borderColor: AppColors.accent.withAlpha(60),
+            );
+          }
+
+          // null — send request
+          return SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+                elevation: 0,
+              ),
+              onPressed: () async {
+                try {
+                  setState(() => localPending = true);
+                  await onSendJoinRequest();
+                  if (!context.mounted) return;
+                  showStatusSnack(context, "Anfrage gesendet – warte auf Antwort.", positive: true);
+                  setClosedLockIcon('pending');
+                } catch (e) {
+                  setState(() => localPending = false);
+                  if (context.mounted) showStatusSnack(context, "Fehler: $e", positive: false);
+                }
+              },
+              icon: const Icon(Icons.lock_open_rounded, size: 17),
+              label: const Text("Anfrage senden", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+            ),
+          );
+        },
+      ),
     );
   }
 
-  // ---------- Host-Listen ----------
+  static Widget _statusCard({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    required Color bgColor,
+    required Color borderColor,
+  }) =>
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: AppRadius.mdBr,
+          border: Border.all(color: borderColor),
+        ),
+        child: Row(children: [
+          Icon(icon, color: iconColor, size: 26),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: TextStyle(color: iconColor, fontWeight: FontWeight.w700, fontSize: 14)),
+              const SizedBox(height: 3),
+              Text(subtitle, style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+            ]),
+          ),
+        ]),
+      );
+
+  // ── Host closed lists ───────────────────────────────────────────────────────
+
   Widget _hostClosedLists(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Offene Anfragen ──
+        // Pending requests
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
-              .collection('Party')
-              .doc(partyId)
+              .collection('Party').doc(partyId)
               .collection('requests')
               .where('status', isEqualTo: 'pending')
               .snapshots(),
@@ -1464,109 +1259,84 @@ class PartyBottomSheet extends StatelessWidget {
               ..sort((a, b) {
                 final ta = a.data()['timestamp'];
                 final tb = b.data()['timestamp'];
-                if (ta is Timestamp && tb is Timestamp) {
-                  return tb.compareTo(ta);
-                }
-                return 0;
+                return (ta is Timestamp && tb is Timestamp) ? tb.compareTo(ta) : 0;
               });
-            return _boxed(Column(
+
+            return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: Colors.orangeAccent.withAlpha(30),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.orangeAccent.withAlpha(80)),
-                    ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.pending_actions, color: Colors.orangeAccent, size: 14),
-                      const SizedBox(width: 6),
-                      Text("Anfragen (${docs.length})",
-                          style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700, fontSize: 13)),
-                    ]),
-                  ),
-                ]),
+                _sectionLabel("Anfragen (${docs.length})"),
                 const SizedBox(height: 10),
                 if (docs.isEmpty)
-                  const Text("Keine offenen Anfragen.", style: TextStyle(color: Colors.white54, fontSize: 13))
+                  _emptyLabel("Keine offenen Anfragen.")
                 else
                   ...docs.map((d) {
                     final user = d.data()['username']?.toString() ?? 'Unbekannt';
                     return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                       margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                       decoration: BoxDecoration(
-                        color: Colors.grey[850],
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: Colors.grey[700]!),
+                        color: AppColors.panelAlt,
+                        borderRadius: AppRadius.mdBr,
+                        border: Border.all(color: AppColors.border),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.person_rounded, color: Colors.white54, size: 16),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  user,
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
+                          Row(children: [
+                            const Icon(Icons.person_outline_rounded, color: AppColors.muted, size: 16),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(user,
+                                  style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w700, fontSize: 14),
+                                  overflow: TextOverflow.ellipsis),
+                            ),
+                          ]),
                           const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 10),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                    elevation: 0,
-                                  ),
-                                  onPressed: () => onUpdateRequestStatus(user, 'approved'),
-                                  child: const Text("Zulassen", style: TextStyle(fontWeight: FontWeight.w700)),
+                          Row(children: [
+                            Expanded(
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.success,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+                                  elevation: 0,
                                 ),
+                                onPressed: () => onUpdateRequestStatus(user, 'approved'),
+                                child: const Text("Zulassen", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.redAccent,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 10),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                    elevation: 0,
-                                  ),
-                                  onPressed: () => onUpdateRequestStatus(user, 'declined'),
-                                  child: const Text("Ablehnen", style: TextStyle(fontWeight: FontWeight.w700)),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.accent,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+                                  elevation: 0,
                                 ),
+                                onPressed: () => onUpdateRequestStatus(user, 'declined'),
+                                child: const Text("Ablehnen", style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
                               ),
-                            ],
-                          ),
+                            ),
+                          ]),
                         ],
                       ),
                     );
                   }),
-                ],
-              ),
+              ],
             );
           },
         ),
 
-        const SizedBox(height: 12),
+        const SizedBox(height: 20),
 
-        // ── Zugelassene ──
+        // Approved list
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
-              .collection('Party')
-              .doc(partyId)
+              .collection('Party').doc(partyId)
               .collection('approved')
               .orderBy('timestamp', descending: true)
               .snapshots(),
@@ -1574,108 +1344,83 @@ class PartyBottomSheet extends StatelessWidget {
             final names = (apprSnap.data?.docs ?? [])
                 .map((d) => d.data()['username']?.toString() ?? 'Unbekannt')
                 .toList();
-            return _boxed(Column(
+
+            return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: Colors.greenAccent.withAlpha(30),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.greenAccent.withAlpha(80)),
-                    ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 14),
-                      const SizedBox(width: 6),
-                      Text("Zugelassen (${names.length})",
-                          style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.w700, fontSize: 13)),
-                    ]),
-                  ),
-                ]),
+                _sectionLabel("Zugelassen (${names.length})"),
                 const SizedBox(height: 10),
                 if (names.isEmpty)
-                  const Text("Noch niemand zugelassen.", style: TextStyle(color: Colors.white54, fontSize: 13))
+                  _emptyLabel("Noch niemand zugelassen.")
                 else
                   ...names.map((u) => Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
-                      color: Colors.grey[850],
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey[700]!),
+                      color: AppColors.panelAlt,
+                      borderRadius: AppRadius.smBr,
+                      border: Border.all(color: AppColors.border),
                     ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.verified_user_rounded, color: Colors.greenAccent, size: 16),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(u,
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
-                              overflow: TextOverflow.ellipsis),
-                        ),
-                        IconButton(
-                          tooltip: "Ausladen",
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          icon: const Icon(Icons.close_rounded, color: Colors.redAccent, size: 18),
-                          onPressed: () => _confirmKickUser(context, u),
-                        ),
-                      ],
-                    ),
+                    child: Row(children: [
+                      const Icon(Icons.verified_user_rounded, color: AppColors.success, size: 15),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(u,
+                          style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 14),
+                          overflow: TextOverflow.ellipsis)),
+                      GestureDetector(
+                        onTap: () => _confirmKickUser(context, u),
+                        child: const Icon(Icons.close_rounded, color: AppColors.accent, size: 18),
+                      ),
+                    ]),
                   )),
               ],
-            ));
+            );
           },
         ),
       ],
     );
   }
+
+  // ── Host open lists ─────────────────────────────────────────────────────────
 
   Widget _hostOpenLists(BuildContext context) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
-              .collection('Party')
-              .doc(partyId)
+              .collection('Party').doc(partyId)
               .collection('coming')
               .orderBy('timestamp', descending: true)
               .snapshots(),
-          builder: (context, comingListSnap) {
-            final names = (comingListSnap.data?.docs ?? [])
+          builder: (context, snap) {
+            final names = (snap.data?.docs ?? [])
                 .map((d) => d.data()['username']?.toString() ?? 'Unbekannt')
                 .toList();
-            return _bigList(
-              "✅ Leute, die kommen",
-              Icons.check_circle,
-              Colors.greenAccent,
-              names,
-              Icons.check_circle,
-              Colors.greenAccent,
-                  (user) => _confirmKickUser(context, user),
+            return _userList(
+              context: context,
+              label: "Kommen (${names.length})",
+              dotColor: AppColors.success,
+              names: names,
             );
           },
         ),
+        const SizedBox(height: 20),
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
-              .collection('Party')
-              .doc(partyId)
+              .collection('Party').doc(partyId)
               .collection('maybe')
               .orderBy('timestamp', descending: true)
               .snapshots(),
-          builder: (context, maybeListSnap) {
-            final names = (maybeListSnap.data?.docs ?? [])
+          builder: (context, snap) {
+            final names = (snap.data?.docs ?? [])
                 .map((d) => d.data()['username']?.toString() ?? 'Unbekannt')
                 .toList();
-            return _bigList(
-              "🤔 Leute, die eventuell kommen",
-              Icons.help_outline,
-              Colors.orangeAccent,
-              names,
-              Icons.help_outline,
-              Colors.orangeAccent,
-                  (user) => _confirmKickUser(context, user),
+            return _userList(
+              context: context,
+              label: "Vielleicht (${names.length})",
+              dotColor: Colors.orangeAccent,
+              names: names,
             );
           },
         ),
@@ -1683,386 +1428,75 @@ class PartyBottomSheet extends StatelessWidget {
     );
   }
 
-  // ---------- Rating Buttons ----------
-  Widget _ratingButtons(BuildContext context) {
-    final canRate = currentUsername != null && _uid() != null;
-
+  Widget _userList({
+    required BuildContext context,
+    required String label,
+    required Color dotColor,
+    required List<String> names,
+  }) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 6),
-        const Text(
-          "Bewerten (24h ab Partybeginn)",
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size.fromHeight(44),
-                ),
-                onPressed:
-                canRate ? () async => _setRatingViaFunction(context, 'good') : null,
-                icon: const Icon(Icons.thumb_up),
-                label: const Text("Gut"),
-              ),
+        _sectionLabel(label),
+        const SizedBox(height: 10),
+        if (names.isEmpty)
+          _emptyLabel("Noch niemand.")
+        else
+          ...names.map((u) => Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.panelAlt,
+              borderRadius: AppRadius.smBr,
+              border: Border.all(color: AppColors.border),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size.fromHeight(44),
-                ),
-                onPressed:
-                canRate ? () async => _setRatingViaFunction(context, 'bad') : null,
-                icon: const Icon(Icons.thumb_down),
-                label: const Text("Schlecht"),
+            child: Row(children: [
+              Container(
+                width: 8, height: 8,
+                decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: ratingsStream(),
-          builder: (context, snap) {
-            final docs = snap.data?.docs ?? [];
-            final good =
-                docs.where((d) => (d.data()['value'] ?? '') == 'good').length;
-            final bad =
-                docs.where((d) => (d.data()['value'] ?? '') == 'bad').length;
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  "⭐ Bewertungen: $good gut · $bad schlecht",
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600),
-                ),
+              const SizedBox(width: 10),
+              Expanded(child: Text(u,
+                  style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 14),
+                  overflow: TextOverflow.ellipsis)),
+              GestureDetector(
+                onTap: () => _confirmKickUser(context, u),
+                child: const Icon(Icons.close_rounded, color: AppColors.accent, size: 18),
               ),
-            );
-          },
-        ),
+            ]),
+          )),
       ],
     );
   }
 
+  // ── Static helpers ──────────────────────────────────────────────────────────
 
-  Future<void> _buyTicket(BuildContext context) async {
-    final stripeAccountId = data['stripeAccountId'];
-
-    if (stripeAccountId == null) {
-      showStatusSnack(context, "Host hat kein Stripe aktiviert.", positive: false);
-      return;
-    }
-
-    final response = await http.post(
-      Uri.parse("http://192.168.1.5:3000/create-checkout-session"),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({
-        "stripeAccountId": stripeAccountId,
-        "price": data['price'],
-        "partyId": partyId,
-      }),
-    );
-
-    if (response.statusCode != 200) {
-      showStatusSnack(context, "Zahlungsfehler.", positive: false);
-      return;
-    }
-
-    final url = jsonDecode(response.body)["url"];
-
-    await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.externalApplication,
-    );
-  }
-
-  // ---------- UI Helfer ----------
-  static Widget _box({required Widget child}) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: Colors.grey[850],
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: Colors.grey[700]!),
-    ),
-    child: child,
+  static Widget _sectionLabel(String label) => Text(
+    label.toUpperCase(),
+    style: const TextStyle(color: AppColors.subtle, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.8),
   );
 
-  static Widget _boxed(Widget child) => Container(
-    width: double.infinity,
-    margin: const EdgeInsets.symmetric(vertical: 10),
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: Colors.grey[900],
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: Colors.grey[700]!),
-    ),
-    child: child,
-  );
-
-  static Widget _counter(String text) => Container(
-    width: double.infinity,
-    margin: const EdgeInsets.only(top: 12),
-    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
-    decoration: BoxDecoration(
-      color: Colors.grey[850],
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: Colors.grey[700]!),
-    ),
-    child: Text(
-      text,
-      textAlign: TextAlign.center,
-      style: const TextStyle(
-          color: Colors.white70,
-          fontSize: 18,
-          fontWeight: FontWeight.w700),
-    ),
+  static Widget _emptyLabel(String text) => Text(
+    text,
+    style: const TextStyle(color: AppColors.subtle, fontSize: 13),
   );
 
   static Widget _pill(String text, Color c) => Container(
     width: double.infinity,
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
     decoration: BoxDecoration(
-      color: c.withOpacity(.15),
-      border: Border.all(color: c.withOpacity(.5)),
-      borderRadius: BorderRadius.circular(12),
+      color: c.withAlpha(20),
+      borderRadius: AppRadius.smBr,
+      border: Border.all(color: c.withAlpha(70)),
     ),
-    child: Text(text, style: TextStyle(color: c, fontWeight: FontWeight.w600)),
+    child: Text(text, style: TextStyle(color: c, fontWeight: FontWeight.w500, fontSize: 13)),
   );
 
-  Widget _bigList(
-      String title,
-      IconData titleIcon,
-      Color titleColor,
-      List<String> usernames,
-      IconData rowIcon,
-      Color rowIconColor,
-      Future<void> Function(String username) onKick,
-      ) {
-    return _boxed(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Icon(titleIcon, color: titleColor, size: 20),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(
-                  color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
-            ),
-          ]),
-          const SizedBox(height: 10),
-          if (usernames.isEmpty)
-            const Text("Noch niemand", style: TextStyle(color: Colors.white70))
-          else
-            ...List.generate(usernames.length, (i) {
-              final u = usernames[i];
-              return Column(
-                children: [
-                  if (i > 0)
-                    Divider(color: Colors.grey[800], height: 16, thickness: 1),
-                  Row(
-                    children: [
-                      Icon(rowIcon, color: rowIconColor, size: 22),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          u,
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: "Ausladen",
-                        icon: const Icon(Icons.close_rounded,
-                            color: Colors.redAccent),
-                        onPressed: () => onKick(u),
-                      ),
-                    ],
-                  ),
-                ],
-              );
-            }),
-        ],
-      ),
-    );
-  }
 }
 
-// ── Host-Freundschaftsanfrage ─────────────────────────────────────────────────
-
-class _HostFriendButton extends StatefulWidget {
-  final String myUsername;
-  final String hostUsername;
-
-  const _HostFriendButton({
-    required this.myUsername,
-    required this.hostUsername,
-  });
-
-  @override
-  State<_HostFriendButton> createState() => _HostFriendButtonState();
-}
-
-class _HostFriendButtonState extends State<_HostFriendButton> {
-  final _model = FriendsModel();
-  RelStatus? _status;
-  bool _loading = true;
-  bool _sending = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadStatus();
-  }
-
-  Future<void> _loadStatus() async {
-    try {
-      await _model.loadMyDocId(widget.myUsername);
-      final s = await _model.relationWith(widget.myUsername, widget.hostUsername);
-      if (mounted) setState(() { _status = s; _loading = false; });
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _sendRequest() async {
-    // Debounce: button bleibt disabled solange _sending == true
-    if (_sending) return;
-    setState(() => _sending = true);
-    try {
-      final result = await _friendRequestFn.call({'to': widget.hostUsername});
-      final status = (result.data as Map?)?['status'] as String? ?? '';
-
-      if (!mounted) return;
-      switch (status) {
-        case 'sent':
-          setState(() => _status = RelStatus.outgoingPending);
-          showStatusSnack(context, 'Freundschaftsanfrage gesendet!', positive: true);
-        case 'already_sent':
-          setState(() => _status = RelStatus.outgoingPending);
-          // kein Snack nötig – UI zeigt schon "Anfrage gesendet"
-        case 'already_friends':
-          setState(() => _status = RelStatus.friends);
-        default:
-          showStatusSnack(context, 'Unbekannter Status: $status', positive: false);
-      }
-    } on FirebaseFunctionsException catch (e) {
-      if (mounted) showStatusSnack(context, 'Fehler: ${e.message ?? e.code}', positive: false);
-    } catch (e) {
-      if (mounted) showStatusSnack(context, 'Fehler: $e', positive: false);
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Während des Ladens Status-unabhängig den Button sofort zeigen.
-    // Nach dem Laden wird der Status gesetzt und der Button aktualisiert.
-    final isPending = _status == RelStatus.outgoingPending;
-    final isIncoming = _status == RelStatus.incomingPending;
-    final isFriends = _status == RelStatus.friends;
-
-    if (isFriends) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: AppColors.success.withAlpha(20),
-              borderRadius: AppRadius.smBr,
-              border: Border.all(color: AppColors.success.withAlpha(60)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: const [
-                Icon(Icons.check_circle_rounded,
-                    color: AppColors.success, size: 16),
-                SizedBox(width: 8),
-                Text('Du bist mit dem Host befreundet',
-                    style: TextStyle(
-                        color: AppColors.success,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(46),
-              foregroundColor: AppColors.text,
-              side: const BorderSide(color: AppColors.accentBorder2),
-            ),
-            onPressed: () {
-              final parts = [widget.myUsername, widget.hostUsername]..sort();
-              final chatId = '${parts[0]}__${parts[1]}';
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => ChatDetailScreen(
-                    chatId: chatId,
-                    currentUsername: widget.myUsername,
-                    otherUsername: widget.hostUsername,
-                  ),
-                ),
-              );
-            },
-            icon: const Icon(Icons.chat_bubble_outline_rounded, size: 17),
-            label: const Text('Host schreiben',
-                style: TextStyle(fontSize: 14)),
-          ),
-        ],
-      );
-    }
-
-    return OutlinedButton.icon(
-      style: OutlinedButton.styleFrom(
-        minimumSize: const Size.fromHeight(46),
-        foregroundColor: isPending || isIncoming ? AppColors.subtle : AppColors.text,
-        side: BorderSide(
-          color: isPending || isIncoming ? AppColors.accentBorder : AppColors.accentBorder2,
-        ),
-      ),
-      onPressed: (isPending || isIncoming || _sending || _loading) ? null : _sendRequest,
-      icon: (_sending || _loading)
-          ? const SizedBox(
-              width: 16, height: 16,
-              child: CircularProgressIndicator(color: AppColors.subtle, strokeWidth: 2),
-            )
-          : Icon(
-              isPending ? Icons.hourglass_top_rounded
-                  : isIncoming ? Icons.person_rounded
-                  : Icons.person_add_rounded,
-              size: 17,
-            ),
-      label: Text(
-        isPending ? 'Freundschaftsanfrage gesendet'
-            : isIncoming ? 'Hat dich hinzugefügt'
-            : _loading ? 'Laden…'
-            : 'Host hinzufügen',
-        style: const TextStyle(fontSize: 14),
-      ),
-    );
-  }
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Data model
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _UiImageBlock {
   final String caption;

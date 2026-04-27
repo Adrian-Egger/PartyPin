@@ -40,15 +40,27 @@ class NotificationService {
 
     final data = <String, dynamic>{'fcmToken': token};
 
-    // Also persist location so Cloud Functions can do proximity checks
     final lat = prefs.getDouble('selectedLat');
     final lng = prefs.getDouble('selectedLng');
     if (lat != null) data['selectedLat'] = lat;
     if (lng != null) data['selectedLng'] = lng;
 
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(username)
-        .set(data, SetOptions(merge: true));
+    final isBar = prefs.getBool('isBar') ?? false;
+
+    // Find the real document by username field (doc ID is "Vorname Nachname", not username)
+    for (final col in [if (!isBar) 'users', 'bars']) {
+      for (final field in ['username', 'username_lower']) {
+        final val = field == 'username' ? username : username.toLowerCase();
+        final q = await FirebaseFirestore.instance
+            .collection(col)
+            .where(field, isEqualTo: val)
+            .limit(1)
+            .get();
+        if (q.docs.isNotEmpty) {
+          await q.docs.first.reference.set(data, SetOptions(merge: true));
+          return;
+        }
+      }
+    }
   }
 }

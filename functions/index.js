@@ -587,10 +587,15 @@ exports.onFriendRequest = onDocumentCreated("friendRequests/{requestId}", async 
   const toUsername = (data.to || data.toUsername || "").trim();
   if (!toUsername || !fromUsername) return;
 
-  const userSnap = await db.collection("users").doc(toUsername).get();
-  if (!userSnap.exists) return;
-
-  const fcmToken = userSnap.data()?.fcmToken;
+  let fcmToken = null;
+  const directSnap = await db.collection("users").doc(toUsername).get();
+  if (directSnap.exists) fcmToken = directSnap.data()?.fcmToken;
+  if (!fcmToken) {
+    const q = await db.collection("users")
+      .where("username_lower", "==", toUsername.toLowerCase())
+      .limit(1).get();
+    if (!q.empty) fcmToken = q.docs[0].data()?.fcmToken;
+  }
   if (!fcmToken) return;
 
   await admin.messaging().send({
