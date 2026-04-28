@@ -1,16 +1,17 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+// ignore: avoid_print
 
 class NotificationService {
   static final _messaging = FirebaseMessaging.instance;
 
   static Future<void> init() async {
     try {
-      await _messaging.requestPermission(
+      final settings = await _messaging.requestPermission(
           alert: true, badge: true, sound: true);
+      print('[FCM] Permission: ${settings.authorizationStatus}');
 
-      // iOS: show banner/sound/badge even while the app is open
       await _messaging.setForegroundNotificationPresentationOptions(
         alert: true,
         badge: true,
@@ -18,9 +19,15 @@ class NotificationService {
       );
 
       final token = await _messaging.getToken();
+      print('[FCM] Token: $token');
       if (token != null) await _saveToken(token);
-      _messaging.onTokenRefresh.listen(_saveToken);
-    } catch (_) {}
+      _messaging.onTokenRefresh.listen((t) {
+        print('[FCM] Token refreshed: $t');
+        _saveToken(t);
+      });
+    } catch (e) {
+      print('[FCM] init error: $e');
+    }
   }
 
   /// Call this right after login, once the username is in SharedPreferences.
@@ -36,7 +43,10 @@ class NotificationService {
     final username =
         (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '')
             .trim();
-    if (username.isEmpty) return;
+    if (username.isEmpty) {
+      print('[FCM] _saveToken: no username in prefs, skipping');
+      return;
+    }
 
     final data = <String, dynamic>{'fcmToken': token};
 
@@ -47,20 +57,25 @@ class NotificationService {
 
     final isBar = prefs.getBool('isBar') ?? false;
 
-    // Find the real document by username field (doc ID is "Vorname Nachname", not username)
     for (final col in [if (!isBar) 'users', 'bars']) {
       for (final field in ['username', 'username_lower']) {
         final val = field == 'username' ? username : username.toLowerCase();
-        final q = await FirebaseFirestore.instance
-            .collection(col)
-            .where(field, isEqualTo: val)
-            .limit(1)
-            .get();
-        if (q.docs.isNotEmpty) {
-          await q.docs.first.reference.set(data, SetOptions(merge: true));
-          return;
+        try {
+          final q = await FirebaseFirestore.instance
+              .collection(col)
+              .where(field, isEqualTo: val)
+              .limit(1)
+              .get();
+          if (q.docs.isNotEmpty) {
+            await q.docs.first.reference.set(data, SetOptions(merge: true));
+            print('[FCM] Token saved to $col/${q.docs.first.id}');
+            return;
+          }
+        } catch (e) {
+          print('[FCM] _saveToken query error ($col.$field): $e');
         }
       }
     }
+    print('[FCM] _saveToken: no matching document found for username="$username"');
   }
 }

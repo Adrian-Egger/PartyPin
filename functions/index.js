@@ -579,36 +579,55 @@ exports.sendFriendRequest = onCall({ region: "europe-west1" }, async (request) =
 // =======================
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 
-exports.onFriendRequest = onDocumentCreated("friendRequests/{requestId}", async (event) => {
-  const data = event.data?.data();
-  if (!data) return;
+exports.onFriendRequest = onDocumentCreated(
+  { document: "friendRequests/{requestId}", region: "europe-west1" },
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
 
-  const fromUsername = (data.from || "").trim();
-  const toUsername = (data.to || data.toUsername || "").trim();
-  if (!toUsername || !fromUsername) return;
+    const fromUsername = (data.from || "").trim();
+    const toUsername = (data.to || data.toUsername || "").trim();
+    if (!toUsername || !fromUsername) return;
 
-  let fcmToken = null;
-  const directSnap = await db.collection("users").doc(toUsername).get();
-  if (directSnap.exists) fcmToken = directSnap.data()?.fcmToken;
-  if (!fcmToken) {
-    const q = await db.collection("users")
-      .where("username_lower", "==", toUsername.toLowerCase())
-      .limit(1).get();
-    if (!q.empty) fcmToken = q.docs[0].data()?.fcmToken;
+    const lower = toUsername.toLowerCase();
+    let fcmToken = null;
+
+    // Search users and bars collections by username / username_lower
+    for (const col of ["users", "bars"]) {
+      if (fcmToken) break;
+      for (const [field, val] of [["username", toUsername], ["username_lower", lower]]) {
+        if (fcmToken) break;
+        try {
+          const q = await db.collection(col).where(field, "==", val).limit(1).get();
+          if (!q.empty) fcmToken = q.docs[0].data()?.fcmToken || null;
+        } catch (_) {}
+      }
+    }
+    if (!fcmToken) return;
+
+    try {
+      await admin.messaging().send({
+        token: fcmToken,
+        notification: {
+          title: "Neue Freundschaftsanfrage",
+          body: `${fromUsername} möchte dich adden`,
+        },
+        android: {
+          priority: "high",
+          notification: { channelId: "party_requests", sound: "default" },
+        },
+        apns: {
+          headers: { "apns-priority": "10" },
+          payload: {
+            aps: { sound: "default", badge: 1, "content-available": 1 },
+          },
+        },
+      });
+    } catch (e) {
+      console.log("[onFriendRequest] FCM send failed:", e?.message || e);
+    }
   }
-  if (!fcmToken) return;
-
-  await admin.messaging().send({
-    token: fcmToken,
-    notification: {
-      title: "Neue Freundschaftsanfrage",
-      body: `${fromUsername} möchte dich adden`,
-    },
-    android: {
-      notification: { channelId: "friend_requests" },
-    },
-  });
-});
+);
 
 // =======================
 // Party Anfrage Status Notification (Callable v2)
@@ -617,19 +636,19 @@ exports.sendPushNotification = onCall({ region: "europe-west1" }, async (request
   const { toUsername, title, body, data: extraData } = request.data || {};
   if (!toUsername || !title || !body) return { ok: false, reason: "missing fields" };
 
-  // 1) Try token-doc (username as doc-ID, written by NotificationService._saveToken)
+  const lower = toUsername.toLowerCase();
   let fcmToken = null;
-  const tokenSnap = await db.collection("users").doc(toUsername).get();
-  if (tokenSnap.exists && tokenSnap.data()?.fcmToken) {
-    fcmToken = tokenSnap.data().fcmToken;
-  }
 
-  // 2) Fallback: query main user doc by username_lower
-  if (!fcmToken) {
-    const q = await db.collection("users")
-      .where("username_lower", "==", toUsername.toLowerCase())
-      .limit(1).get();
-    if (!q.empty) fcmToken = q.docs[0].data()?.fcmToken;
+  // Search users and bars collections by username / username_lower
+  for (const col of ["users", "bars"]) {
+    if (fcmToken) break;
+    for (const [field, val] of [["username", toUsername], ["username_lower", lower]]) {
+      if (fcmToken) break;
+      try {
+        const q = await db.collection(col).where(field, "==", val).limit(1).get();
+        if (!q.empty) fcmToken = q.docs[0].data()?.fcmToken || null;
+      } catch (_) {}
+    }
   }
 
   if (!fcmToken) return { ok: false, reason: "no fcm token" };

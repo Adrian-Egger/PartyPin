@@ -532,9 +532,8 @@ String _safeDocId(String input) => input
   Future<BitmapDescriptor> _createBarMarkerIcon(String? imageUrl) async {
     return _createBarMarkerIconWithRing(
       imageUrl: imageUrl,
-      ringColor: Colors.white,
-      ringWidth: 4,
-      outerPadding: 0,
+      ringWidth: 5,
+      useGradient: true,
     );
   }
 
@@ -542,75 +541,73 @@ String _safeDocId(String input) => input
       String? imageUrl) async {
     return _createBarMarkerIconWithRing(
       imageUrl: imageUrl,
-      ringColor: Colors.greenAccent,
       ringWidth: 6,
-      outerPadding: 0,
+      useGradient: false,
+      solidRingColor: Colors.greenAccent,
     );
   }
 
   Future<BitmapDescriptor> _createBarMarkerIconWithRing({
     required String? imageUrl,
-    required Color ringColor,
     required double ringWidth,
-    required double outerPadding,
+    bool useGradient = false,
+    Color solidRingColor = Colors.white,
   }) async {
     final int diameter = _barBaseDiameter;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final size = ui.Size(diameter.toDouble(), diameter.toDouble());
     final center = Offset(size.width / 2, size.height / 2);
-
-    final outerRadius = (diameter / 2).toDouble() - outerPadding;
-
-    canvas.drawCircle(
-      center,
-      outerRadius,
-      Paint()..color = _panel,
-    );
-
+    final outerRadius = diameter / 2.0;
     final imageRadius = outerRadius - ringWidth;
 
+    // Draw background circle
+    canvas.drawCircle(center, outerRadius, Paint()..color = _panel);
+
+    // Draw image or fallback fill
     if (imageUrl != null && imageUrl.trim().isNotEmpty) {
       try {
         final uri = Uri.parse(imageUrl);
         final resp = await http.get(uri);
         if (resp.statusCode == 200) {
-          final bytes = resp.bodyBytes;
-          final ui.Codec codec = await ui.instantiateImageCodec(
-            bytes,
+          final codec = await ui.instantiateImageCodec(
+            resp.bodyBytes,
             targetWidth: diameter,
             targetHeight: diameter,
           );
-          final ui.FrameInfo frameInfo = await codec.getNextFrame();
-          final ui.Image image = frameInfo.image;
-
-          final srcRect = Rect.fromLTWH(
-            0,
-            0,
-            image.width.toDouble(),
-            image.height.toDouble(),
-          );
+          final image = (await codec.getNextFrame()).image;
           final dstRect = Rect.fromCircle(center: center, radius: imageRadius);
-
           canvas.save();
           canvas.clipPath(Path()..addOval(dstRect));
-          canvas.drawImageRect(image, srcRect, dstRect, Paint());
+          canvas.drawImageRect(
+            image,
+            Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
+            dstRect,
+            Paint(),
+          );
           canvas.restore();
         }
       } catch (_) {}
     } else {
-      canvas.drawCircle(
-        center,
-        imageRadius,
-        Paint()..color = AppColors.accentBorder,
-      );
+      canvas.drawCircle(center, imageRadius, Paint()..color = AppColors.accentBorder);
     }
 
+    // Draw ring — gradient for normal bars, solid color for event bars
     final ringPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = ringWidth
-      ..color = ringColor
       ..isAntiAlias = true;
+
+    if (useGradient) {
+      // Same gradient as profile picture ring: accent red → purple
+      ringPaint.shader = ui.Gradient.sweep(
+        center,
+        const [Color(0xFFFF3B30), Color(0xFF7B2FF7), Color(0xFFFF3B30)],
+        [0.0, 0.5, 1.0],
+      );
+    } else {
+      ringPaint.color = solidRingColor;
+    }
 
     canvas.drawCircle(center, imageRadius, ringPaint);
 

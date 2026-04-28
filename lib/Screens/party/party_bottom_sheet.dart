@@ -793,11 +793,13 @@ class PartyBottomSheet extends StatelessWidget {
               style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.text, letterSpacing: -0.4),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
 
             // ── Type badge + host chip ───────────────────────────────────
             Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 // Type badge
                 Container(
