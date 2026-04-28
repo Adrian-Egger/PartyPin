@@ -522,11 +522,19 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
 
     // Firestore-Check (pro Account)
     final username = prefs.getString('username') ?? prefs.getString('currentUsername') ?? '';
+    DocumentReference? userDocRef;
     if (username.isNotEmpty) {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(username).get();
-      if (doc.data()?['legalConsentCreateV1'] == true) {
-        await prefs.setBool('legal_consent_create_v1', true);
-        return true;
+      final q = await FirebaseFirestore.instance
+          .collection('users')
+          .where('username', isEqualTo: username)
+          .limit(1)
+          .get();
+      if (q.docs.isNotEmpty) {
+        userDocRef = q.docs.first.reference;
+        if (q.docs.first.data()['legalConsentCreateV1'] == true) {
+          await prefs.setBool('legal_consent_create_v1', true);
+          return true;
+        }
       }
     }
 
@@ -534,8 +542,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     if (acceptedNow) {
       await prefs.setBool('legal_consent_create_v1', true);
       await prefs.setString('legal_consent_create_v1_date', DateTime.now().toIso8601String());
-      if (username.isNotEmpty) {
-        await FirebaseFirestore.instance.collection('users').doc(username).set(
+      if (userDocRef != null) {
+        await userDocRef.set(
           {'legalConsentCreateV1': true, 'legalConsentCreateV1At': FieldValue.serverTimestamp()},
           SetOptions(merge: true),
         );

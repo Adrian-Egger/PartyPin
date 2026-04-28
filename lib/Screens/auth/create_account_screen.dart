@@ -1,4 +1,6 @@
 // lib/Screens/create_account_screen.dart
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -57,6 +59,12 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   static const _textSecondary = AppColors.muted;
   static const _accent = AppColors.accent;
   static const _secondary = AppColors.teal;
+
+  static String _hashPassword(String username, String password) {
+    final key = utf8.encode(username.toLowerCase());
+    final bytes = utf8.encode(password);
+    return Hmac(sha256, key).convert(bytes).toString();
+  }
 
   bool get _usernameHasUppercase =>
       RegExp(r'[A-Z]').hasMatch(_usernameController.text);
@@ -654,14 +662,16 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
 
         final docId = "$vorname $nachname".trim();
 
+        final passwordHash = _hashPassword(username, password);
+
         await FirebaseFirestore.instance.collection("users").doc(docId).set({
           "createdAt": FieldValue.serverTimestamp(),
           "vorname": vorname,
           "nachname": nachname,
           "fullName": docId,
           "username": username,
-          "password": password,
           "username_lower": username.toLowerCase(),
+          "passwordHash": passwordHash,
           "age": age,
           "geburtsdatum": {
             "tag": _selectedDay,
@@ -670,7 +680,7 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           },
           "phoneNumber": null,
           "phoneVerified": false,
-          "authVersion": 1,
+          "authVersion": 2,
         });
 
         await prefs.setString("vorname", vorname);

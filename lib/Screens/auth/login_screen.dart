@@ -1,4 +1,6 @@
 // lib/Screens/login_screen.dart
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -37,6 +39,12 @@ class _LoginScreenState extends State<LoginScreen> {
   static const _textPrimary = AppColors.text;
   static const _textSecondary = AppColors.muted;
   static const _accent = AppColors.accent;
+
+  static String _hashPassword(String username, String password) {
+    final key = utf8.encode(username.toLowerCase());
+    final bytes = utf8.encode(password);
+    return Hmac(sha256, key).convert(bytes).toString();
+  }
 
   bool get _isFormValid =>
       _usernameController.text.trim().isNotEmpty &&
@@ -123,6 +131,7 @@ class _LoginScreenState extends State<LoginScreen> {
       Map<String, dynamic>? userData;
       String? userType; // "user" oder "bar"
       String? barDocId;
+      DocumentReference<Map<String, dynamic>>? foundDocRef;
 
       // 1) Privatkonten in "users" suchen (Feld username)
       final userQuery = await FirebaseFirestore.instance
@@ -134,6 +143,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (userQuery.docs.isNotEmpty) {
         userData = userQuery.docs.first.data();
         userType = "user";
+        foundDocRef = userQuery.docs.first.reference;
       } else {
         // 2) Unternehmens-Accounts in "bars" suchen
         final barsCol = FirebaseFirestore.instance.collection("bars");
@@ -144,6 +154,7 @@ class _LoginScreenState extends State<LoginScreen> {
           userData = barDocById.data();
           userType = "bar";
           barDocId = barDocById.id;
+          foundDocRef = barDocById.reference;
         } else {
           // Variante 2: Feld username
           final barQuery = await barsCol
@@ -155,6 +166,7 @@ class _LoginScreenState extends State<LoginScreen> {
             userData = barDoc.data();
             userType = "bar";
             barDocId = barDoc.id;
+            foundDocRef = barDoc.reference;
           }
         }
       }
@@ -171,17 +183,35 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      // Passwort checken
-      final storedPw = (userData["password"] ?? "").toString();
-      if (storedPw != passwordInput) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(Lang.t('login_err_wrong_pw')),
-            backgroundColor: AppColors.accent,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        );
+      // ── Passwort prüfen (Hash-Vergleich + Migrations-Fallback) ────────────
+      final inputHash = _hashPassword(usernameInput, passwordInput);
+      final storedHash = (userData['passwordHash'] ?? '').toString();
+      final storedPlain = (userData['password'] ?? '').toString();
+
+      bool passwordOk = false;
+
+      if (storedHash.isNotEmpty && storedHash == inputHash) {
+        // Moderner Account: Hash stimmt
+        passwordOk = true;
+      } else if (storedPlain.isNotEmpty && storedPlain == passwordInput) {
+        // Alter Account (Klartext): stimmt → migrieren
+        passwordOk = true;
+        try {
+          await foundDocRef?.update({
+            'passwordHash': inputHash,
+            'password': FieldValue.delete(),
+          });
+        } catch (_) {}
+      }
+
+      if (!passwordOk) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(Lang.t('login_err_wrong_pw')),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
         return;
       }
 

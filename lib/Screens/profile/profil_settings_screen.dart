@@ -1,6 +1,8 @@
 
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart'; // ✅ anonymous auth (Storage)
 import 'package:firebase_storage/firebase_storage.dart';
@@ -463,6 +465,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
   }
 
+  static String _hashPassword(String username, String password) {
+    final key = utf8.encode(username.toLowerCase());
+    final bytes = utf8.encode(password);
+    return Hmac(sha256, key).convert(bytes).toString();
+  }
+
   Future<void> _savePassword() async {
     final current = _currentPasswordController.text.trim();
     final newPass = _newPasswordController.text.trim();
@@ -471,29 +479,40 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       _showSnack(Lang.t('profile_password_empty'), color: Colors.redAccent);
       return;
     }
-
     if (_docId.isEmpty) {
       _showSnack(Lang.t('profile_doc_not_found_short'), color: Colors.redAccent);
       return;
     }
 
+    final prefs = await SharedPreferences.getInstance();
+    final username = (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '').trim();
+
     final snap = await _col.doc(_docId).get();
     final data = snap.data();
-    final pwInDb = (data?['password'] ?? '').toString();
+    final storedHash  = (data?['passwordHash'] ?? '').toString();
+    final storedPlain = (data?['password']     ?? '').toString();
+    final currentHash = _hashPassword(username, current);
 
-    if (current != pwInDb) {
+    final verified = (storedHash.isNotEmpty && storedHash == currentHash) ||
+                     (storedPlain.isNotEmpty && storedPlain == current);
+
+    if (!verified) {
       _showSnack(Lang.t('profile_password_wrong'), color: Colors.redAccent);
       return;
     }
 
-    await _updateFirestoreField("password", newPass);
+    final newHash = _hashPassword(username, newPass);
+    await _col.doc(_docId).update({
+      'passwordHash': newHash,
+      'password': FieldValue.delete(),
+    });
 
     if (!mounted) return;
     setState(() {
       _editing = null;
       _currentPasswordController.clear();
       _newPasswordController.clear();
-      _passwordFromDb = newPass;
+      _passwordFromDb = '';
     });
 
     _showSnack(Lang.t('profile_password_saved'), color: AppColors.success);
