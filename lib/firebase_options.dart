@@ -60,16 +60,16 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyBGcuGxbH6Gm0lGAGNmB97NSaw8D3DXRpc',
-    appId: '1:777410329158:ios:f64218076b29e31f012847',
+    appId: '1:777410329158:ios:23d232a80dac3cce012847',
     messagingSenderId: '777410329158',
     projectId: 'partypin-5dc3f',
     storageBucket: 'partypin-5dc3f.firebasestorage.app',
-    iosBundleId: 'com.partypin.partyPin',
+    iosBundleId: 'com.LAlabs.partypin',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyBGcuGxbH6Gm0lGAGNmB97NSaw8D3DXRpc',
-    appId: '1:777410329158:ios:f64218076b29e31f012847',
+    appId: '1:777410329158:ios:869e41e434817f05012847',
     messagingSenderId: '777410329158',
     projectId: 'partypin-5dc3f',
     storageBucket: 'partypin-5dc3f.firebasestorage.app',

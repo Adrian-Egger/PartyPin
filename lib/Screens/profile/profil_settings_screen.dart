@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart'; // ✅ anonymous auth (Storage)
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../auth/login_screen.dart';
 import '../../Theme/app_theme.dart';
 import '../../l10n/lang.dart';
+import '../../Services/stripe_service.dart';
 
 // ---------- Farben wie bei PartyMap / NewParty ----------
 const _gradTop = AppColors.bgTop;
@@ -37,6 +39,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   String _username = "";
   String? _avatar; // URL (avatarUrl)
   String _bio = "";
+  String _email = "";          // verifizierte Mail
+  String _pendingEmail = "";   // wartet auf Klick im Bestätigungslink
   String _passwordFromDb = "";
 
   // ✅ users vs bars
@@ -46,6 +50,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _bioController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _currentPasswordController =
   TextEditingController();
   final TextEditingController _newPasswordController = TextEditingController();
@@ -67,6 +72,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   void dispose() {
     _usernameController.dispose();
     _bioController.dispose();
+    _emailController.dispose();
     _currentPasswordController.dispose();
     _newPasswordController.dispose();
     super.dispose();
@@ -103,6 +109,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       avatarUrl = (data['avatarUrl'] ?? '').toString().trim();
       password = (data['password'] ?? '').toString();
       final bio = (data['bio'] ?? '').toString();
+      final email = (data['email'] ?? '').toString().trim();
+      final pendingEmail =
+          (data['pendingEmail'] ?? '').toString().trim();
+
+      // Mail in Prefs spiegeln, damit der Ticket-Kauf sie ohne Roundtrip findet.
+      if (email.isNotEmpty) {
+        await prefs.setString('userEmail', email);
+      }
 
       if (!mounted) return true;
       setState(() {
@@ -116,6 +130,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         _passwordFromDb = password;
         _bio = bio;
         _bioController.text = bio;
+        _email = email;
+        _pendingEmail = pendingEmail;
+        _emailController.text = email;
       });
 
       // ✅ merken, damit künftig sofort richtig gesucht wird
@@ -184,7 +201,17 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
 
     // Already permanently denied — go straight to settings
-    if (status.isPermanentlyDenied) {
+    Future<bool> _ensureCameraPermission() async {
+      var status = await Permission.camera.status;
+
+      if (status.isGranted) return true;
+
+      // IMMER versuchen zu requesten (wichtig für iOS)
+      status = await Permission.camera.request();
+
+      if (status.isGranted) return true;
+
+      // erst danach Settings zeigen
       _showPermissionSettingsDialog(Lang.t('perm_camera'));
       return false;
     }
@@ -644,6 +671,83 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     _showSnack(Lang.t('profile_bio_saved'), color: AppColors.success);
   }
 
+  Future<void> _saveEmail() async {
+    final newEmail = _emailController.text.trim().toLowerCase();
+    if (newEmail.isEmpty ||
+        !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(newEmail)) {
+      _showSnack('Bitte eine gültige E-Mail-Adresse eingeben.',
+          color: Colors.redAccent);
+      return;
+    }
+
+    if (newEmail == _email) {
+      if (!mounted) return;
+      setState(() => _editing = null);
+      return;
+    }
+
+    if (_docId.isEmpty) {
+      _showSnack(Lang.t('profile_doc_not_found_short'),
+          color: Colors.redAccent);
+      return;
+    }
+
+    // Bestehende Mail bleibt aktiv, bis der Bestätigungslink geklickt wurde.
+    try {
+      // Anonymen Login sicherstellen (für Cloud Function Auth-Check).
+      await _ensureFirebaseUser(context);
+
+      final result = await StripeService.requestEmailVerification(
+        docId: _docId,
+        email: newEmail,
+        collection: _collection,
+      );
+
+      if (!mounted) return;
+
+      if (result['alreadyVerified'] == true) {
+        // Mail war schon als verifiziert hinterlegt — nur Prefs syncen.
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('userEmail', newEmail);
+        setState(() {
+          _email = newEmail;
+          _pendingEmail = '';
+          _editing = null;
+        });
+        _showSnack('E-Mail bereits bestätigt.', color: AppColors.success);
+        return;
+      }
+
+      setState(() {
+        _pendingEmail = newEmail;
+        _editing = null;
+        // _email NICHT überschreiben — alte Mail bleibt aktiv.
+      });
+      _showSnack(
+        'Bestätigungs-E-Mail an $newEmail verschickt. Bitte Link klicken.',
+        color: AppColors.success,
+      );
+    } on FirebaseFunctionsException catch (e) {
+      String msg;
+      switch (e.message) {
+        case 'invalid_email_format':
+          msg = 'Ungültiges E-Mail-Format.';
+          break;
+        case 'user_not_found':
+          msg = 'Profil nicht gefunden.';
+          break;
+        case 'send_failed':
+          msg = 'Versand fehlgeschlagen — bitte später erneut versuchen.';
+          break;
+        default:
+          msg = e.message ?? e.code;
+      }
+      if (mounted) _showSnack(msg, color: Colors.redAccent);
+    } catch (e) {
+      if (mounted) _showSnack('Fehler: $e', color: Colors.redAccent);
+    }
+  }
+
   void _viewProfilePicture() {
     final url = _avatar;
     if (url == null || url.isEmpty) return;
@@ -954,6 +1058,58 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                           _bioController.text = _bio;
                         }),
                       ),
+                      const Divider(height: 1, color: Color(0xFF2A2D35)),
+                      // E-Mail row (für QR-Code-Versand bei Ticket-Käufen)
+                      _settingRow(
+                        icon: Icons.alternate_email_rounded,
+                        label: 'E-Mail',
+                        editing: _editing == 'email',
+                        displayValue: _email.isEmpty
+                            ? (_pendingEmail.isNotEmpty
+                                ? '$_pendingEmail · wartet auf Bestätigung'
+                                : 'Keine E-Mail hinterlegt')
+                            : (_pendingEmail.isNotEmpty &&
+                                    _pendingEmail != _email
+                                ? '$_email\n→ neu: $_pendingEmail (unbestätigt)'
+                                : _email),
+                        editChild: TextField(
+                          controller: _emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          autofillHints: const [AutofillHints.email],
+                          style: const TextStyle(
+                              color: _textPrimary, fontSize: 14),
+                          decoration: InputDecoration(
+                            hintText: 'deine@email.com',
+                            hintStyle: const TextStyle(
+                                color: _textSecondary, fontSize: 14),
+                            filled: true,
+                            fillColor: const Color(0xFF0E0F12),
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 12),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(
+                                  color: Color(0xFF2A2D35)),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(
+                                  color: Color(0xFF2A2D35)),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide:
+                                  const BorderSide(color: _accent, width: 1.5),
+                            ),
+                          ),
+                        ),
+                        onEdit: () => setState(() => _editing = 'email'),
+                        onSave: _saveEmail,
+                        onCancel: () => setState(() {
+                          _editing = null;
+                          _emailController.text = _email;
+                        }),
+                      ),
                     ],
                   ),
                 ),
@@ -997,7 +1153,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final avatar = _avatar;
     if (avatar == null || avatar.trim().isEmpty) return null;
     if (avatar.startsWith('http://') || avatar.startsWith('https://')) {
-      return NetworkImage(avatar);
+      // Avatar wird klein dargestellt → 256 px reichen, spart RAM.
+      return ResizeImage(NetworkImage(avatar), width: 256);
     }
     final f = File(avatar);
     if (f.existsSync()) return FileImage(f);

@@ -68,7 +68,7 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
-	<!-- 🔥 PAYPAL DEEP LINK (HINZUGEFÜGT) -->
+	<!-- 🔥 Deep-Link Scheme: partypin:// (Stripe-Onboarding-Bridge) -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

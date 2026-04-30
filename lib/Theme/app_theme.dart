@@ -60,24 +60,11 @@ class AppCurves {
 }
 
 // ─── Page Transition ──────────────────────────────────────────────────────────
-
-class _SmoothPageTransitionsBuilder extends PageTransitionsBuilder {
-  const _SmoothPageTransitionsBuilder();
-
-  @override
-  Widget buildTransitions<T>(
-    PageRoute<T> route,
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
-    return FadeTransition(
-      opacity: CurvedAnimation(parent: animation, curve: AppCurves.enter),
-      child: child,
-    );
-  }
-}
+// Cupertino-Stil auf allen Plattformen: horizontaler Slide rein/raus PLUS
+// Edge-Swipe-Back-Geste (von links nach rechts wischen → vorherige Seite).
+// Kein eigener Builder mehr nötig — CupertinoPageTransitionsBuilder bringt
+// beides "kostenlos" mit. Das gilt automatisch für jede Route, die über
+// Navigator.push(MaterialPageRoute(...)) geöffnet wird.
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
@@ -118,14 +105,16 @@ class AppTheme {
       textTheme: textTheme,
       scaffoldBackgroundColor: AppColors.bgTop,
 
-      // Page transitions — smooth fade + subtle slide
+      // Page transitions — Cupertino-Slide + Swipe-Back-Geste auf ALLEN
+      // Plattformen. Auf Android wird die Edge-Swipe-Geste durch
+      // CupertinoPageTransitionsBuilder automatisch aktiv.
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: _SmoothPageTransitionsBuilder(),
-          TargetPlatform.iOS:     _SmoothPageTransitionsBuilder(),
-          TargetPlatform.windows: _SmoothPageTransitionsBuilder(),
-          TargetPlatform.macOS:   _SmoothPageTransitionsBuilder(),
-          TargetPlatform.linux:   _SmoothPageTransitionsBuilder(),
+          TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.iOS:     CupertinoPageTransitionsBuilder(),
+          TargetPlatform.windows: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.macOS:   CupertinoPageTransitionsBuilder(),
+          TargetPlatform.linux:   CupertinoPageTransitionsBuilder(),
         },
       ),
 

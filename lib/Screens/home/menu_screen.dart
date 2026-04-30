@@ -7,7 +7,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'selection_screen.dart';
 import '../../l10n/lang.dart';
 import '../profile/feedback_screen.dart';
+import '../profile/my_tickets_screen.dart';
 import '../profile/notification_settings_screen.dart';
+import '../profile/stripe_onboarding_screen.dart';
 import '../bar/AdminCreatesBarScreen.dart';
 import '../party/access_parties_screen.dart';
 
@@ -840,25 +842,78 @@ class MenuScreen extends StatelessWidget {
     required IconData icon,
     required String title,
     required VoidCallback onTap,
+    String? subtitle,
   }) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.accentBorder),
       ),
       child: ListTile(
-        leading: Icon(icon, color: _accent, size: 28),
+        leading: Icon(icon, color: _accent, size: 24),
         title: Text(
           title,
           style: const TextStyle(
             color: _textPrimary,
-            fontSize: 18,
+            fontSize: 16,
             fontWeight: FontWeight.w600,
           ),
         ),
+        subtitle: subtitle == null
+            ? null
+            : Text(subtitle,
+                style: const TextStyle(
+                    color: _textSecondary, fontSize: 12.5)),
+        trailing: const Icon(Icons.chevron_right_rounded,
+            color: _textSecondary, size: 20),
+        dense: true,
         onTap: onTap,
+      ),
+    );
+  }
+
+  void _openPartyMap(BuildContext context) {
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => RequireTermsAccepted(
+          child: Builder(
+            builder: (ctx) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!ctx.mounted) return;
+                Navigator.of(ctx).pushAndRemoveUntil(
+                  MaterialPageRoute(
+                    builder: (_) => const HomeShell(initialIndex: 2),
+                  ),
+                  (_) => false,
+                );
+              });
+              return const Scaffold(
+                backgroundColor: _gradTop,
+                body: Center(child: CircularProgressIndicator()),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
+      child: Text(
+        title.toUpperCase(),
+        style: const TextStyle(
+          color: _textSecondary,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.2,
+        ),
       ),
     );
   }
@@ -1070,160 +1125,167 @@ class MenuScreen extends StatelessWidget {
                 ),
                 Expanded(
                   child: ListView(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.only(top: 4, bottom: 24),
                     children: [
-              // PARTY MAP
-              _menuTile(
-                icon: Icons.map,
-                title: Lang.t('menu_party_map'),
-                onTap: () {
-                  // Menü schließen (falls Drawer/Overlay)
-                  if (Navigator.of(context).canPop()) {
-                    Navigator.of(context).pop();
-                  }
-
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => RequireTermsAccepted(
-                        child: Builder(
-                          builder: (ctx) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (!ctx.mounted) return;
-
-                              Navigator.of(ctx).pushAndRemoveUntil(
-                                MaterialPageRoute(
-                                  builder: (_) => const HomeShell(initialIndex: 2),
-                                ),
-                                    (_) => false,
-                              );
-                            });
-
-                            return const Scaffold(
-                              backgroundColor: _gradTop,
-                              body: Center(child: CircularProgressIndicator()),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-
-
-
-              // UGC: approved parties -> Terms Gate
-              _menuTile(
-                icon: Icons.verified_rounded,
-                title: Lang.t('menu_approved_parties'),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const RequireTermsAccepted(child: AccessPartiesScreen()),
-                    ),
-                  );
-                },
-              ),
-
-              _menuTile(
-                icon: Icons.language,
-                title: Lang.t('menu_language_location'),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const SelectionScreen()),
-                  );
-                },
-              ),
-
-              _menuTile(
-                icon: Icons.notifications_outlined,
-                title: 'Benachrichtigungen',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const NotificationSettingsScreen()),
-                  );
-                },
-              ),
-
-              _menuTile(
-                icon: Icons.upcoming,
-                title: Lang.t('menu_coming_soon'),
-                onTap: () => _showComingSoon(context),
-              ),
-
-              // UGC: Feedback -> Terms Gate
-              _menuTile(
-                icon: Icons.feedback,
-                title: Lang.t('nav_feedback'),
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const RequireTermsAccepted(
-                        child: FeedbackScreen(openedFromMenu: true),
-                      ),
-                    ),
-                  );
-                },
-              ),
-
-              _menuTile(
-                icon: Icons.info,
-                title: Lang.t('menu_legal'),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const LegalScreen()),
-                  );
-                },
-              ),
-
-              _menuTile(
-                icon: Icons.support_agent,
-                title: "Support",
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (context) => const SupportScreen()),
-                  );
-                },
-              ),
-
-              FutureBuilder<bool>(
-                future: _isCurrentUserAdmin(),
-                builder: (context, snapshot) {
-                  if (snapshot.data != true) return const SizedBox.shrink();
-
-                  return Column(
-                    children: [
+                      // ── Entdecken ───────────────────────────────────────
+                      _sectionHeader('Entdecken'),
                       _menuTile(
-                        icon: Icons.admin_panel_settings,
-                        title: "Admin Bereich💻",
+                        icon: Icons.map_rounded,
+                        title: Lang.t('menu_party_map'),
+                        onTap: () => _openPartyMap(context),
+                      ),
+                      _menuTile(
+                        icon: Icons.verified_rounded,
+                        title: Lang.t('menu_approved_parties'),
                         onTap: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (context) => const AdminCreateBarScreen()),
+                            MaterialPageRoute(
+                              builder: (_) => const RequireTermsAccepted(
+                                child: AccessPartiesScreen(),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+
+                      // ── Tickets ─────────────────────────────────────────
+                      _sectionHeader('Tickets'),
+                      _menuTile(
+                        icon: Icons.confirmation_number_rounded,
+                        title: 'Meine Tickets',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const MyTicketsScreen()),
                           );
                         },
                       ),
                       _menuTile(
-                        icon: Icons.report,
-                        title: "24h Moderation",
+                        icon: Icons.account_balance_wallet_rounded,
+                        title: 'Stripe Anmeldung',
+                        subtitle: 'Hosts: Auszahlungen aktivieren',
                         onTap: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (_) => const AdminReportsScreen()),
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    const StripeOnboardingScreen()),
                           );
                         },
                       ),
-                    ],
-                  );
-                },
-              ),
-            ], // ListView children
-          ), // ListView
+
+                      // ── Einstellungen ───────────────────────────────────
+                      _sectionHeader('Einstellungen'),
+                      _menuTile(
+                        icon: Icons.notifications_outlined,
+                        title: 'Benachrichtigungen',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    const NotificationSettingsScreen()),
+                          );
+                        },
+                      ),
+                      _menuTile(
+                        icon: Icons.language_rounded,
+                        title: Lang.t('menu_language_location'),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const SelectionScreen()),
+                          );
+                        },
+                      ),
+
+                      // ── Mehr ────────────────────────────────────────────
+                      _sectionHeader('Mehr'),
+                      _menuTile(
+                        icon: Icons.upcoming_rounded,
+                        title: Lang.t('menu_coming_soon'),
+                        onTap: () => _showComingSoon(context),
+                      ),
+                      _menuTile(
+                        icon: Icons.feedback_outlined,
+                        title: Lang.t('nav_feedback'),
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const RequireTermsAccepted(
+                                child:
+                                    FeedbackScreen(openedFromMenu: true),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      _menuTile(
+                        icon: Icons.support_agent_rounded,
+                        title: 'Support',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const SupportScreen()),
+                          );
+                        },
+                      ),
+                      _menuTile(
+                        icon: Icons.gavel_rounded,
+                        title: Lang.t('menu_legal'),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const LegalScreen()),
+                          );
+                        },
+                      ),
+
+                      // ── Admin (nur sichtbar wenn Admin) ─────────────────
+                      FutureBuilder<bool>(
+                        future: _isCurrentUserAdmin(),
+                        builder: (context, snapshot) {
+                          if (snapshot.data != true) {
+                            return const SizedBox.shrink();
+                          }
+                          return Column(
+                            children: [
+                              _sectionHeader('Admin'),
+                              _menuTile(
+                                icon: Icons.admin_panel_settings_rounded,
+                                title: 'Admin-Bereich',
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) =>
+                                            const AdminCreateBarScreen()),
+                                  );
+                                },
+                              ),
+                              _menuTile(
+                                icon: Icons.report_rounded,
+                                title: '24h Moderation',
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) =>
+                                            const AdminReportsScreen()),
+                                  );
+                                },
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ], // ListView children
+                  ), // ListView
                 ), // Expanded
               ], // Column children
             ), // Column

@@ -213,7 +213,14 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                           child: CircleAvatar(
                             radius: 54,
                             backgroundColor: AppColors.panelAlt,
-                            backgroundImage: avatarUrl.isNotEmpty ? CachedNetworkImageProvider(avatarUrl) : null,
+                            // Avatar 108 px breit → Decode auf 256 px reicht für Retina,
+                            // spart aber den Decode eines 1080+ px Originals.
+                            backgroundImage: avatarUrl.isNotEmpty
+                                ? ResizeImage(
+                                    CachedNetworkImageProvider(avatarUrl),
+                                    width: 256,
+                                  )
+                                : null,
                             child: avatarUrl.isEmpty
                                 ? Text(
                                     widget.username.isNotEmpty ? widget.username[0].toUpperCase() : '?',

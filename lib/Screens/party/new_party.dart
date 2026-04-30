@@ -3,14 +3,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:http/http.dart' as http;
 
 import 'package:geocoding/geocoding.dart' as geo;
 
@@ -27,6 +26,7 @@ import '../home/home_shell.dart';
 import '../../Theme/app_theme.dart';
 import '../../Services/timestamp_ext.dart';
 import '../../l10n/lang.dart';
+import '../profile/stripe_onboarding_screen.dart';
 
 class NewPartyScreen extends StatefulWidget {
   final Map<String, dynamic>? existingData;
@@ -79,7 +79,15 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   bool _triedSubmit = false;
 
   String? _stripeAccountId;
+  bool _stripeChargesEnabled = false;
   bool _checkingStripe = true;
+
+  // Ticket-Felder
+  bool _ticketsEnabled = false;
+  final TextEditingController _ticketPriceController = TextEditingController();
+  final TextEditingController _ticketsAvailableController = TextEditingController();
+  final FocusNode _ticketPriceNode = FocusNode();
+  final FocusNode _ticketsAvailableNode = FocusNode();
 
 
   String? _hostName;
@@ -250,6 +258,16 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     _priceController.text = data['price'] != null && data['price'] != 0 ? data['price'].toString() : '';
     _isFreeEntry = (data['price'] ?? 0) == 0;
 
+    _ticketsEnabled = data['ticketsEnabled'] == true;
+    final priceCents = (data['ticketPriceCents'] as num?)?.toInt();
+    if (priceCents != null && priceCents > 0) {
+      _ticketPriceController.text = (priceCents / 100).toStringAsFixed(2);
+    }
+    final available = (data['ticketsAvailable'] as num?)?.toInt() ?? 0;
+    if (available > 0) {
+      _ticketsAvailableController.text = available.toString();
+    }
+
     _addressController.text = (data['address'] ?? '').toString();
 
     if (data['startTime'] is Timestamp) {
@@ -326,191 +344,42 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     });
   }
 
+  /// Liest den aktuellen Stripe-Connect-Status aus dem User-Doc.
+  /// Wird beim Onboarding via `refreshStripeAccountStatus` Cloud Function
+  /// aktualisiert; wir lesen hier nur.
   Future<void> _loadStripeStatus() async {
-    final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username');
-
-    if (username == null) {
-      setState(() => _checkingStripe = false);
-      return;
-    }
-
-    // 🔎 User korrekt über username finden
-    final query = await FirebaseFirestore.instance
-        .collection('users')
-        .where('username', isEqualTo: username)
-        .limit(1)
-        .get();
-
-    if (query.docs.isEmpty) {
-      setState(() => _checkingStripe = false);
-      return;
-    }
-
-    final userDoc = query.docs.first;
-    final stripeId = userDoc.data()['stripeAccountId'];
-
-    if (stripeId == null) {
-      setState(() {
-        _stripeAccountId = null;
-        _detailsSubmitted = false;
-        _checkingStripe = false;
-      });
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      if (mounted) setState(() => _checkingStripe = false);
       return;
     }
 
     try {
-      // 🔥 Backend Status prüfen
-      final response = await http.post(
-        Uri.parse("http://192.168.1.5:3000/check-stripe-status"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "stripeAccountId": stripeId,
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        setState(() {
-          _stripeAccountId = stripeId;
-          _detailsSubmitted = false;
-          _checkingStripe = false;
-        });
-        return;
-      }
-
-      final data = jsonDecode(response.body);
-
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      final data = snap.data() ?? {};
+      if (!mounted) return;
       setState(() {
-        _stripeAccountId = stripeId;
-        _detailsSubmitted = data["detailsSubmitted"] ?? false;
+        _stripeAccountId = (data['stripeAccountId'] ?? '').toString().isEmpty
+            ? null
+            : data['stripeAccountId'] as String;
+        _stripeChargesEnabled = data['stripeChargesEnabled'] == true;
         _checkingStripe = false;
       });
-
-    } catch (e) {
-      setState(() {
-        _stripeAccountId = stripeId;
-        _detailsSubmitted = false;
-        _checkingStripe = false;
-      });
+    } catch (_) {
+      if (mounted) setState(() => _checkingStripe = false);
     }
   }
 
-
-
-  Future<void> _createStripeAccount() async {
-    final prefs = await SharedPreferences.getInstance();
-    final username = prefs.getString('username');
-
-    if (username == null) return;
-
-    final email = await _askForEmail();
-    if (email == null) return;
-
-    // 🔎 richtigen User suchen
-    final query = await FirebaseFirestore.instance
-        .collection('users')
-        .where('username', isEqualTo: username)
-        .limit(1)
-        .get();
-
-    if (query.docs.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text("User nicht gefunden."),
-        backgroundColor: AppColors.accent,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
-      return;
-    }
-
-    final userDoc = query.docs.first;
-    final docId = userDoc.id;
-
-    final response = await http.post(
-      Uri.parse("http://192.168.1.5:3000/create-host-account"),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({"email": email}),
+  /// Navigiert zum Onboarding-Screen. Nach Rückkehr Status frisch laden.
+  Future<void> _openOnboarding() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const StripeOnboardingScreen()),
     );
-
-    if (response.statusCode != 200) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text("Backend Fehler."),
-        backgroundColor: AppColors.accent,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
-      return;
-    }
-
-    final data = jsonDecode(response.body);
-    final accountId = data["accountId"];
-    final onboardingUrl = data["onboardingUrl"];
-
-    // ✅ Stripe ID im richtigen Dokument speichern
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(docId)
-        .set({
-      "stripeAccountId": accountId,
-    }, SetOptions(merge: true));
-
-    await launchUrl(
-      Uri.parse(onboardingUrl),
-      mode: LaunchMode.externalApplication,
-    );
-
-    setState(() {
-      _stripeAccountId = accountId;
-    });
-  }
-
-
-  Future<void> _openStripeDashboard() async {
-    if (_stripeAccountId == null) return;
-
-    final response = await http.post(
-      Uri.parse("http://192.168.1.5:3000/create-login-link"),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({
-        "stripeAccountId": _stripeAccountId,
-      }),
-    );
-
-    if (response.statusCode != 200) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text("Stripe Login Fehler."),
-        backgroundColor: AppColors.accent,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
-      return;
-    }
-
-    final url = jsonDecode(response.body)["url"];
-
-    await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.externalApplication,
-    );
-  }
-
-  Future<void> _resumeOnboarding() async {
-    final response = await http.post(
-      Uri.parse("http://192.168.1.5:3000/resume-onboarding"),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({
-        "stripeAccountId": _stripeAccountId,
-      }),
-    );
-
-    if (response.statusCode != 200) return;
-
-    final url = jsonDecode(response.body)["url"];
-
-    await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.externalApplication,
-    );
+    await _loadStripeStatus();
   }
 
 
@@ -751,6 +620,229 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
             },
             activeColor: _accent,
           ),
+        ],
+      ),
+    );
+  }
+
+  void _showTicketsInfoDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _panel,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Row(
+          children: const [
+            Icon(Icons.confirmation_number_outlined, color: _accent),
+            SizedBox(width: 10),
+            Text(
+              'Ticket-Verkauf',
+              style: TextStyle(
+                color: _textPrimary,
+                fontWeight: FontWeight.w800,
+                fontSize: 18,
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Verkaufe Tickets direkt über PartyPin. Gäste erhalten nach dem Kauf automatisch einen QR-Code per Mail als Eintrittskarte.',
+          style: TextStyle(color: _textSecondary, height: 1.5, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text(
+              'Verstanden',
+              style: TextStyle(color: _accent, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Versucht, leere Ticket-Felder aus dem Eintrittspreis und Gästelimit zu
+  /// füllen, wenn der Toggle aktiviert wird.
+  void _autofillTicketDefaults() {
+    if (_ticketPriceController.text.trim().isEmpty && !_isFreeEntry) {
+      final priceTxt =
+          _priceController.text.trim().replaceAll(',', '.');
+      final p = double.tryParse(priceTxt);
+      if (p != null && p >= 0.5) {
+        _ticketPriceController.text = priceTxt.replaceAll('.', ',');
+      }
+    }
+    if (_ticketsAvailableController.text.trim().isEmpty &&
+        !_isUnlimitedGuests) {
+      final glTxt = _guestLimitController.text.trim();
+      final gl = int.tryParse(glTxt);
+      if (gl != null && gl > 0) {
+        _ticketsAvailableController.text = gl.toString();
+      }
+    }
+  }
+
+  Widget _ticketSection() {
+    final guestLimitTxt = _guestLimitController.text.trim();
+    final guestLimit = int.tryParse(guestLimitTxt) ?? 0;
+    final hasGuestCap = !_isUnlimitedGuests && guestLimit > 0;
+
+    return _section(
+      title: "Tickets",
+      icon: Icons.confirmation_number_outlined,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Eigene Toggle-Zeile mit Info-Button
+          Container(
+            decoration: BoxDecoration(
+              color: _card,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.accentBorder),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              children: [
+                const Icon(Icons.sell_rounded, color: _secondary),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    "Ticket-Verkauf aktivieren 🎟️",
+                    style: TextStyle(
+                      color: _textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: _showTicketsInfoDialog,
+                  icon: const Icon(Icons.info_outline_rounded),
+                  color: _secondary,
+                  tooltip: "Was ist Ticket-Verkauf?",
+                  splashRadius: 22,
+                ),
+                Switch(
+                  value: _ticketsEnabled,
+                  onChanged: (v) {
+                    _unfocus();
+                    HapticFeedback.selectionClick();
+                    setState(() {
+                      _ticketsEnabled = v;
+                      if (v) _autofillTicketDefaults();
+                    });
+                  },
+                  activeColor: _accent,
+                ),
+              ],
+            ),
+          ),
+          if (_ticketsEnabled) ...[
+            const SizedBox(height: 12),
+            if (_checkingStripe)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              )
+            else if (!_stripeChargesEnabled)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _accent.withAlpha(20),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _accent.withAlpha(80)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: const [
+                        Icon(Icons.warning_amber_rounded, color: _accent, size: 18),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            "Du musst zuerst Stripe verbinden, um Tickets zu verkaufen.",
+                            style: TextStyle(color: _textPrimary, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: _openOnboarding,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _accent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      icon: const Icon(Icons.payment_rounded, size: 16),
+                      label: const Text("Stripe verbinden",
+                          style: TextStyle(fontWeight: FontWeight.w800)),
+                    ),
+                  ],
+                ),
+              )
+            else ...[
+              TextFormField(
+                controller: _ticketPriceController,
+                focusNode: _ticketPriceNode,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(
+                    RegExp(r'^\d*[,.]?\d{0,2}$'),
+                  ),
+                ],
+                style: const TextStyle(color: _textPrimary),
+                decoration: _dec(
+                  "Preis pro Ticket",
+                  hint: "€",
+                  icon: Icons.euro,
+                  errorText: (_ticketsEnabled && _triedSubmit && (() {
+                    final v = double.tryParse(
+                      _ticketPriceController.text.trim().replaceAll(',', '.'),
+                    );
+                    return v == null || v < 0.5;
+                  })())
+                      ? "Mindestens 0,50 €"
+                      : null,
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _ticketsAvailableController,
+                focusNode: _ticketsAvailableNode,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                style: const TextStyle(color: _textPrimary),
+                onChanged: (_) {
+                  // Trigger Rebuild für errorText
+                  if (hasGuestCap) setState(() {});
+                },
+                decoration: _dec(
+                  "Max. Tickets",
+                  hint: hasGuestCap
+                      ? "max. $guestLimit (= Gästelimit)"
+                      : "leer = unbegrenzt",
+                  icon: Icons.event_seat_rounded,
+                  errorText: (() {
+                    if (!hasGuestCap) return null;
+                    final t = int.tryParse(
+                        _ticketsAvailableController.text.trim());
+                    if (t != null && t > guestLimit) {
+                      return "Max. $guestLimit (= Gästelimit)";
+                    }
+                    return null;
+                  })(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "Plattform-Gebühr 3 % · 97 % gehen direkt an dich",
+                style: TextStyle(color: _textSecondary, fontSize: 11),
+              ),
+            ],
+          ],
         ],
       ),
     );
@@ -1371,6 +1463,48 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       return;
     }
 
+    // Tickets: Validierung + Aufbereitung
+    int ticketPriceCents = 0;
+    int ticketsAvailable = 0;
+    if (_ticketsEnabled) {
+      if (!_stripeChargesEnabled) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text("Bitte erst Stripe Onboarding abschließen, um Tickets zu verkaufen."),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
+        return;
+      }
+      final priceEur = double.tryParse(
+          _ticketPriceController.text.trim().replaceAll(',', '.')) ??
+          0;
+      ticketPriceCents = (priceEur * 100).round();
+      if (ticketPriceCents < 50) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text("Ticketpreis muss mindestens 0,50 € sein."),
+          backgroundColor: AppColors.accent,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
+        return;
+      }
+      ticketsAvailable = int.tryParse(_ticketsAvailableController.text.trim()) ?? 0;
+
+      // Hart-Cap: nie mehr Tickets als Gästelimit (außer Gäste sind unbegrenzt)
+      if (!_isUnlimitedGuests) {
+        final glTxt = _guestLimitController.text.trim();
+        final gl = int.tryParse(glTxt);
+        if (gl != null && gl > 0) {
+          if (ticketsAvailable == 0 || ticketsAvailable > gl) {
+            ticketsAvailable = gl;
+          }
+        }
+      }
+    }
+
     final baseData = <String, dynamic>{
       'name': name,
       'description': description,
@@ -1386,7 +1520,12 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       'address': address,
       'hostName': _hostName ?? 'unknown',
       'hostId': username,
+      'hostUid': FirebaseAuth.instance.currentUser?.uid,
       'stripeAccountId': _stripeAccountId,
+      'ticketsEnabled': _ticketsEnabled,
+      'ticketPriceCents': ticketPriceCents,
+      'ticketsAvailable': ticketsAvailable,
+      'ticketsSold': widget.existingData?['ticketsSold'] ?? 0,
       'isClosed': false,
       'requests': widget.existingData?['requests'] ?? [],
       'approved': widget.existingData?['approved'] ?? [],
@@ -1715,6 +1854,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
                             ],
                           ),
                         ),
+                        const SizedBox(height: 14),
+                        _ticketSection(),
                         const SizedBox(height: 14),
                         _section(
                           title: "Ort",

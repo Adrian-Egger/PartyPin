@@ -530,27 +530,27 @@ String _safeDocId(String input) => input
   }
 
   Future<BitmapDescriptor> _createBarMarkerIcon(String? imageUrl) async {
+    // Standardmäßig roter Ring (PartyPin-Akzent).
     return _createBarMarkerIconWithRing(
       imageUrl: imageUrl,
       ringWidth: 5,
-      useGradient: true,
+      solidRingColor: AppColors.accent,
     );
   }
 
   Future<BitmapDescriptor> _createBarMarkerIconWithGreenRing(
       String? imageUrl) async {
+    // Bei aktivem Event: grüner Ring.
     return _createBarMarkerIconWithRing(
       imageUrl: imageUrl,
       ringWidth: 6,
-      useGradient: false,
-      solidRingColor: Colors.greenAccent,
+      solidRingColor: AppColors.success,
     );
   }
 
   Future<BitmapDescriptor> _createBarMarkerIconWithRing({
     required String? imageUrl,
     required double ringWidth,
-    bool useGradient = false,
     Color solidRingColor = Colors.white,
   }) async {
     final int diameter = _barBaseDiameter;
@@ -592,22 +592,12 @@ String _safeDocId(String input) => input
       canvas.drawCircle(center, imageRadius, Paint()..color = AppColors.accentBorder);
     }
 
-    // Draw ring — gradient for normal bars, solid color for event bars
+    // Draw ring — solid color (rot normal, grün bei Event).
     final ringPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = ringWidth
-      ..isAntiAlias = true;
-
-    if (useGradient) {
-      // Same gradient as profile picture ring: accent red → purple
-      ringPaint.shader = ui.Gradient.sweep(
-        center,
-        const [Color(0xFFFF3B30), Color(0xFF7B2FF7), Color(0xFFFF3B30)],
-        [0.0, 0.5, 1.0],
-      );
-    } else {
-      ringPaint.color = solidRingColor;
-    }
+      ..isAntiAlias = true
+      ..color = solidRingColor;
 
     canvas.drawCircle(center, imageRadius, ringPaint);
 
@@ -711,6 +701,15 @@ String _safeDocId(String input) => input
   }
 
   DateTime? _partyStart(Map<String, dynamic> d) {
+    // 1) startTime bevorzugt (matcht functions/index.js parsePartyStart)
+    final st = d['startTime'];
+    if (st is Timestamp) return st.toLocalDateTime();
+    if (st is String) {
+      final parsed = DateTime.tryParse(st);
+      if (parsed != null) return parsed.toLocal();
+    }
+
+    // 2) Fallback: date + time
     DateTime? base;
     final v = d['date'];
     if (v is Timestamp) {
@@ -1055,15 +1054,20 @@ String _safeDocId(String input) => input
 
       final now = DateTime.now();
 
+      // ── Phase 1: alle relevanten Bars sammeln (kein await im Loop) ─────────
+      final pending = <_BarMarkerJob>[];
+      final neededIconKeys = <String>{};
+
       for (final doc in snapshot.docs) {
         final data = doc.data();
         if (!_showBars) continue;
 
-        // Event abgelaufen -> zurücksetzen
+        // Event abgelaufen → zurücksetzen (fire-and-forget, kein await)
         if (data['eventActive'] == true && data['eventDate'] is Timestamp) {
           final dt = (data['eventDate'] as Timestamp).toLocalDateTime();
           final start = dt.subtract(const Duration(hours: 1));
-          if (now.isAfter(start.add(const Duration(hours: _barEventHoursAfter)))) {
+          if (now.isAfter(
+              start.add(const Duration(hours: _barEventHoursAfter)))) {
             FirebaseFirestore.instance.collection('bars').doc(doc.id).set(
               {
                 'eventActive': false,
@@ -1082,43 +1086,73 @@ String _safeDocId(String input) => input
         if (pos == null) continue;
 
         if (_radiusKm != null) {
-          final distKm = _haversineKm(_currentLat, _currentLng, pos.latitude, pos.longitude);
+          final distKm = _haversineKm(
+              _currentLat, _currentLng, pos.latitude, pos.longitude);
           if (distKm > _radiusKm!) continue;
         }
 
         final barName = (data['barName'] ?? 'Bar').toString();
-        final imageUrl = (data['profileImageUrl'] ?? '').toString().trim();
+        final imageUrl =
+            (data['profileImageUrl'] ?? '').toString().trim();
         final baseKey = imageUrl.isEmpty ? '__default' : imageUrl;
-
         final hasEvent = _barHasVisibleEvent(data, now);
+        final iconKey =
+            hasEvent ? 'event|$baseKey' : 'normal|$baseKey';
 
-        BitmapDescriptor icon;
-        if (hasEvent) {
-          final key = 'event|$baseKey';
-          if (_barIconEventRingCache.containsKey(key)) {
-            icon = _barIconEventRingCache[key]!;
-          } else {
-            icon = await _createBarMarkerIconWithGreenRing(
-                imageUrl.isEmpty ? null : imageUrl);
+        final isCached = hasEvent
+            ? _barIconEventRingCache.containsKey(iconKey)
+            : _barIconCache.containsKey(iconKey);
+
+        if (!isCached) neededIconKeys.add(iconKey);
+
+        pending.add(_BarMarkerJob(
+          docId: doc.id,
+          data: data,
+          pos: pos,
+          name: barName,
+          imageUrl: imageUrl,
+          hasEvent: hasEvent,
+          iconKey: iconKey,
+        ));
+      }
+
+      // ── Phase 2: alle fehlenden Icons PARALLEL bauen ───────────────────────
+      // Vorher: sequenziell N × ~200 ms. Jetzt: alle Downloads gleichzeitig.
+      if (neededIconKeys.isNotEmpty) {
+        final keysToBuild = neededIconKeys.toList();
+        final futures = keysToBuild.map((key) {
+          final isEvent = key.startsWith('event|');
+          final url = key.substring(key.indexOf('|') + 1);
+          final urlOrNull = url == '__default' ? null : url;
+          return isEvent
+              ? _createBarMarkerIconWithGreenRing(urlOrNull)
+              : _createBarMarkerIcon(urlOrNull);
+        }).toList();
+        final results = await Future.wait(futures, eagerError: false);
+        for (var i = 0; i < keysToBuild.length; i++) {
+          final key = keysToBuild[i];
+          final icon = results[i];
+          if (key.startsWith('event|')) {
             _barIconEventRingCache[key] = icon;
-          }
-        } else {
-          final key = 'normal|$baseKey';
-          if (_barIconCache.containsKey(key)) {
-            icon = _barIconCache[key]!;
           } else {
-            icon = await _createBarMarkerIcon(imageUrl.isEmpty ? null : imageUrl);
             _barIconCache[key] = icon;
           }
         }
+      }
 
+      // ── Phase 3: Marker aus Cache zusammenstellen ──────────────────────────
+      for (final job in pending) {
+        final icon = job.hasEvent
+            ? _barIconEventRingCache[job.iconKey]
+            : _barIconCache[job.iconKey];
+        if (icon == null) continue; // build fehlgeschlagen → still überspringen
         _markers.add(
           Marker(
-            markerId: MarkerId('bar_${doc.id}'),
-            position: pos,
+            markerId: MarkerId('bar_${job.docId}'),
+            position: job.pos,
             icon: icon,
-            infoWindow: InfoWindow(title: barName),
-            onTap: () => _openBarSheet(data, doc.id),
+            infoWindow: InfoWindow(title: job.name),
+            onTap: () => _openBarSheet(job.data, job.docId),
           ),
         );
       }
@@ -2758,4 +2792,27 @@ class _FloatingMapButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Hilfs-Datenklasse für die parallele Bar-Marker-Generierung in
+/// `_loadBarsFromFirebase()`. Sammelt alle Eingabewerte, damit Icons in
+/// einem `Future.wait` gebatcht erzeugt werden können statt sequenziell.
+class _BarMarkerJob {
+  const _BarMarkerJob({
+    required this.docId,
+    required this.data,
+    required this.pos,
+    required this.name,
+    required this.imageUrl,
+    required this.hasEvent,
+    required this.iconKey,
+  });
+
+  final String docId;
+  final Map<String, dynamic> data;
+  final LatLng pos;
+  final String name;
+  final String imageUrl;
+  final bool hasEvent;
+  final String iconKey;
 }

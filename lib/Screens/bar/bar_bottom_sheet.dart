@@ -592,7 +592,12 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
           avatar = CircleAvatar(
             radius: 48,
             backgroundColor: AppColors.panel,
-            backgroundImage: NetworkImage(profileImageUrl),
+            // ResizeImage decodiert bereits beim Laden auf passende Größe →
+            // spart RAM/GPU-Upload massiv (Avatar ist nur 96 px groß).
+            backgroundImage: ResizeImage(
+              NetworkImage(profileImageUrl),
+              width: 256,
+            ),
           );
         } else {
           avatar = Container(
@@ -1467,6 +1472,8 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                           height: 160,
                           width: double.infinity,
                           fit: BoxFit.cover,
+                          // Decode auf passende Höhe → 8× weniger RAM bei 1080p-Quellen.
+                          cacheHeight: 320,
                           loadingBuilder: (_, child, progress) {
                             if (progress == null) return child;
                             return Container(
@@ -2541,6 +2548,7 @@ class EventDetailsCard extends StatelessWidget {
           height: 90,
           width: double.infinity,
           fit: BoxFit.cover,
+          cacheHeight: 200,
         ),
       ),
     );

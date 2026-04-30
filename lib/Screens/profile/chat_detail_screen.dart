@@ -1,9 +1,11 @@
 import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import '../../Theme/app_theme.dart';
 import '../../Social/friends_model.dart';
 import 'user_profile_screen.dart';
@@ -24,9 +26,14 @@ class ChatDetailScreen extends StatefulWidget {
   State<ChatDetailScreen> createState() => _ChatDetailScreenState();
 }
 
-class _ChatDetailScreenState extends State<ChatDetailScreen> {
+class _ChatDetailScreenState extends State<ChatDetailScreen>
+    with TickerProviderStateMixin {
+  static const _reactionEmojis = ['😂', '❤️', '🔥', '👍', '😮', '😢'];
+
   final _textCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  final _inputFocus = FocusNode();
+
   bool _sending = false;
   bool _hasText = false;
 
@@ -37,10 +44,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   Timer? _typingTimer;
   bool _amTyping = false;
   int _prevMsgCount = 0;
+  String? _animateMsgId; // most recently added msgId — for slide-in
 
   String? _otherAvatarUrl;
   String? _otherBio;
   bool _isFriend = false;
+
+  // Reply state
+  _ReplyDraft? _replyDraft;
+
+  // Highlight a message briefly when jumping to it (reply tap)
+  String? _highlightMsgId;
+  Timer? _highlightTimer;
+
+  // Map from msgId -> GlobalKey, used to scroll to a message when tapping a reply preview
+  final Map<String, GlobalKey> _msgKeys = {};
 
   DocumentReference<Map<String, dynamic>> get _chatRef =>
       FirebaseFirestore.instance.collection('chats').doc(widget.chatId);
@@ -67,8 +85,16 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       for (final col in ['users', 'bars']) {
         try {
           for (final q in await Future.wait([
-            FirebaseFirestore.instance.collection(col).where('username_lower', isEqualTo: lower).limit(1).get(),
-            FirebaseFirestore.instance.collection(col).where('username', isEqualTo: widget.otherUsername.trim()).limit(1).get(),
+            FirebaseFirestore.instance
+                .collection(col)
+                .where('username_lower', isEqualTo: lower)
+                .limit(1)
+                .get(),
+            FirebaseFirestore.instance
+                .collection(col)
+                .where('username', isEqualTo: widget.otherUsername.trim())
+                .limit(1)
+                .get(),
           ], eagerError: false)) {
             if (q.docs.isNotEmpty) {
               final data = q.docs.first.data();
@@ -91,20 +117,20 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     _chatDocSub?.cancel();
     _typingHideTimer?.cancel();
     _typingTimer?.cancel();
+    _highlightTimer?.cancel();
     _textCtrl.dispose();
     _scrollCtrl.dispose();
+    _inputFocus.dispose();
     super.dispose();
   }
 
   void _onChatDocUpdate(DocumentSnapshot<Map<String, dynamic>> snap) {
     if (!mounted) return;
     final d = snap.data();
-    final lastRead =
-        d?['lastRead_${widget.otherUsername}'] as Timestamp?;
+    final lastRead = d?['lastRead_${widget.otherUsername}'] as Timestamp?;
     if (lastRead != _otherLastRead) setState(() => _otherLastRead = lastRead);
 
-    final typing =
-        d?['typing_${widget.otherUsername}'] as Timestamp?;
+    final typing = d?['typing_${widget.otherUsername}'] as Timestamp?;
     if (typing != null) {
       if (!_otherIsTyping) setState(() => _otherIsTyping = true);
       _typingHideTimer?.cancel();
@@ -159,17 +185,18 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final text = _textCtrl.text.trim();
     if (text.isEmpty || _sending) return;
     HapticFeedback.lightImpact();
+    final replyDraft = _replyDraft;
     _textCtrl.clear();
     _stopTyping();
     setState(() {
       _sending = true;
       _hasText = false;
+      _replyDraft = null;
     });
 
     try {
       await _chatRef.set({
-        'members':
-            ([widget.currentUsername, widget.otherUsername]..sort()),
+        'members': ([widget.currentUsername, widget.otherUsername]..sort()),
         'lastMessage': text,
         'lastTs': FieldValue.serverTimestamp(),
         'lastFrom': widget.currentUsername,
@@ -177,11 +204,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         'unread_${widget.currentUsername}': 0,
       }, SetOptions(merge: true));
 
-      await _msgsRef.add({
+      final payload = <String, dynamic>{
         'from': widget.currentUsername,
         'text': text,
         'ts': FieldValue.serverTimestamp(),
-      });
+      };
+      if (replyDraft != null) {
+        payload['replyTo'] = {
+          'id': replyDraft.id,
+          'from': replyDraft.from,
+          'text': replyDraft.text.length > 140
+              ? '${replyDraft.text.substring(0, 140)}…'
+              : replyDraft.text,
+        };
+      }
+      await _msgsRef.add(payload);
 
       try {
         await FirebaseFunctions.instanceFor(region: 'europe-west1')
@@ -203,8 +240,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           content: Text('Fehler: $e'),
           backgroundColor: Colors.redAccent,
           behavior: SnackBarBehavior.floating,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ));
       }
     } finally {
@@ -214,41 +250,157 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients &&
-          _scrollCtrl.position.minScrollExtent == 0) {
-        _scrollCtrl.jumpTo(0);
+      if (_scrollCtrl.hasClients) {
+        _scrollCtrl.animateTo(
+          0,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOutCubic,
+        );
       }
     });
   }
 
-  DateTime _fromTs(Timestamp ts) =>
-      DateTime.fromMicrosecondsSinceEpoch(ts.microsecondsSinceEpoch,
-              isUtc: true)
-          .toLocal();
+  // ── Reply / scroll-to-message ──────────────────────────────────────────────
 
-  String _formatDate(DateTime dt) {
-    final now = DateTime.now();
-    if (dt.year == now.year &&
-        dt.month == now.month &&
-        dt.day == now.day) return 'Heute';
-    final y = now.subtract(const Duration(days: 1));
-    if (dt.year == y.year && dt.month == y.month && dt.day == y.day) {
-      return 'Gestern';
+  void _setReply(_ReplyDraft draft) {
+    HapticFeedback.selectionClick();
+    setState(() => _replyDraft = draft);
+    _inputFocus.requestFocus();
+  }
+
+  void _clearReply() => setState(() => _replyDraft = null);
+
+  GlobalKey _keyFor(String msgId) =>
+      _msgKeys.putIfAbsent(msgId, () => GlobalKey());
+
+  Future<void> _scrollToMessage(String msgId) async {
+    final ctx = _msgKeys[msgId]?.currentContext;
+    if (ctx == null) {
+      // The message may be off-screen and unmounted — just nudge user.
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('Original-Nachricht nicht mehr im Verlauf.'),
+        behavior: SnackBarBehavior.floating,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
+      return;
     }
-    return '${dt.day}.${dt.month}.${dt.year}';
+    await Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 360),
+      curve: Curves.easeOutCubic,
+      alignment: 0.4,
+    );
+    setState(() => _highlightMsgId = msgId);
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (mounted) setState(() => _highlightMsgId = null);
+    });
   }
 
-  Color _avatarColor(String name) {
-    const colors = [
-      Color(0xFF5C6BC0), Color(0xFF7B52AB), Color(0xFF00897B),
-      Color(0xFF1565C0), Color(0xFF6D4C41), Color(0xFF2E7D32),
-      Color(0xFF37474F), Color(0xFF6A1B9A),
-    ];
-    if (name.isEmpty) return AppColors.panelAlt;
-    return colors[name.codeUnitAt(0) % colors.length];
+  // ── Reactions ──────────────────────────────────────────────────────────────
+
+  Future<void> _toggleReaction(String msgId, String emoji,
+      Map<String, dynamic>? current) async {
+    HapticFeedback.lightImpact();
+    final reactions = Map<String, dynamic>.from(current ?? {});
+    final mine = reactions[widget.currentUsername];
+    if (mine == emoji) {
+      reactions.remove(widget.currentUsername);
+    } else {
+      reactions[widget.currentUsername] = emoji;
+    }
+    try {
+      await _msgsRef.doc(msgId).set(
+            {'reactions': reactions},
+            SetOptions(merge: true),
+          );
+    } catch (_) {}
   }
 
-  // ── Build ────────────────────────────────────────────────────────────────
+  void _showReactionPicker(String msgId, Map<String, dynamic>? reactions) {
+    HapticFeedback.mediumImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black54,
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).padding.bottom + 16,
+            top: 6,
+          ),
+          child: Center(
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.7, end: 1.0),
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutBack,
+              builder: (_, v, child) =>
+                  Transform.scale(scale: v, child: child),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.panel,
+                  borderRadius: AppRadius.fullBr,
+                  border: Border.all(color: AppColors.border),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.45),
+                      blurRadius: 22,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: _reactionEmojis.map((e) {
+                    final isMine =
+                        (reactions ?? {})[widget.currentUsername] == e;
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.of(ctx).pop();
+                        _toggleReaction(msgId, e, reactions);
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: isMine
+                              ? AppColors.accent.withOpacity(0.18)
+                              : Colors.transparent,
+                          borderRadius: AppRadius.fullBr,
+                        ),
+                        child: Text(e, style: const TextStyle(fontSize: 28)),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── Emoji-only detection ──────────────────────────────────────────────────
+
+  /// Liefert > 0 wenn der Text NUR aus Emojis (max. 8 Cluster) besteht,
+  /// sonst 0. Reine Punktuation gilt nicht als Emoji-Only.
+  int _emojiOnlyClusterCount(String text) {
+    final t = text.trim();
+    if (t.isEmpty) return 0;
+    if (RegExp(r'\p{L}|\p{N}', unicode: true).hasMatch(t)) return 0;
+    if (!t.runes.any((r) => r > 127)) return 0;
+    final n = t.characters.length;
+    if (n == 0 || n > 8) return 0;
+    return n;
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -258,6 +410,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       body: Column(
         children: [
           Expanded(child: _buildMessageArea()),
+          _ReplyPreviewBar(draft: _replyDraft, onClose: _clearReply),
           _buildInput(context),
         ],
       ),
@@ -294,27 +447,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         ),
         child: Row(
           children: [
-            CircleAvatar(
-              radius: 19,
-              backgroundColor: _avatarColor(widget.otherUsername),
-              backgroundImage: (_isFriend &&
-                      _otherAvatarUrl != null &&
-                      _otherAvatarUrl!.isNotEmpty)
-                  ? CachedNetworkImageProvider(_otherAvatarUrl!)
-                  : null,
-              child: (_isFriend &&
-                      _otherAvatarUrl != null &&
-                      _otherAvatarUrl!.isNotEmpty)
-                  ? null
-                  : Text(
-                      widget.otherUsername.isNotEmpty
-                          ? widget.otherUsername[0].toUpperCase()
-                          : '?',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14),
-                    ),
+            _Avatar(
+              size: 38,
+              username: widget.otherUsername,
+              showImage: _isFriend,
+              imageUrl: _otherAvatarUrl,
             ),
             const SizedBox(width: 11),
             Expanded(
@@ -354,14 +491,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right_rounded, color: AppColors.subtle, size: 18),
+            const Icon(Icons.chevron_right_rounded,
+                color: AppColors.subtle, size: 18),
           ],
         ),
       ),
     );
   }
 
-  // ── Message area ─────────────────────────────────────────────────────────
+  // ── Message area ──────────────────────────────────────────────────────────
 
   Widget _buildMessageArea() {
     return Column(
@@ -370,33 +508,14 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         AnimatedSize(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOut,
-          child: _otherIsTyping ? _buildTypingRow() : const SizedBox.shrink(),
+          child: _otherIsTyping
+              ? _TypingBubble(
+                  username: widget.otherUsername,
+                  imageUrl: _isFriend ? _otherAvatarUrl : null,
+                )
+              : const SizedBox.shrink(),
         ),
       ],
-    );
-  }
-
-  Widget _buildTypingRow() {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
-        child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-          decoration: BoxDecoration(
-            color: AppColors.panelAlt,
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(18),
-              topRight: Radius.circular(18),
-              bottomLeft: Radius.circular(4),
-              bottomRight: Radius.circular(18),
-            ),
-            border: Border.all(color: AppColors.accentBorder, width: 1),
-          ),
-          child: const _TypingDots(),
-        ),
-      ),
     );
   }
 
@@ -413,6 +532,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
 
         if (docs.length > _prevMsgCount) {
           _prevMsgCount = docs.length;
+          if (docs.isNotEmpty) _animateMsgId = docs.first.id;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _markRead();
             if (docs.isNotEmpty) {
@@ -429,25 +549,12 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 72,
-                  height: 72,
-                  decoration: BoxDecoration(
-                    color: _avatarColor(widget.otherUsername),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Text(
-                      widget.otherUsername.isNotEmpty
-                          ? widget.otherUsername[0].toUpperCase()
-                          : '?',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 28),
-                    ),
-                  ),
-                ),
+                _Avatar(
+                    size: 72,
+                    username: widget.otherUsername,
+                    showImage: _isFriend,
+                    imageUrl: _otherAvatarUrl,
+                    fontSize: 28),
                 const SizedBox(height: 16),
                 Text(
                   widget.otherUsername,
@@ -458,14 +565,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 ),
                 const SizedBox(height: 6),
                 const Text('Schreib die erste Nachricht',
-                    style: TextStyle(
-                        color: AppColors.subtle, fontSize: 13.5)),
+                    style:
+                        TextStyle(color: AppColors.subtle, fontSize: 13.5)),
               ],
             ),
           );
         }
 
-        // Find read receipt index
+        // last read receipt — index of the most recent OWN message that
+        // the other person has already seen.
         int lastReadIndex = -1;
         final lr = _otherLastRead;
         if (lr != null) {
@@ -484,10 +592,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         return ListView.builder(
           controller: _scrollCtrl,
           reverse: true,
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
           itemCount: docs.length,
-          itemBuilder: (context, i) =>
-              _buildBubble(docs, i, lastReadIndex),
+          itemBuilder: (context, i) => _buildBubble(docs, i, lastReadIndex),
         );
       },
     );
@@ -513,11 +620,15 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     int i,
     int lastReadIndex,
   ) {
-    final d = docs[i].data();
+    final doc = docs[i];
+    final d = doc.data();
+    final msgId = doc.id;
     final isMe = d['from'] == widget.currentUsername;
     final text = (d['text'] ?? '').toString();
     final ts = d['ts'] as Timestamp?;
     final date = ts == null ? null : _fromTs(ts);
+    final reactions = (d['reactions'] as Map?)?.cast<String, dynamic>();
+    final replyTo = (d['replyTo'] as Map?)?.cast<String, dynamic>();
 
     // Date separator
     final olderTs = (i + 1 < docs.length)
@@ -530,12 +641,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             date.month != olderDate.month ||
             date.year != olderDate.year);
 
-    // Grouping: consecutive same-sender
+    // Grouping (consecutive same-sender)
     final newerFrom = i > 0 ? docs[i - 1].data()['from'] as String? : null;
     final olderFrom =
         i + 1 < docs.length ? docs[i + 1].data()['from'] as String? : null;
-    final isLastInGroup =
-        newerFrom == null || newerFrom != d['from'];
+    final isLastInGroup = newerFrom == null || newerFrom != d['from'];
     final isFirstInGroup =
         olderFrom == null || olderFrom != d['from'] || showDate;
 
@@ -546,163 +656,459 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
           }();
 
-    return Column(
-      crossAxisAlignment:
-          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+    // Read-status: ✓ pending (no ts), ✓✓ delivered, blue ✓✓ read
+    _ReadState readState;
+    if (!isMe) {
+      readState = _ReadState.none;
+    } else if (ts == null) {
+      readState = _ReadState.pending;
+    } else if (i == lastReadIndex || (lastReadIndex >= 0 && i < lastReadIndex)) {
+      readState = _ReadState.read;
+    } else {
+      readState = _ReadState.delivered;
+    }
+
+    final emojiClusters = _emojiOnlyClusterCount(text);
+    final isEmojiOnly = emojiClusters > 0;
+
+    final bubbleContent = _bubbleContent(
+      isMe: isMe,
+      text: text,
+      timeStr: timeStr,
+      readState: readState,
+      isFirstInGroup: isFirstInGroup,
+      isLastInGroup: isLastInGroup,
+      isEmojiOnly: isEmojiOnly,
+      emojiClusters: emojiClusters,
+      replyTo: replyTo,
+      msgId: msgId,
+    );
+
+    final bubble = _DoubleTapHeart(
+      onDoubleTap: () => _toggleReaction(msgId, '❤️', reactions),
+      child: GestureDetector(
+        onLongPress: () => _showReactionPicker(msgId, reactions),
+        child: bubbleContent,
+      ),
+    );
+
+    // Swipe-to-reply (rechts wischen)
+    final swipeable = Dismissible(
+      key: ValueKey('swipe-$msgId'),
+      direction: DismissDirection.startToEnd,
+      dismissThresholds: const {DismissDirection.startToEnd: 0.18},
+      movementDuration: const Duration(milliseconds: 220),
+      confirmDismiss: (_) async {
+        _setReply(_ReplyDraft(
+          id: msgId,
+          from: (d['from'] ?? '').toString(),
+          text: text,
+        ));
+        return false;
+      },
+      background: Container(
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.only(left: 22),
+        child: const Icon(Icons.reply_rounded,
+            color: AppColors.accent, size: 22),
+      ),
+      child: bubble,
+    );
+
+    // Avatar (only for "other" messages, only on the bottom-most of a group)
+    Widget row = Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisAlignment:
+          isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
       children: [
-        if (showDate)
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 18),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 5),
-                decoration: BoxDecoration(
-                  color: AppColors.panel,
-                  borderRadius: BorderRadius.circular(999),
-                  border:
-                      Border.all(color: AppColors.border, width: 1),
-                ),
-                child: Text(
-                  _formatDate(date!),
-                  style: const TextStyle(
-                    color: AppColors.muted,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 0.1,
-                  ),
-                ),
-              ),
+        if (!isMe)
+          Padding(
+            padding: const EdgeInsets.only(right: 6, bottom: 4),
+            child: SizedBox(
+              width: 28,
+              child: isLastInGroup
+                  ? _Avatar(
+                      size: 28,
+                      username: widget.otherUsername,
+                      showImage: _isFriend,
+                      imageUrl: _otherAvatarUrl,
+                      fontSize: 11,
+                    )
+                  : const SizedBox.shrink(),
             ),
           ),
-        Align(
-          alignment:
-              isMe ? Alignment.centerRight : Alignment.centerLeft,
+        Flexible(
           child: ConstrainedBox(
             constraints: BoxConstraints(
               maxWidth: MediaQuery.of(context).size.width * 0.74,
             ),
-            child: Container(
-              margin: EdgeInsets.only(
-                bottom: isLastInGroup ? 8 : 2,
-              ),
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 9),
-              decoration: BoxDecoration(
-                color: isMe ? AppColors.accent : AppColors.panelAlt,
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(
-                      (!isMe && !isFirstInGroup) ? 6 : 18),
-                  topRight: Radius.circular(
-                      (isMe && !isFirstInGroup) ? 6 : 18),
-                  bottomLeft:
-                      Radius.circular(isMe ? 18 : (isLastInGroup ? 4 : 18)),
-                  bottomRight:
-                      Radius.circular(!isMe ? 18 : (isLastInGroup ? 4 : 18)),
-                ),
-                border: isMe
-                    ? null
-                    : Border.all(
-                        color: AppColors.accentBorder, width: 1),
-              ),
-              child: Column(
-                crossAxisAlignment: isMe
-                    ? CrossAxisAlignment.end
-                    : CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    text,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14.5,
-                        height: 1.35),
-                  ),
-                  if (timeStr.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          timeStr,
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.45),
-                            fontSize: 10.5,
-                          ),
-                        ),
-                        if (isMe && i == lastReadIndex) ...[
-                          const SizedBox(width: 4),
-                          Icon(Icons.done_all_rounded,
-                              size: 12,
-                              color: Colors.white.withOpacity(0.75)),
-                        ],
-                      ],
+            child: Column(
+              crossAxisAlignment:
+                  isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              children: [
+                swipeable,
+                if (reactions != null && reactions.isNotEmpty)
+                  Padding(
+                    padding: EdgeInsets.only(
+                      top: 4,
+                      bottom: isLastInGroup ? 0 : 0,
+                      left: isMe ? 0 : 4,
+                      right: isMe ? 4 : 0,
                     ),
-                  ],
-                ],
-              ),
+                    child: _ReactionsRow(
+                      reactions: reactions,
+                      currentUser: widget.currentUsername,
+                      onTap: (emoji) =>
+                          _toggleReaction(msgId, emoji, reactions),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
       ],
     );
+
+    // Slide-in animation for newly added messages
+    if (msgId == _animateMsgId) {
+      row = TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0.0, end: 1.0),
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+        builder: (_, v, child) {
+          return Opacity(
+            opacity: v,
+            child: Transform.translate(
+              offset: Offset(0, (1 - v) * 16),
+              child: child,
+            ),
+          );
+        },
+        child: row,
+      );
+    }
+
+    return Column(
+      crossAxisAlignment:
+          isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      children: [
+        if (showDate && date != null)
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Text(
+                _formatDate(date),
+                style: const TextStyle(
+                  color: AppColors.subtle,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ),
+          ),
+        Padding(
+          padding: EdgeInsets.only(
+            top: isFirstInGroup ? 6 : 1,
+            bottom: isLastInGroup ? 6 : 1,
+            left: 4,
+            right: 4,
+          ),
+          child: row,
+        ),
+      ],
+    );
   }
 
-  // ── Input ─────────────────────────────────────────────────────────────────
+  Widget _bubbleContent({
+    required bool isMe,
+    required String text,
+    required String timeStr,
+    required _ReadState readState,
+    required bool isFirstInGroup,
+    required bool isLastInGroup,
+    required bool isEmojiOnly,
+    required int emojiClusters,
+    required Map<String, dynamic>? replyTo,
+    required String msgId,
+  }) {
+    final highlight = _highlightMsgId == msgId;
+
+    // Modern corner pattern: 18px overall, 4px on the corner pointing to sender
+    final radius = BorderRadius.only(
+      topLeft: Radius.circular((!isMe && !isFirstInGroup) ? 6 : 18),
+      topRight: Radius.circular((isMe && !isFirstInGroup) ? 6 : 18),
+      bottomLeft:
+          Radius.circular(isMe ? 18 : (isLastInGroup ? 4 : 18)),
+      bottomRight:
+          Radius.circular(!isMe ? 18 : (isLastInGroup ? 4 : 18)),
+    );
+
+    // Emoji-only: kein Hintergrund — direkt Text rendern
+    if (isEmojiOnly) {
+      final size = emojiClusters == 1 ? 56.0 : (emojiClusters <= 3 ? 40.0 : 28.0);
+      return Container(
+        key: _keyFor(msgId),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: Column(
+          crossAxisAlignment:
+              isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            if (replyTo != null) _replyChip(replyTo, isMe, dim: true),
+            Text(
+              text,
+              style: TextStyle(fontSize: size, height: 1.1),
+            ),
+            const SizedBox(height: 3),
+            _MetaRow(
+                isMe: isMe, timeStr: timeStr, readState: readState),
+          ],
+        ),
+      );
+    }
+
+    final decoration = BoxDecoration(
+      gradient: isMe
+          ? const LinearGradient(
+              colors: [
+                Color(0xFFFF3B30),
+                Color(0xFFFF6B81), // soft pink
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            )
+          : null,
+      color: isMe ? null : AppColors.panelAlt,
+      borderRadius: radius,
+      boxShadow: highlight
+          ? [
+              BoxShadow(
+                color: AppColors.accent.withOpacity(0.55),
+                blurRadius: 18,
+                spreadRadius: 1,
+              ),
+            ]
+          : isMe
+              ? [
+                  BoxShadow(
+                    color: AppColors.accent.withOpacity(0.18),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ]
+              : null,
+    );
+
+    return AnimatedContainer(
+      key: _keyFor(msgId),
+      duration: const Duration(milliseconds: 240),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      decoration: decoration,
+      child: Column(
+        crossAxisAlignment:
+            isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (replyTo != null) _replyChip(replyTo, isMe),
+          Text(
+            text,
+            style: const TextStyle(
+                color: Colors.white, fontSize: 14.5, height: 1.35),
+          ),
+          const SizedBox(height: 3),
+          _MetaRow(
+              isMe: isMe, timeStr: timeStr, readState: readState),
+        ],
+      ),
+    );
+  }
+
+  Widget _replyChip(Map<String, dynamic> replyTo, bool isMe,
+      {bool dim = false}) {
+    final repliedFrom = (replyTo['from'] ?? '').toString();
+    final repliedText = (replyTo['text'] ?? '').toString();
+    final repliedId = (replyTo['id'] ?? '').toString();
+    final color = isMe ? Colors.white : AppColors.text;
+    return GestureDetector(
+      onTap: repliedId.isEmpty ? null : () => _scrollToMessage(repliedId),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: dim
+              ? AppColors.panelAlt.withOpacity(0.6)
+              : (isMe
+                  ? Colors.white.withOpacity(0.18)
+                  : AppColors.bgTop.withOpacity(0.5)),
+          borderRadius: BorderRadius.circular(10),
+          border: Border(
+            left: BorderSide(
+              color: isMe ? Colors.white : AppColors.accent,
+              width: 3,
+            ),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              repliedFrom,
+              style: TextStyle(
+                color: color.withOpacity(0.9),
+                fontWeight: FontWeight.w700,
+                fontSize: 11.5,
+              ),
+            ),
+            const SizedBox(height: 1),
+            Text(
+              repliedText,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color.withOpacity(0.75),
+                fontSize: 12,
+                height: 1.25,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Input ──────────────────────────────────────────────────────────────────
 
   Widget _buildInput(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
         color: AppColors.bgTop,
-        border: Border(
-            top: BorderSide(color: AppColors.border, width: 0.5)),
+        border:
+            Border(top: BorderSide(color: AppColors.border, width: 0.5)),
       ),
       padding: EdgeInsets.fromLTRB(
-          12, 10, 12, MediaQuery.of(context).padding.bottom + 10),
+          10, 8, 10, MediaQuery.of(context).padding.bottom + 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          // Pill-shaped input
           Expanded(
-            child: Container(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
               constraints: const BoxConstraints(maxHeight: 130),
               decoration: BoxDecoration(
                 color: AppColors.panelAlt,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: AppColors.border),
+                borderRadius: AppRadius.fullBr,
+                boxShadow: _hasText
+                    ? [
+                        BoxShadow(
+                          color: AppColors.accent.withOpacity(0.10),
+                          blurRadius: 10,
+                          offset: const Offset(0, 2),
+                        ),
+                      ]
+                    : null,
               ),
-              child: TextField(
-                controller: _textCtrl,
-                style: const TextStyle(
-                    color: AppColors.text, fontSize: 15),
-                maxLines: null,
-                decoration: const InputDecoration(
-                  hintText: 'Nachricht…',
-                  hintStyle: TextStyle(
-                      color: AppColors.subtle, fontSize: 15),
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(
-                      horizontal: 18, vertical: 11),
-                  isDense: true,
-                ),
-                textInputAction: TextInputAction.send,
-                onChanged: _onTextChanged,
-                onSubmitted: (_) => _send(),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.emoji_emotions_outlined,
+                        color: AppColors.muted, size: 22),
+                    onPressed: () => _inputFocus.requestFocus(),
+                    splashRadius: 20,
+                    constraints: const BoxConstraints(
+                        minHeight: 44, minWidth: 40),
+                    padding: const EdgeInsets.only(left: 6, right: 0),
+                  ),
+                  Expanded(
+                    child: TextField(
+                      controller: _textCtrl,
+                      focusNode: _inputFocus,
+                      style: const TextStyle(
+                          color: AppColors.text, fontSize: 15),
+                      maxLines: null,
+                      decoration: const InputDecoration(
+                        hintText: 'Nachricht…',
+                        hintStyle:
+                            TextStyle(color: AppColors.subtle, fontSize: 15),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 12),
+                        isDense: true,
+                      ),
+                      textInputAction: TextInputAction.send,
+                      onChanged: _onTextChanged,
+                      onSubmitted: (_) => _send(),
+                    ),
+                  ),
+                  // Mic icon — only when empty
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    transitionBuilder: (c, a) =>
+                        FadeTransition(opacity: a, child: c),
+                    child: _hasText
+                        ? const SizedBox(width: 8, key: ValueKey('empty'))
+                        : IconButton(
+                            key: const ValueKey('mic'),
+                            icon: const Icon(Icons.mic_none_rounded,
+                                color: AppColors.muted, size: 22),
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: const Text(
+                                      'Sprachnachrichten kommen bald.'),
+                                  behavior: SnackBarBehavior.floating,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(10)),
+                                ),
+                              );
+                            },
+                            splashRadius: 20,
+                            constraints: const BoxConstraints(
+                                minHeight: 44, minWidth: 40),
+                            padding: const EdgeInsets.only(right: 6),
+                          ),
+                  ),
+                ],
               ),
             ),
           ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 160),
-            curve: Curves.easeOut,
+          // Send button — appears with scale+fade only when text is present
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            transitionBuilder: (child, anim) => ScaleTransition(
+              scale: anim,
+              child: FadeTransition(opacity: anim, child: child),
+            ),
             child: _hasText
                 ? Padding(
+                    key: const ValueKey('send'),
                     padding: const EdgeInsets.only(left: 8),
                     child: GestureDetector(
                       onTap: _send,
                       child: Container(
                         width: 44,
                         height: 44,
-                        decoration: const BoxDecoration(
-                          color: AppColors.accent,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [
+                              Color(0xFFFF3B30),
+                              Color(0xFFFF6B81),
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
                           shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.accent.withOpacity(0.35),
+                              blurRadius: 12,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
                         ),
                         child: _sending
                             ? const Padding(
@@ -715,7 +1121,360 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                       ),
                     ),
                   )
-                : const SizedBox.shrink(),
+                : const SizedBox.shrink(key: ValueKey('no-send')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  DateTime _fromTs(Timestamp ts) =>
+      DateTime.fromMicrosecondsSinceEpoch(ts.microsecondsSinceEpoch,
+              isUtc: true)
+          .toLocal();
+
+  String _formatDate(DateTime dt) {
+    final now = DateTime.now();
+    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+      return 'Heute';
+    }
+    final y = now.subtract(const Duration(days: 1));
+    if (dt.year == y.year && dt.month == y.month && dt.day == y.day) {
+      return 'Gestern';
+    }
+    return '${dt.day}.${dt.month}.${dt.year}';
+  }
+}
+
+// ─── Reply draft ──────────────────────────────────────────────────────────────
+
+class _ReplyDraft {
+  const _ReplyDraft({
+    required this.id,
+    required this.from,
+    required this.text,
+  });
+  final String id;
+  final String from;
+  final String text;
+}
+
+// ─── Reply preview bar (above input) ─────────────────────────────────────────
+
+class _ReplyPreviewBar extends StatelessWidget {
+  const _ReplyPreviewBar({required this.draft, required this.onClose});
+  final _ReplyDraft? draft;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      transitionBuilder: (child, anim) => SizeTransition(
+        sizeFactor: anim,
+        axisAlignment: -1,
+        child: FadeTransition(opacity: anim, child: child),
+      ),
+      child: draft == null
+          ? const SizedBox.shrink(key: ValueKey('none'))
+          : Container(
+              key: ValueKey(draft!.id),
+              padding:
+                  const EdgeInsets.fromLTRB(12, 8, 8, 8),
+              decoration: const BoxDecoration(
+                color: AppColors.bgTop,
+                border: Border(
+                  top: BorderSide(color: AppColors.border, width: 0.5),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 3,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.accent,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Antwort an ${draft!.from}',
+                          style: const TextStyle(
+                            color: AppColors.accent,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          draft!.text,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: AppColors.muted, fontSize: 12.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded,
+                        color: AppColors.muted, size: 20),
+                    onPressed: onClose,
+                    splashRadius: 18,
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+// ─── Read state ──────────────────────────────────────────────────────────────
+
+enum _ReadState { none, pending, delivered, read }
+
+class _MetaRow extends StatelessWidget {
+  const _MetaRow({
+    required this.isMe,
+    required this.timeStr,
+    required this.readState,
+  });
+  final bool isMe;
+  final String timeStr;
+  final _ReadState readState;
+
+  @override
+  Widget build(BuildContext context) {
+    if (timeStr.isEmpty) return const SizedBox.shrink();
+    final timeColor = isMe
+        ? Colors.white.withOpacity(0.6)
+        : AppColors.subtle;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          timeStr,
+          style: TextStyle(color: timeColor, fontSize: 10.5),
+        ),
+        if (readState != _ReadState.none) ...[
+          const SizedBox(width: 4),
+          _ReadTicks(state: readState, isMe: isMe),
+        ],
+      ],
+    );
+  }
+}
+
+class _ReadTicks extends StatelessWidget {
+  const _ReadTicks({required this.state, required this.isMe});
+  final _ReadState state;
+  final bool isMe;
+
+  @override
+  Widget build(BuildContext context) {
+    final baseColor =
+        isMe ? Colors.white.withOpacity(0.75) : AppColors.subtle;
+    switch (state) {
+      case _ReadState.pending:
+        return Icon(Icons.check_rounded, size: 12, color: baseColor);
+      case _ReadState.delivered:
+        return Icon(Icons.done_all_rounded, size: 13, color: baseColor);
+      case _ReadState.read:
+        return const Icon(Icons.done_all_rounded,
+            size: 13, color: Color(0xFF4FC3F7));
+      case _ReadState.none:
+        return const SizedBox.shrink();
+    }
+  }
+}
+
+// ─── Reactions row ───────────────────────────────────────────────────────────
+
+class _ReactionsRow extends StatelessWidget {
+  const _ReactionsRow({
+    required this.reactions,
+    required this.currentUser,
+    required this.onTap,
+  });
+  final Map<String, dynamic> reactions;
+  final String currentUser;
+  final void Function(String emoji) onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    // Group by emoji → count
+    final counts = <String, int>{};
+    String? mine;
+    reactions.forEach((user, emoji) {
+      final e = (emoji ?? '').toString();
+      if (e.isEmpty) return;
+      counts[e] = (counts[e] ?? 0) + 1;
+      if (user == currentUser) mine = e;
+    });
+    if (counts.isEmpty) return const SizedBox.shrink();
+
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: counts.entries.map((e) {
+        final isMine = mine == e.key;
+        return TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0.5, end: 1.0),
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutBack,
+          builder: (_, v, child) =>
+              Transform.scale(scale: v, child: child),
+          child: GestureDetector(
+            onTap: () => onTap(e.key),
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: isMine
+                    ? AppColors.accent.withOpacity(0.18)
+                    : AppColors.panel,
+                borderRadius: AppRadius.fullBr,
+                border: Border.all(
+                  color: isMine
+                      ? AppColors.accentBorder3
+                      : AppColors.border,
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(e.key, style: const TextStyle(fontSize: 13)),
+                  if (e.value > 1) ...[
+                    const SizedBox(width: 4),
+                    Text(
+                      '${e.value}',
+                      style: TextStyle(
+                        color: isMine
+                            ? AppColors.text
+                            : AppColors.muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+// ─── Avatar ──────────────────────────────────────────────────────────────────
+
+class _Avatar extends StatelessWidget {
+  const _Avatar({
+    required this.size,
+    required this.username,
+    this.imageUrl,
+    this.showImage = true,
+    this.fontSize,
+  });
+
+  final double size;
+  final String username;
+  final String? imageUrl;
+  final bool showImage;
+  final double? fontSize;
+
+  static Color _color(String name) {
+    const colors = [
+      Color(0xFF5C6BC0), Color(0xFF7B52AB), Color(0xFF00897B),
+      Color(0xFF1565C0), Color(0xFF6D4C41), Color(0xFF2E7D32),
+      Color(0xFF37474F), Color(0xFF6A1B9A),
+    ];
+    if (name.isEmpty) return AppColors.panelAlt;
+    return colors[name.codeUnitAt(0) % colors.length];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage =
+        showImage && imageUrl != null && imageUrl!.isNotEmpty;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: _color(username),
+        shape: BoxShape.circle,
+        image: hasImage
+            ? DecorationImage(
+                // memCache auf 2× DPR-Größe begrenzen — Avatar ist <80 px,
+                // ohne Limit landet ein 1080-px-Original im RAM.
+                image: ResizeImage(
+                  CachedNetworkImageProvider(imageUrl!),
+                  width: (size * 2).round(),
+                ),
+                fit: BoxFit.cover,
+              )
+            : null,
+      ),
+      alignment: Alignment.center,
+      child: hasImage
+          ? null
+          : Text(
+              username.isNotEmpty ? username[0].toUpperCase() : '?',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: fontSize ?? (size * 0.4),
+              ),
+            ),
+    );
+  }
+}
+
+// ─── Typing bubble ───────────────────────────────────────────────────────────
+
+class _TypingBubble extends StatelessWidget {
+  const _TypingBubble({required this.username, this.imageUrl});
+  final String username;
+  final String? imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 14, 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          _Avatar(
+            size: 28,
+            username: username,
+            imageUrl: imageUrl,
+            showImage: imageUrl != null && imageUrl!.isNotEmpty,
+            fontSize: 11,
+          ),
+          const SizedBox(width: 6),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+            decoration: const BoxDecoration(
+              color: AppColors.panelAlt,
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(18),
+                topRight: Radius.circular(18),
+                bottomLeft: Radius.circular(4),
+                bottomRight: Radius.circular(18),
+              ),
+            ),
+            child: const _TypingDots(),
           ),
         ],
       ),
@@ -723,7 +1482,53 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   }
 }
 
-// ── Shimmer bubble ────────────────────────────────────────────────────────────
+class _TypingDots extends StatefulWidget {
+  const _TypingDots();
+
+  @override
+  State<_TypingDots> createState() => _TypingDotsState();
+}
+
+class _TypingDotsState extends State<_TypingDots> {
+  int _active = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 380), (_) {
+      if (mounted) setState(() => _active = (_active + 1) % 3);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(3, (i) {
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          margin: const EdgeInsets.symmetric(horizontal: 2.5),
+          width: _active == i ? 8 : 6,
+          height: _active == i ? 8 : 6,
+          decoration: BoxDecoration(
+            color: _active == i ? AppColors.muted : AppColors.subtle,
+            shape: BoxShape.circle,
+          ),
+        );
+      }),
+    );
+  }
+}
+
+// ─── Shimmer placeholder ─────────────────────────────────────────────────────
+
 class _ShimmerBubble extends StatefulWidget {
   final bool isMe;
   final double width;
@@ -760,9 +1565,8 @@ class _ShimmerBubbleState extends State<_ShimmerBubble>
         final c = Color.lerp(
             const Color(0xFF1A1C22), const Color(0xFF252830), _ctrl.value)!;
         return Align(
-          alignment: widget.isMe
-              ? Alignment.centerRight
-              : Alignment.centerLeft,
+          alignment:
+              widget.isMe ? Alignment.centerRight : Alignment.centerLeft,
           child: Container(
             width: widget.width,
             height: 42,
@@ -772,10 +1576,8 @@ class _ShimmerBubbleState extends State<_ShimmerBubble>
               borderRadius: BorderRadius.only(
                 topLeft: const Radius.circular(18),
                 topRight: const Radius.circular(18),
-                bottomLeft:
-                    Radius.circular(widget.isMe ? 18 : 4),
-                bottomRight:
-                    Radius.circular(widget.isMe ? 4 : 18),
+                bottomLeft: Radius.circular(widget.isMe ? 18 : 4),
+                bottomRight: Radius.circular(widget.isMe ? 4 : 18),
               ),
             ),
           ),
@@ -785,50 +1587,87 @@ class _ShimmerBubbleState extends State<_ShimmerBubble>
   }
 }
 
-// ── Typing dots ───────────────────────────────────────────────────────────────
-class _TypingDots extends StatefulWidget {
-  const _TypingDots();
+// ─── Double-tap heart overlay ────────────────────────────────────────────────
+// Wraps a child and, on double-tap, runs the supplied callback (toggle ❤️
+// reaction) AND shows a quick popping heart animation over the bubble.
+
+class _DoubleTapHeart extends StatefulWidget {
+  const _DoubleTapHeart({required this.child, required this.onDoubleTap});
+
+  final Widget child;
+  final VoidCallback onDoubleTap;
 
   @override
-  State<_TypingDots> createState() => _TypingDotsState();
+  State<_DoubleTapHeart> createState() => _DoubleTapHeartState();
 }
 
-class _TypingDotsState extends State<_TypingDots> {
-  int _active = 0;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _timer = Timer.periodic(
-        const Duration(milliseconds: 380),
-        (_) {
-          if (mounted) setState(() => _active = (_active + 1) % 3);
-        });
-  }
+class _DoubleTapHeartState extends State<_DoubleTapHeart>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 720),
+  );
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _ctrl.dispose();
     super.dispose();
+  }
+
+  void _trigger() {
+    HapticFeedback.mediumImpact();
+    widget.onDoubleTap();
+    _ctrl.forward(from: 0);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: List.generate(3, (i) {
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          margin: const EdgeInsets.symmetric(horizontal: 2.5),
-          width: _active == i ? 8 : 6,
-          height: _active == i ? 8 : 6,
-          decoration: BoxDecoration(
-            color: _active == i ? AppColors.muted : AppColors.subtle,
-            shape: BoxShape.circle,
+    return GestureDetector(
+      onDoubleTap: _trigger,
+      // wichtig: behavior=opaque, sonst werden DoubleTaps am Rand verschluckt
+      behavior: HitTestBehavior.opaque,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          widget.child,
+          IgnorePointer(
+            child: AnimatedBuilder(
+              animation: _ctrl,
+              builder: (_, __) {
+                if (_ctrl.value == 0) return const SizedBox.shrink();
+                final t = _ctrl.value;
+                final scale = t < 0.4
+                    ? Curves.easeOutBack.transform(t / 0.4) * 1.0
+                    : 1.0 + (t - 0.4) * 0.4;
+                final opacity = t < 0.7 ? 1.0 : (1.0 - (t - 0.7) / 0.3);
+                return Opacity(
+                  opacity: opacity.clamp(0.0, 1.0),
+                  child: Transform.translate(
+                    offset: Offset(0, -10 * t),
+                    child: Transform.scale(
+                      scale: scale,
+                      child: const Text(
+                        '❤️',
+                        style: TextStyle(
+                          fontSize: 56,
+                          shadows: [
+                            Shadow(
+                              color: Colors.black54,
+                              blurRadius: 12,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
-        );
-      }),
+        ],
+      ),
     );
   }
 }

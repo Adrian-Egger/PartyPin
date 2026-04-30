@@ -7,6 +7,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'new_party.dart';
+import 'ticket_purchase_section.dart';
+import 'ticket_scanner_screen.dart';
 import '../../Services/app_draggable_sheet.dart';
 import '../profile/user_profile_screen.dart';
 import '../../Theme/app_theme.dart';
@@ -285,7 +287,22 @@ class PartyBottomSheet extends StatelessWidget {
         positive: value == 'good',
       );
     } on FirebaseFunctionsException catch (e) {
-      if (context.mounted) showStatusSnack(context, "Fehler: ${e.code}", positive: false);
+      final msg = (e.message ?? '').toLowerCase();
+      String userMsg;
+      if (msg.contains('outside 24h window')) {
+        userMsg = "Bewertungsfenster ist geschlossen (24h ab Partybeginn).";
+      } else if (msg.contains('not approved')) {
+        userMsg = "Du musst freigegeben sein, um zu bewerten.";
+      } else if (msg.contains('only going/maybe')) {
+        userMsg = "Nur Zusagen oder Vielleicht können bewerten.";
+      } else if (msg.contains('host cannot rate')) {
+        userMsg = "Hosts können ihre eigene Party nicht bewerten.";
+      } else if (e.code == 'unauthenticated') {
+        userMsg = "Nicht eingeloggt.";
+      } else {
+        userMsg = "Fehler: ${e.message ?? e.code}";
+      }
+      if (context.mounted) showStatusSnack(context, userMsg, positive: false);
     } catch (e) {
       if (context.mounted) showStatusSnack(context, "Fehler: $e", positive: false);
     }
@@ -303,57 +320,101 @@ class PartyBottomSheet extends StatelessWidget {
 
   Widget _ratingButtons(BuildContext context) {
     final canRate = currentUsername != null && _uid() != null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _sectionLabel("Bewertung (24h ab Partybeginn)"),
-        const SizedBox(height: 10),
-        Row(children: [
-          Expanded(
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.success,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
-                elevation: 0,
-              ),
-              onPressed: canRate ? () => _setRatingViaFunction(context, 'good') : null,
-              icon: const Icon(Icons.thumb_up_outlined, size: 16),
-              label: const Text("Gut", style: TextStyle(fontWeight: FontWeight.w700)),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accent,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
-                elevation: 0,
-              ),
-              onPressed: canRate ? () => _setRatingViaFunction(context, 'bad') : null,
-              icon: const Icon(Icons.thumb_down_outlined, size: 16),
-              label: const Text("Schlecht", style: TextStyle(fontWeight: FontWeight.w700)),
-            ),
-          ),
-        ]),
-        const SizedBox(height: 8),
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: ratingsStream(),
-          builder: (context, snap) {
-            final docs = snap.data?.docs ?? [];
-            final good = docs.where((d) => d.data()['value'] == 'good').length;
-            final bad  = docs.where((d) => d.data()['value'] == 'bad').length;
-            return Text(
+    final myUid = _uid();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: ratingsStream(),
+      builder: (context, snap) {
+        final docs = snap.data?.docs ?? [];
+        final good = docs.where((d) => d.data()['value'] == 'good').length;
+        final bad  = docs.where((d) => d.data()['value'] == 'bad').length;
+
+        QueryDocumentSnapshot<Map<String, dynamic>>? myDoc;
+        if (myUid != null) {
+          for (final d in docs) {
+            if (d.id == myUid) { myDoc = d; break; }
+          }
+        }
+        final hasRated = myDoc != null;
+        final myValue  = myDoc?.data()['value']?.toString();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _sectionLabel("Bewertung (24h ab Partybeginn)"),
+            const SizedBox(height: 10),
+            if (hasRated)
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                decoration: BoxDecoration(
+                  color: AppColors.success.withAlpha(22),
+                  borderRadius: AppRadius.smBr,
+                  border: Border.all(color: AppColors.success.withAlpha(90)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      myValue == 'good'
+                          ? Icons.thumb_up_rounded
+                          : Icons.thumb_down_rounded,
+                      color: AppColors.success,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        "Danke für deine Bewertung!",
+                        style: TextStyle(
+                          color: AppColors.text,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Row(children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.success,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+                      elevation: 0,
+                    ),
+                    onPressed: canRate ? () => _setRatingViaFunction(context, 'good') : null,
+                    icon: const Icon(Icons.thumb_up_outlined, size: 16),
+                    label: const Text("Gut", style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+                      elevation: 0,
+                    ),
+                    onPressed: canRate ? () => _setRatingViaFunction(context, 'bad') : null,
+                    icon: const Icon(Icons.thumb_down_outlined, size: 16),
+                    label: const Text("Schlecht", style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ),
+              ]),
+            const SizedBox(height: 8),
+            Text(
               "$good positiv · $bad negativ",
               textAlign: TextAlign.center,
               style: const TextStyle(color: AppColors.muted, fontSize: 12),
-            );
-          },
-        ),
-      ],
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -514,6 +575,10 @@ class PartyBottomSheet extends StatelessWidget {
           child: CachedNetworkImage(
             imageUrl: url,
             fit: BoxFit.cover,
+            // Thumb ist 160 × 120 — bei DPR 3 reichen 480 px → spart bis zu 90 % RAM
+            memCacheWidth: 480,
+            memCacheHeight: 360,
+            maxWidthDiskCache: 800,
             placeholder: (_, __) => const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.muted))),
             errorWidget: (_, __, ___) => const Center(child: Icon(Icons.broken_image_outlined, color: AppColors.subtle)),
           ),
@@ -879,6 +944,36 @@ class PartyBottomSheet extends StatelessWidget {
               else
                 _hostOpenLists(context),
               const SizedBox(height: 16),
+              if (data['ticketsEnabled'] == true) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.success,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+                      elevation: 0,
+                    ),
+                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                    label: const Text(
+                      "Tickets scannen",
+                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => TicketScannerScreen(
+                            partyId: partyId,
+                            partyName: (data['name'] ?? 'Party').toString(),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
@@ -918,6 +1013,10 @@ class PartyBottomSheet extends StatelessWidget {
                 const SizedBox.shrink()
               else
                 _guestClosedActions(context),
+
+              // Tickets (nur Nicht-Hosts, bei aktivierten Tickets)
+              if (!isHost && (data['ticketsEnabled'] == true) && canSeeFull && isActive)
+                TicketPurchaseSection(partyId: partyId, partyData: data),
 
               // Rating
               const SizedBox(height: 12),
