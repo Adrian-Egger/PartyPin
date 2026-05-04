@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:google_maps_flutter_android/google_maps_flutter_android.dart';
 import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
@@ -19,43 +22,63 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 Future<void> main() async {
+  // 1. Flutter binding
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Phase 1: alles, was unabhängig voneinander laufen kann, parallel starten.
-  // Reihenfolge der Sequenzialitäten:
-  //   • Firebase muss vor signInAnonymously fertig sein.
-  //   • Lang.load / StripeService.init / Maps-Renderer sind unabhängig.
-  //   • DeepLinkHandler nutzt Auth — kommt nach Phase 2.
+  // 2. Phase 1: alles, was KEIN Firebase-Service braucht, parallel.
+  //    - Firebase.initializeApp        (schwerste Init-Operation)
+  //    - Lang.load                     (SharedPreferences read)
+  //    - Maps-Renderer (Android)       (Native Surface-Setup)
+  //    Statt sequenziell laufen sie gleichzeitig — typisch 200-500ms
+  //    Cold-Start-Ersparnis.
   final mapsImpl = GoogleMapsFlutterPlatform.instance;
-
   final mapsFuture = (mapsImpl is GoogleMapsFlutterAndroid)
-      // Use SurfaceAndroidViewController so the GoogleMap native view does
-      // not intercept the IME connection — without this, the map steals text
-      // input focus on all screens when using IndexedStack.
+      // Surface-Renderer, damit GoogleMap nicht den IME-Fokus stiehlt.
       ? mapsImpl.initializeWithRenderer(AndroidMapRenderer.latest)
       : Future<void>.value();
 
-  final firebaseFuture = Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
-  // Diese drei brauchen Firebase NICHT → sofort parallel starten.
-  final langFuture = Lang.load();
-  final stripeFuture = StripeService.init();
-
-  await Future.wait([mapsFuture, firebaseFuture, langFuture, stripeFuture]);
-
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
-  // Phase 2: Auth + Notifications + DeepLinks parallel — alle drei brauchen
-  // ein initialisiertes Firebase, sind aber untereinander unabhängig.
   await Future.wait<void>([
-    if (FirebaseAuth.instance.currentUser == null)
-      FirebaseAuth.instance.signInAnonymously().then((_) {}),
-    NotificationService.init().catchError((_) {}),
-    DeepLinkHandler.start(),
+    Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform),
+    Lang.load(),
+    mapsFuture,
   ]);
 
+  // 3. App Check FORCED DEBUG MODE — KRITISCHER SYNC-POINT.
+  //    Muss unmittelbar nach Firebase.initializeApp() laufen, bevor
+  //    irgendein Firebase-Service einen App-Check-Token anfordert.
+  //    Sonst greift der native Default-Provider und liefert 403.
+  //
+  //    Vor Production-Release auf Play Integrity / Device Check
+  //    zurueckstellen.
+  await FirebaseAppCheck.instance.activate(
+    androidProvider: AndroidProvider.debug,
+    appleProvider: AppleProvider.debug,
+  );
+  // ignore: avoid_print
+  print("DEBUG APPCHECK ACTIVE");
+
+  // 4. Phase 2: Stripe + (optional) anonyme Auth parallel.
+  //    Stripe haengt nicht von Auth ab und umgekehrt.
+  //    signInAnonymously nur, wenn noch kein User da ist — vermeidet
+  //    einen unnoetigen Netzwerk-Roundtrip beim Warmstart.
+  await Future.wait<void>([
+    StripeService.init(),
+    if (FirebaseAuth.instance.currentUser == null)
+      FirebaseAuth.instance.signInAnonymously().then((_) {}),
+  ]);
+
+  // Background-Handler: SYNCHRONOUS Registrierung, kein await.
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // 5. Fire-and-forget — NICHT im kritischen Start-Pfad warten.
+  //    NotificationService.init() oeffnet beim Erstinstall den OS-
+  //    Permission-Prompt, das wuerde sonst den Splashscreen blockieren
+  //    bis der User antwortet (Sekunden!). DeepLinkHandler verarbeitet
+  //    den Initial-Link auch noch nach UI-Mount korrekt.
+  unawaited(NotificationService.init().catchError((_) {}));
+  unawaited(DeepLinkHandler.start().catchError((_) {}));
+
+  // 6. UI starten — App ist sichtbar.
   runApp(const MyApp());
 }
 

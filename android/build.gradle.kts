@@ -1,14 +1,17 @@
 // Top-level build.gradle.kts
 
+// Versionen müssen mit settings.gradle.kts (pluginManagement) konsistent
+// bleiben. Subprojekte mit Legacy `apply plugin:` Syntax (z. B. das
+// vendored qr_code_scanner) ziehen Klassenpfade aus diesem buildscript-Block
+// → falsche Version hier verursacht Kotlin-Metadata-Konflikte.
 buildscript {
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
-        // Hier ggf. die Android Gradle Plugin Version anpassen
-        classpath("com.android.tools.build:gradle:8.1.1")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.0")
+        classpath("com.android.tools.build:gradle:8.9.1")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20")
     }
 }
 

@@ -1,11 +1,17 @@
 // lib/Screens/party/ticket_scanner_screen.dart
 // Host-only: scannt QR-Codes von Tickets, validiert sie via Cloud Function
 // und zeigt grünes ✅ oder rotes ❌ Overlay.
+//
+// Implementierung mit `qr_code_scanner` (QRView). `mobile_scanner` und
+// ML-Kit werden NICHT verwendet — keine iOS-Dependency-Konflikte.
+
+import 'dart:io';
 
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:qr_code_scanner/qr_code_scanner.dart';
 
 import '../../Services/stripe_service.dart';
 import '../../Theme/app_theme.dart';
@@ -25,32 +31,55 @@ class TicketScannerScreen extends StatefulWidget {
 }
 
 class _TicketScannerScreenState extends State<TicketScannerScreen> {
-  final MobileScannerController _controller = MobileScannerController(
-    detectionSpeed: DetectionSpeed.normal,
-    facing: CameraFacing.back,
-  );
+  // Schlüssel ist von qr_code_scanner für Hot-Reload-Korrektheit empfohlen.
+  final GlobalKey _qrKey = GlobalKey(debugLabel: 'qr_ticket_scanner');
 
+  QRViewController? _qrController;
+  bool _flashOn = false;
   bool _processing = false;
   _ScanOutcome? _result;
   String? _lastCode;
 
   @override
+  void reassemble() {
+    super.reassemble();
+    // Hot-Reload-Workaround aus dem qr_code_scanner README:
+    // Auf iOS muss die Kamera-Vorschau pausiert, auf Android wieder
+    // explizit gestartet werden.
+    if (Platform.isIOS) {
+      _qrController?.pauseCamera();
+    } else {
+      _qrController?.resumeCamera();
+    }
+  }
+
+  @override
   void dispose() {
-    _controller.dispose();
+    _qrController?.dispose();
     super.dispose();
   }
 
-  Future<void> _onDetect(BarcodeCapture capture) async {
+  void _onQRViewCreated(QRViewController controller) {
+    _qrController = controller;
+    controller.scannedDataStream.listen(_onScan);
+  }
+
+  Future<void> _onScan(Barcode scan) async {
     if (_processing || _result != null) return;
-    final barcodes = capture.barcodes;
-    if (barcodes.isEmpty) return;
-    final code = barcodes.first.rawValue;
-    if (code == null || code.isEmpty) return;
+    final code = scan.code?.trim() ?? '';
+    if (code.isEmpty) return;
     if (code == _lastCode) return;
     _lastCode = code;
 
+    if (kDebugMode) {
+      debugPrint('[TicketScanner] Scanned: $code');
+    }
+
     setState(() => _processing = true);
     HapticFeedback.mediumImpact();
+
+    // Während der Validierung Kamera pausieren — vermeidet Mehrfach-Scans.
+    await _qrController?.pauseCamera();
 
     try {
       final res = await StripeService.validateTicket(
@@ -76,15 +105,35 @@ class _TicketScannerScreenState extends State<TicketScannerScreen> {
     }
   }
 
-  void _resetForNextScan() {
+  Future<void> _resetForNextScan() async {
     setState(() {
       _result = null;
       _lastCode = null;
     });
+    await _qrController?.resumeCamera();
+  }
+
+  Future<void> _toggleTorch() async {
+    try {
+      await _qrController?.toggleFlash();
+      final state = await _qrController?.getFlashStatus();
+      if (mounted) setState(() => _flashOn = state ?? !_flashOn);
+    } catch (_) {}
+  }
+
+  Future<void> _flipCamera() async {
+    try {
+      await _qrController?.flipCamera();
+    } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
+    final scanArea = (MediaQuery.of(context).size.width < 400 ||
+            MediaQuery.of(context).size.height < 400)
+        ? 200.0
+        : 280.0;
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -93,43 +142,48 @@ class _TicketScannerScreenState extends State<TicketScannerScreen> {
         foregroundColor: Colors.white,
         actions: [
           IconButton(
-            icon: ValueListenableBuilder<MobileScannerState>(
-              valueListenable: _controller,
-              builder: (_, state, __) => Icon(
-                state.torchState == TorchState.on
-                    ? Icons.flash_on_rounded
-                    : Icons.flash_off_rounded,
-              ),
+            icon: Icon(
+              _flashOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
             ),
-            onPressed: () => _controller.toggleTorch(),
+            onPressed: _toggleTorch,
           ),
           IconButton(
             icon: const Icon(Icons.cameraswitch_rounded),
-            onPressed: () => _controller.switchCamera(),
+            onPressed: _flipCamera,
           ),
         ],
       ),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          MobileScanner(
-            controller: _controller,
-            onDetect: _onDetect,
-          ),
-
-          // Halbtransparenter Sucher-Rahmen
-          Center(
-            child: Container(
-              width: 260,
-              height: 260,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white70, width: 2),
-                borderRadius: BorderRadius.circular(20),
-              ),
+          // Kamera-Vorschau mit eingebautem Sucher-Overlay
+          QRView(
+            key: _qrKey,
+            onQRViewCreated: _onQRViewCreated,
+            // Auf QR-Codes beschränken, andere Barcode-Typen ignorieren.
+            formatsAllowed: const [BarcodeFormat.qrcode],
+            overlay: QrScannerOverlayShape(
+              borderColor: AppColors.accent,
+              borderRadius: 16,
+              borderLength: 28,
+              borderWidth: 6,
+              cutOutSize: scanArea,
             ),
+            onPermissionSet: (ctrl, granted) {
+              if (!granted && mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    behavior: SnackBarBehavior.floating,
+                    content: Text(
+                      'Kamerazugriff verweigert — bitte in den Einstellungen erlauben.',
+                    ),
+                  ),
+                );
+              }
+            },
           ),
 
-          // Hint
+          // Hint-Pille unter dem Sucher
           Positioned(
             left: 0,
             right: 0,
@@ -158,8 +212,8 @@ class _TicketScannerScreenState extends State<TicketScannerScreen> {
               onClose: () => Navigator.of(context).pop(),
             ),
 
-          // Loading Indicator
-          if (_processing)
+          // Loading-Indicator während Validierung
+          if (_processing && _result == null)
             const Positioned.fill(
               child: ColoredBox(
                 color: Colors.black54,
@@ -173,6 +227,8 @@ class _TicketScannerScreenState extends State<TicketScannerScreen> {
     );
   }
 }
+
+// ─── Result overlay ──────────────────────────────────────────────────────────
 
 class _ResultOverlay extends StatelessWidget {
   const _ResultOverlay({
@@ -235,7 +291,8 @@ class _ResultOverlay extends StatelessWidget {
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.white,
                           side: const BorderSide(color: Colors.white70),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12)),
                         ),
@@ -250,7 +307,8 @@ class _ResultOverlay extends StatelessWidget {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.white,
                           foregroundColor: color,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12)),
                           elevation: 0,
@@ -267,6 +325,8 @@ class _ResultOverlay extends StatelessWidget {
     );
   }
 }
+
+// ─── Scan outcome ────────────────────────────────────────────────────────────
 
 class _ScanOutcome {
   _ScanOutcome._({

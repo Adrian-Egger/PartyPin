@@ -215,6 +215,36 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
+      // Bar-Account muss freigeschaltet sein. status: "pending" / "rejected"
+      // landet hier — Login wird abgewiesen mit verstaendlichem Hinweis.
+      if (userType == "bar") {
+        final status = (userData["status"] ?? "").toString();
+        if (status == "pending") {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: const Text(
+                'Dein Bar-Account wartet noch auf Freischaltung durch das Admin-Team.'),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ));
+          return;
+        }
+        if (status == "rejected" || status == "declined") {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: const Text(
+                'Dein Bar-Account wurde abgelehnt. Bitte kontaktiere den Support.'),
+            backgroundColor: AppColors.accent,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ));
+          return;
+        }
+      }
+
       // Typ-Kontrolle: Auswahl muss zum Account-Typ passen
       if (_loginAsCompany && userType != "bar") {
         ScaffoldMessenger.of(context).showSnackBar(

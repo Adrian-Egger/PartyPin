@@ -12,8 +12,14 @@ plugins {
 android {
     namespace = "com.partypin.party_pin"
     compileSdk = 36
+    // Vom qr_code_scanner-Plugin verlangt — Mismatch mit der vorher
+    // genutzten NDK-27-Version war der Build-Blocker.
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
+        // Aktiviert Core-Library-Desugaring (Java 8+ APIs auf älteren
+        // Android-Versionen). qr_code_scanner verlangt das.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -60,4 +66,10 @@ android {
             signingConfig = signingConfigs.getByName("release")
         }
     }
+}
+
+dependencies {
+    // Liefert die Java-8+-API-Stubs für ältere Android-Versionen — wird
+    // durch `isCoreLibraryDesugaringEnabled = true` aktiviert.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }

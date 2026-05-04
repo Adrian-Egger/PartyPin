@@ -97,5 +97,8 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Die App verwendet deinen Standort, um dir standortbasierte Funktionen wie Partys und Events in deiner Nähe auf der Karte anzeigen zu können.</string>
 
+	<key>NSCameraUsageDescription</key>
+    <string>Kamera wird zum Scannen benötigt</string>
+
 </dict>
 </plist>

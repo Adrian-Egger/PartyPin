@@ -1,4 +1,5 @@
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -60,6 +61,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
   bool _busyAvatar = false;
 
+  // Live-Listener auf das User-Doc — aktualisiert _email / _pendingEmail
+  // sofort, wenn die verifyEmailToken-Cloud-Function pendingEmail → email
+  // verschiebt (User klickt den Bestätigungslink in der Mail).
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userDocSub;
+
   final ImagePicker _picker = ImagePicker();
 
   @override
@@ -70,6 +76,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
   @override
   void dispose() {
+    _userDocSub?.cancel();
     _usernameController.dispose();
     _bioController.dispose();
     _emailController.dispose();
@@ -139,6 +146,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       await prefs.setString(
           'accountType', collectionName == "bars" ? "bar" : "user");
 
+      // ✅ Live-Listener aufsetzen — der Bildschirm wird automatisch
+      //    aktualisiert, sobald der User den Bestätigungslink in der Mail
+      //    klickt (Cloud Function schiebt pendingEmail → email).
+      _attachUserDocListener();
+
       return true;
     }
 
@@ -163,6 +175,53 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       _avatar = cachedAvatar;
       _passwordFromDb = password;
       _docId = "";
+    });
+  }
+
+  /// Live-Stream auf `users/{docId}` (oder `bars/{docId}`). Aktualisiert
+  /// `_email` + `_pendingEmail` sofort, wenn der Server die Felder ändert
+  /// — typisch: User klickt den Verifikationslink, Cloud Function setzt
+  /// `email = pendingEmail` und löscht die `pendingEmail`-Felder.
+  ///
+  /// Bonus: zeigt einen kurzen Toast, wenn die ausstehende Mail gerade
+  /// verifiziert wurde.
+  void _attachUserDocListener() {
+    _userDocSub?.cancel();
+    if (_docId.isEmpty) return;
+
+    _userDocSub = _col.doc(_docId).snapshots().listen((snap) async {
+      if (!mounted || !snap.exists) return;
+      final data = snap.data() ?? {};
+      final newEmail = (data['email'] ?? '').toString().trim();
+      final newPending = (data['pendingEmail'] ?? '').toString().trim();
+
+      // Wenn vorher pending war und jetzt nicht mehr → Verifikation hat
+      // gerade stattgefunden. Optisches Feedback geben.
+      final wasPending = _pendingEmail.isNotEmpty;
+      final justVerified =
+          wasPending && newPending.isEmpty && newEmail.isNotEmpty;
+
+      // Spiegel in SharedPreferences (für Ticket-Kauf-Resolver).
+      if (newEmail.isNotEmpty && newEmail != _email) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('userEmail', newEmail);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _email = newEmail;
+        _pendingEmail = newPending;
+        if (_editing != 'email') {
+          _emailController.text = newEmail;
+        }
+      });
+
+      if (justVerified) {
+        _showSnack('E-Mail $newEmail wurde bestätigt ✅',
+            color: AppColors.success);
+      }
+    }, onError: (_) {
+      // Listener-Fehler dürfen den Screen nicht crashen.
     });
   }
 
@@ -1059,11 +1118,16 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         }),
                       ),
                       const Divider(height: 1, color: Color(0xFF2A2D35)),
-                      // E-Mail row (für QR-Code-Versand bei Ticket-Käufen)
+                      // E-Mail row (für QR-Code-Versand bei Ticket-Käufen).
+                      // Status-Badge rechts:
+                      //   • verifiziert (email vorhanden, pending leer) → grünes ✓
+                      //   • pending vorhanden                            → oranges Sanduhr-Icon
+                      //   • nichts                                       → kein Badge
                       _settingRow(
                         icon: Icons.alternate_email_rounded,
                         label: 'E-Mail',
                         editing: _editing == 'email',
+                        trailing: _emailStatusBadge(),
                         displayValue: _email.isEmpty
                             ? (_pendingEmail.isNotEmpty
                                 ? '$_pendingEmail · wartet auf Bestätigung'
@@ -1196,6 +1260,86 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         ),
       );
 
+  /// Liefert das Status-Icon, das rechts neben dem E-Mail-Eintrag erscheint.
+  ///   • Verifizierte Mail (email vorhanden, kein pending)  → grüner Haken
+  ///   • Pending Verifikation (pendingEmail gesetzt)        → orange Sanduhr
+  ///   • Sonst                                              → leer
+  ///
+  /// AnimatedSwitcher sorgt dafür, dass der Wechsel von „pending" zu
+  /// „verifiziert" sanft fadet — wir bekommen das per Live-Listener
+  /// automatisch ohne Reload.
+  Widget _emailStatusBadge() {
+    Widget child;
+    if (_email.isNotEmpty && _pendingEmail.isEmpty) {
+      child = Container(
+        key: const ValueKey('verified'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: AppColors.success.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+              color: AppColors.success.withOpacity(0.55), width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.check_circle_rounded,
+                color: AppColors.success, size: 14),
+            SizedBox(width: 4),
+            Text(
+              'verifiziert',
+              style: TextStyle(
+                color: AppColors.success,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (_pendingEmail.isNotEmpty) {
+      child = Container(
+        key: const ValueKey('pending'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFA000).withOpacity(0.15),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+              color: const Color(0xFFFFA000).withOpacity(0.55), width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.hourglass_top_rounded,
+                color: Color(0xFFFFA000), size: 14),
+            SizedBox(width: 4),
+            Text(
+              'wartet',
+              style: TextStyle(
+                color: Color(0xFFFFA000),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      child = const SizedBox(key: ValueKey('none'), width: 0);
+    }
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 280),
+      transitionBuilder: (child, anim) => ScaleTransition(
+        scale: anim,
+        child: FadeTransition(opacity: anim, child: child),
+      ),
+      child: child,
+    );
+  }
+
   Widget _settingRow({
     required IconData icon,
     required String label,
@@ -1205,6 +1349,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     required VoidCallback onEdit,
     required VoidCallback onSave,
     required VoidCallback onCancel,
+    Widget? trailing,
   }) {
     return GestureDetector(
       onTap: editing ? null : onEdit,
@@ -1229,6 +1374,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                   ],
                 ),
               ),
+              if (trailing != null && !editing) ...[
+                const SizedBox(width: 8),
+                trailing,
+              ],
             ],
           ),
           if (editing) ...[

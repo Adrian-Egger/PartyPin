@@ -69,7 +69,15 @@ class AppCurves {
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
 class AppTheme {
-  static ThemeData get dark {
+  // Cache: das Theme ist immutable und teuer zu bauen (GoogleFonts.inter*
+  // erzeugt komplette TextTheme-Hierarchie + ColorScheme + 8 Komponenten-
+  // Themes). Bei jedem Rebuild von MaterialApp (z. B. wegen Sprachwechsel
+  // via langNotifier) würde `theme: AppTheme.dark` sonst alles neu rechnen.
+  static ThemeData? _cached;
+
+  static ThemeData get dark => _cached ??= _buildDark();
+
+  static ThemeData _buildDark() {
     final base = GoogleFonts.interTextTheme(ThemeData.dark().textTheme);
 
     final textTheme = base.copyWith(

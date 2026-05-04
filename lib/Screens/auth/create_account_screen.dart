@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../home/selection_screen.dart';
+import 'bar_signup_wizard.dart';
 import 'login_screen.dart';
 import 'nutzungsbedinungen.dart';
 import '../home/home_shell.dart';
@@ -592,52 +593,22 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
       }
 
       if (_isBar) {
-        final barName = _barNameController.text.trim();
-        final email = _emailController.text.trim();
-        final phone = _phoneController.text.trim();
-        final availability = _availabilityController.text.trim();
-
-        await FirebaseFirestore.instance.collection("barAnfragen").add({
-          "createdAt": FieldValue.serverTimestamp(),
-          "barName": barName,
-          "username": username,
-          "username_lower": username.toLowerCase(),
-          "email": email,
-          "phoneNumber": phone,
-          "availabilityNote": availability,
-          "requestedPassword": password,
-          "status": "open",
-        });
-
+        // Bar-Anfragen laufen jetzt ueber den 3-Schritt-Wizard. Die Werte,
+        // die der User hier schon eingetippt hat, werden vorausgefuellt.
         if (!mounted) return;
-
-        await showDialog(
-          context: context,
-          builder: (_) => AlertDialog(
-            backgroundColor: _panel,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: Text(
-              Lang.t('reg_dialog_title'),
-              style: const TextStyle(color: _textPrimary),
+        setState(() => _isSaving = false);
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => BarSignupWizard(
+              initialBarName: _barNameController.text.trim(),
+              initialUsername: username,
+              initialPassword: password,
+              initialEmail: _emailController.text.trim(),
+              initialPhone: _phoneController.text.trim(),
             ),
-            content: Text(
-              Lang.t('reg_dialog_body'),
-              style: const TextStyle(color: _textSecondary),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(Lang.t('ok'), style: const TextStyle(color: _textPrimary)),
-              )
-            ],
           ),
         );
-
-        if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-        );
+        return;
       } else {
         final prefs = await SharedPreferences.getInstance();
 
