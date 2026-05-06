@@ -1,16 +1,23 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-// ignore: avoid_print
 
 class NotificationService {
   static final _messaging = FirebaseMessaging.instance;
+
+  static void _log(String msg) {
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print(msg);
+    }
+  }
 
   static Future<void> init() async {
     try {
       final settings = await _messaging.requestPermission(
           alert: true, badge: true, sound: true);
-      print('[FCM] Permission: ${settings.authorizationStatus}');
+      _log('[FCM] Permission: ${settings.authorizationStatus}');
 
       await _messaging.setForegroundNotificationPresentationOptions(
         alert: true,
@@ -19,14 +26,14 @@ class NotificationService {
       );
 
       final token = await _messaging.getToken();
-      print('[FCM] Token: $token');
+      _log('[FCM] Token: $token');
       if (token != null) await _saveToken(token);
       _messaging.onTokenRefresh.listen((t) {
-        print('[FCM] Token refreshed: $t');
+        _log('[FCM] Token refreshed: $t');
         _saveToken(t);
       });
     } catch (e) {
-      print('[FCM] init error: $e');
+      _log('[FCM] init error: $e');
     }
   }
 
@@ -44,7 +51,7 @@ class NotificationService {
         (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '')
             .trim();
     if (username.isEmpty) {
-      print('[FCM] _saveToken: no username in prefs, skipping');
+      _log('[FCM] _saveToken: no username in prefs, skipping');
       return;
     }
 
@@ -68,14 +75,14 @@ class NotificationService {
               .get();
           if (q.docs.isNotEmpty) {
             await q.docs.first.reference.set(data, SetOptions(merge: true));
-            print('[FCM] Token saved to $col/${q.docs.first.id}');
+            _log('[FCM] Token saved to $col/${q.docs.first.id}');
             return;
           }
         } catch (e) {
-          print('[FCM] _saveToken query error ($col.$field): $e');
+          _log('[FCM] _saveToken query error ($col.$field): $e');
         }
       }
     }
-    print('[FCM] _saveToken: no matching document found for username="$username"');
+    _log('[FCM] _saveToken: no matching document found for username="$username"');
   }
 }

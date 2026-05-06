@@ -54,10 +54,16 @@ exports.createTicketPaymentIntent = onCall(
     if (!hostUid) throw new HttpsError("failed-precondition", "Party hat keinen Host.");
     if (hostUid === uid) throw new HttpsError("permission-denied", "Host kann eigene Tickets nicht kaufen.");
 
-    // Host-Stripe-Account prüfen
-    const hostSnap = await db.collection("users").doc(hostUid).get();
-    const hostAccountId = hostSnap.data()?.stripeAccountId;
-    const hostChargesOk = hostSnap.data()?.stripeChargesEnabled === true;
+    // Host-Stripe-Account prüfen (Subcollection users/{uid}/stripe/account)
+    const hostStripeSnap = await db
+      .collection("users")
+      .doc(hostUid)
+      .collection("stripe")
+      .doc("account")
+      .get();
+    const hostStripe = hostStripeSnap.data() || {};
+    const hostAccountId = hostStripe.stripeAccountId;
+    const hostChargesOk = hostStripe.stripeChargesEnabled === true;
     if (!hostAccountId || !hostChargesOk) {
       throw new HttpsError("failed-precondition", "Host hat Auszahlungen nicht aktiviert.");
     }

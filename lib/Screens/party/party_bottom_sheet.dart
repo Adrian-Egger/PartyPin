@@ -308,13 +308,42 @@ class PartyBottomSheet extends StatelessWidget {
     }
   }
 
+  /// Liefert true, sobald der eingeloggte Nutzer mindestens ein bezahltes
+  /// Ticket für diese Party hat. Nutzt einen Live-Stream, damit der
+  /// Bewertungsbereich automatisch erscheint, sobald Stripe die Buchung
+  /// bestätigt.
+  Stream<bool> _hasPaidTicketStream() {
+    final uid = _uid();
+    if (uid == null) return Stream.value(false);
+    return FirebaseFirestore.instance
+        .collection('tickets')
+        .where('buyerUid', isEqualTo: uid)
+        .where('partyId', isEqualTo: partyId)
+        .where('status', isEqualTo: 'paid')
+        .limit(1)
+        .snapshots()
+        .map((s) => s.docs.isNotEmpty);
+  }
+
   Widget _ratingGate(BuildContext context) {
-    if (currentUsername == null || isHost || !inRatingWindow) return const SizedBox.shrink();
+    if (currentUsername == null || isHost || !inRatingWindow) {
+      return const SizedBox.shrink();
+    }
     return _rsvpStatusBuilder(
       context,
-      builder: (status) => (status == 'going' || status == 'maybe')
-          ? _ratingButtons(context)
-          : const SizedBox.shrink(),
+      builder: (status) {
+        final isComing = status == 'going';
+        return StreamBuilder<bool>(
+          stream: _hasPaidTicketStream(),
+          builder: (context, ticketSnap) {
+            final hasPaidTicket = ticketSnap.data == true;
+            // Nur "Ich komme" oder zahlende Gäste dürfen bewerten.
+            // "Vielleicht" reicht ausdrücklich NICHT mehr.
+            if (isComing || hasPaidTicket) return _ratingButtons(context);
+            return const SizedBox.shrink();
+          },
+        );
+      },
     );
   }
 
@@ -1007,16 +1036,23 @@ class PartyBottomSheet extends StatelessWidget {
 
             // ── Guest view ───────────────────────────────────────────────
             ] else ...[
-              if (!isClosed || isFriendsOnly)
-                _guestOpenActions(context)
-              else if (canSeeFull)
-                const SizedBox.shrink()
-              else
-                _guestClosedActions(context),
-
-              // Tickets (nur Nicht-Hosts, bei aktivierten Tickets)
-              if (!isHost && (data['ticketsEnabled'] == true) && canSeeFull && isActive)
-                TicketPurchaseSection(partyId: partyId, partyData: data),
+              // Bezahlte Party: ausschließlich Ticketkauf — kein RSVP.
+              // Gratis Party: ausschließlich RSVP — keine Ticket-Option.
+              if (data['ticketsEnabled'] == true) ...[
+                if (canSeeFull && isActive)
+                  TicketPurchaseSection(partyId: partyId, partyData: data)
+                else if (!isClosed || isFriendsOnly)
+                  // Closed-Party-Hinweis (Anfrage stellen) bleibt erhalten,
+                  // damit der User überhaupt Zugang bekommt.
+                  _guestClosedActions(context),
+              ] else ...[
+                if (!isClosed || isFriendsOnly)
+                  _guestOpenActions(context)
+                else if (canSeeFull)
+                  const SizedBox.shrink()
+                else
+                  _guestClosedActions(context),
+              ],
 
               // Rating
               const SizedBox(height: 12),

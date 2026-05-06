@@ -25,7 +25,12 @@ class _StripeOnboardingScreenState extends State<StripeOnboardingScreen> {
   Stream<DocumentSnapshot<Map<String, dynamic>>>? _userStream() {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return null;
-    return FirebaseFirestore.instance.collection('users').doc(uid).snapshots();
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('stripe')
+        .doc('account')
+        .snapshots();
   }
 
   Future<void> _startOnboarding() async {
@@ -84,28 +89,33 @@ class _StripeOnboardingScreenState extends State<StripeOnboardingScreen> {
       _error = null;
     });
     try {
-      await FirebaseFirestore.instance.collection('users').doc(uid).set(
-        enable
-            ? {
-                'stripeAccountId': 'acct_DEV_BYPASS',
-                'stripeChargesEnabled': true,
-                'stripePayoutsEnabled': true,
-                'stripeDetailsSubmitted': true,
-                'stripeOnboardingStatus': 'active',
-                'stripeIsDevBypass': true,
-                'stripeStatusUpdatedAt': FieldValue.serverTimestamp(),
-              }
-            : {
-                'stripeAccountId': FieldValue.delete(),
-                'stripeChargesEnabled': false,
-                'stripePayoutsEnabled': false,
-                'stripeDetailsSubmitted': false,
-                'stripeOnboardingStatus': 'incomplete',
-                'stripeIsDevBypass': false,
-                'stripeStatusUpdatedAt': FieldValue.serverTimestamp(),
-              },
-        SetOptions(merge: true),
-      );
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('stripe')
+          .doc('account')
+          .set(
+            enable
+                ? {
+                    'stripeAccountId': 'acct_DEV_BYPASS',
+                    'stripeChargesEnabled': true,
+                    'stripePayoutsEnabled': true,
+                    'stripeDetailsSubmitted': true,
+                    'stripeOnboardingStatus': 'active',
+                    'stripeIsDevBypass': true,
+                    'stripeStatusUpdatedAt': FieldValue.serverTimestamp(),
+                  }
+                : {
+                    'stripeAccountId': FieldValue.delete(),
+                    'stripeChargesEnabled': false,
+                    'stripePayoutsEnabled': false,
+                    'stripeDetailsSubmitted': false,
+                    'stripeOnboardingStatus': 'incomplete',
+                    'stripeIsDevBypass': false,
+                    'stripeStatusUpdatedAt': FieldValue.serverTimestamp(),
+                  },
+            SetOptions(merge: true),
+          );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

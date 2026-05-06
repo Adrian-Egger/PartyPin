@@ -10,7 +10,7 @@ import '../profile/feedback_screen.dart';
 import '../profile/my_tickets_screen.dart';
 import '../profile/notification_settings_screen.dart';
 import '../profile/stripe_onboarding_screen.dart';
-import '../bar/AdminCreatesBarScreen.dart';
+import '../admin/admin_screen.dart';
 import '../party/access_parties_screen.dart';
 
 // WICHTIG: Party Map muss ueber HomeShell geoeffnet werden
@@ -1124,9 +1124,15 @@ class MenuScreen extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.only(top: 4, bottom: 24),
-                    children: [
+                  // Account-Typ einmal laden — danach blendet die ListView
+                  // user-only-Sections fuer Bar-Accounts aus.
+                  child: FutureBuilder<bool>(
+                    future: _isBarAccount(),
+                    builder: (context, snap) {
+                      final isBar = snap.data ?? false;
+                      return ListView(
+                        padding: const EdgeInsets.only(top: 4, bottom: 24),
+                        children: [
                       // ── Entdecken ───────────────────────────────────────
                       _sectionHeader('Entdecken'),
                       _menuTile(
@@ -1134,47 +1140,53 @@ class MenuScreen extends StatelessWidget {
                         title: Lang.t('menu_party_map'),
                         onTap: () => _openPartyMap(context),
                       ),
-                      _menuTile(
-                        icon: Icons.verified_rounded,
-                        title: Lang.t('menu_approved_parties'),
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const RequireTermsAccepted(
-                                child: AccessPartiesScreen(),
+                      // „Approved Parties" ist UGC-User-Flow → fuer Bars irrelevant
+                      if (!isBar)
+                        _menuTile(
+                          icon: Icons.verified_rounded,
+                          title: Lang.t('menu_approved_parties'),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const RequireTermsAccepted(
+                                  child: AccessPartiesScreen(),
+                                ),
                               ),
-                            ),
-                          );
-                        },
-                      ),
+                            );
+                          },
+                        ),
 
-                      // ── Tickets ─────────────────────────────────────────
-                      _sectionHeader('Tickets'),
-                      _menuTile(
-                        icon: Icons.confirmation_number_rounded,
-                        title: 'Meine Tickets',
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => const MyTicketsScreen()),
-                          );
-                        },
-                      ),
-                      _menuTile(
-                        icon: Icons.account_balance_wallet_rounded,
-                        title: 'Stripe Anmeldung',
-                        subtitle: 'Hosts: Auszahlungen aktivieren',
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) =>
-                                    const StripeOnboardingScreen()),
-                          );
-                        },
-                      ),
+                      // ── Tickets (nur fuer User-Accounts) ────────────────
+                      // Bars verwalten ihre Events ueber den eigenen Tab,
+                      // nicht ueber Tickets / Stripe-Onboarding.
+                      if (!isBar) ...[
+                        _sectionHeader('Tickets'),
+                        _menuTile(
+                          icon: Icons.confirmation_number_rounded,
+                          title: 'Meine Tickets',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const MyTicketsScreen()),
+                            );
+                          },
+                        ),
+                        _menuTile(
+                          icon: Icons.account_balance_wallet_rounded,
+                          title: 'Stripe Anmeldung',
+                          subtitle: 'Hosts: Auszahlungen aktivieren',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) =>
+                                      const StripeOnboardingScreen()),
+                            );
+                          },
+                        ),
+                      ],
 
                       // ── Einstellungen ───────────────────────────────────
                       _sectionHeader('Einstellungen'),
@@ -1259,12 +1271,12 @@ class MenuScreen extends StatelessWidget {
                               _menuTile(
                                 icon: Icons.admin_panel_settings_rounded,
                                 title: 'Admin-Bereich',
+                                subtitle: 'Anfragen · Bars · Stats · User',
                                 onTap: () {
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                        builder: (_) =>
-                                            const AdminCreateBarScreen()),
+                                        builder: (_) => const AdminScreen()),
                                   );
                                 },
                               ),
@@ -1284,8 +1296,10 @@ class MenuScreen extends StatelessWidget {
                           );
                         },
                       ),
-                    ], // ListView children
-                  ), // ListView
+                        ], // ListView children
+                      ); // ListView
+                    },
+                  ), // FutureBuilder
                 ), // Expanded
               ], // Column children
             ), // Column

@@ -17,6 +17,7 @@ const ONBOARD_RETURN_URL =
   "https://startling-hummingbird-1696da.netlify.app";
 const ONBOARD_REFRESH_URL =
   "https://eloquent-griffin-e5aad2.netlify.app";
+const HOST_BUSINESS_URL = "https://eloquent-griffin-e5aad2.netlify.app";
 
 /**
  * createStripeOnboardingLink
@@ -32,10 +33,16 @@ exports.createStripeOnboardingLink = onCall(
     const stripe = getStripe();
 
     const userRef = db.collection("users").doc(uid);
-    const userSnap = await userRef.get();
-    const userData = userSnap.data() || {};
+    const stripeRef = userRef.collection("stripe").doc("account");
 
-    let accountId = userData.stripeAccountId;
+    const [userSnap, stripeSnap] = await Promise.all([
+      userRef.get(),
+      stripeRef.get(),
+    ]);
+    const userData = userSnap.data() || {};
+    const stripeData = stripeSnap.data() || {};
+
+    let accountId = stripeData.stripeAccountId;
 
     if (!accountId) {
       const account = await stripe.accounts.create({
@@ -47,10 +54,11 @@ exports.createStripeOnboardingLink = onCall(
           transfers: { requested: true },
         },
         business_type: "individual",
+        business_profile: { url: HOST_BUSINESS_URL },
         metadata: { uid },
       });
       accountId = account.id;
-      await userRef.set(
+      await stripeRef.set(
         {
           stripeAccountId: accountId,
           stripeOnboardingStatus: "pending",
@@ -58,6 +66,10 @@ exports.createStripeOnboardingLink = onCall(
         },
         { merge: true }
       );
+    } else {
+      await stripe.accounts.update(accountId, {
+        business_profile: { url: HOST_BUSINESS_URL },
+      });
     }
 
     const link = await stripe.accountLinks.create({
@@ -84,9 +96,9 @@ exports.refreshStripeAccountStatus = onCall(
 
     const stripe = getStripe();
 
-    const userRef = db.collection("users").doc(uid);
-    const userSnap = await userRef.get();
-    const accountId = userSnap.data()?.stripeAccountId;
+    const stripeRef = db.collection("users").doc(uid).collection("stripe").doc("account");
+    const stripeSnap = await stripeRef.get();
+    const accountId = stripeSnap.data()?.stripeAccountId;
 
     if (!accountId) {
       throw new HttpsError("failed-precondition", "Kein Stripe-Account vorhanden.");
@@ -99,7 +111,7 @@ exports.refreshStripeAccountStatus = onCall(
     const detailsSubmitted = !!account.details_submitted;
     const status = charges && payouts ? "active" : detailsSubmitted ? "pending_review" : "incomplete";
 
-    await userRef.set(
+    await stripeRef.set(
       {
         stripeChargesEnabled: charges,
         stripePayoutsEnabled: payouts,

@@ -945,7 +945,19 @@ class _BarEventScreenState extends State<BarEventScreen> {
                     ),
                   ),
 
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 24),
+                  _sectionTitle('Details (für Gäste sichtbar)'),
+                  const SizedBox(height: 4),
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Optional. Pro Feld kannst du wählen, ob es im Event angezeigt wird.',
+                      style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12,
+                          height: 1.3),
+                    ),
+                  ),
                   Row(
                     children: [
                       Expanded(
@@ -958,7 +970,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       ),
                       const SizedBox(width: 8),
                       _toggleChip(
-                        label: 'Eintritt anzeigen',
+                        label: 'anzeigen',
                         value: _showEntry,
                         onChanged: (v) => setState(() => _showEntry = v ?? true),
                       ),
@@ -977,7 +989,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       ),
                       const SizedBox(width: 8),
                       _toggleChip(
-                        label: 'Alter anzeigen',
+                        label: 'anzeigen',
                         value: _showAge,
                         onChanged: (v) => setState(() => _showAge = v ?? true),
                       ),
@@ -996,7 +1008,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       ),
                       const SizedBox(width: 8),
                       _toggleChip(
-                        label: 'Musik anzeigen',
+                        label: 'anzeigen',
                         value: _showMusic,
                         onChanged: (v) => setState(() => _showMusic = v ?? true),
                       ),
@@ -1015,7 +1027,7 @@ class _BarEventScreenState extends State<BarEventScreen> {
                       ),
                       const SizedBox(width: 8),
                       _toggleChip(
-                        label: 'Dresscode anzeigen',
+                        label: 'anzeigen',
                         value: _showDresscode,
                         onChanged: (v) => setState(() => _showDresscode = v ?? true),
                       ),

@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'bar_event_screen.dart';
+import 'bar_settings_screen.dart';
 import '../../Theme/app_theme.dart';
 
 class MyBarScreen extends StatelessWidget {
@@ -1117,7 +1118,14 @@ class _MyBarBodyState extends State<_MyBarBody> {
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: _openEditBarDetails,
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                BarSettingsScreen(barId: widget.barId),
+                          ),
+                        );
+                      },
                       icon: const Icon(Icons.edit, color: _accent),
                       label: const Text(
                         'Bar-Infos bearbeiten',

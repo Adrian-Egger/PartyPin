@@ -358,6 +358,8 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       final snap = await FirebaseFirestore.instance
           .collection('users')
           .doc(uid)
+          .collection('stripe')
+          .doc('account')
           .get();
       final data = snap.data() ?? {};
       if (!mounted) return;

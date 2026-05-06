@@ -8,7 +8,7 @@ import 'package:flutter_stripe/flutter_stripe.dart' as fs;
 /// PUBLISHABLE KEY (kein Geheimnis — darf im Client stehen).
 /// Test:  pk_test_…   Live: pk_live_…
 const String kStripePublishableKey =
-    'pk_test_51T07iICi3bYIGTkS0l5sCVxtfQgneLLpgVWKKLbvzMc89njxAaHLJxtJGOc67Qy3gMXwamApD1udI4iDAJ4fw99W00fNDJYnYz';
+    'pk_live_51T07iICi3bYIGTkSkEIZ49CZHxc7z7CaSu1oelIWfv7X236GFvSrT6hhbmYS07EKPmLqJMOzPVKF7zCkr0TriEVg00q98cG6Pt';
 
 /// Merchant-Identifier für Apple Pay (im Apple Developer Portal anlegen).
 const String kStripeMerchantIdentifier = 'merchant.com.partypin';
@@ -67,7 +67,7 @@ class StripeService {
         googlePay: const fs.PaymentSheetGooglePay(
           merchantCountryCode: 'AT',
           currencyCode: 'EUR',
-          testEnv: true,
+          testEnv: false,
         ),
       ),
     );

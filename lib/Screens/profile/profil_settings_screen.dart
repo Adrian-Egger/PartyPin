@@ -19,6 +19,13 @@ import '../../Theme/app_theme.dart';
 import '../../l10n/lang.dart';
 import '../../Services/stripe_service.dart';
 
+// Auswahl aus dem Avatar-BottomSheet. Wir geben das Ergebnis aus dem
+// Sheet zurück (statt direkt eine Aktion auszulösen), damit die
+// Dismiss-Animation komplett durchläuft, bevor wir die Kamera oder den
+// Photo-Picker öffnen — sonst kollidiert das auf iOS mit dem
+// UIImagePickerController-Presenter.
+enum _AvatarAction { gallery, camera, view }
+
 // ---------- Farben wie bei PartyMap / NewParty ----------
 const _gradTop = AppColors.bgTop;
 const _gradBottom = AppColors.bgBottom;
@@ -40,8 +47,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   String _username = "";
   String? _avatar; // URL (avatarUrl)
   String _bio = "";
-  String _email = "";          // verifizierte Mail
-  String _pendingEmail = "";   // wartet auf Klick im Bestätigungslink
+  String _email = "";              // hinterlegte Mail (kann unbestätigt sein)
+  String _pendingEmail = "";       // wartet auf Klick im Bestätigungslink
+  bool _emailVerified = false;     // erst true, wenn emailVerifiedAt gesetzt
   String _passwordFromDb = "";
 
   // ✅ users vs bars
@@ -119,6 +127,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       final email = (data['email'] ?? '').toString().trim();
       final pendingEmail =
           (data['pendingEmail'] ?? '').toString().trim();
+      // Verifikation gilt nur, wenn die Cloud Function den Timestamp gesetzt
+      // hat. Bar-Accounts kommen z. B. ohne diesen aus dem Wizard.
+      final emailVerified = data['emailVerifiedAt'] != null;
 
       // Mail in Prefs spiegeln, damit der Ticket-Kauf sie ohne Roundtrip findet.
       if (email.isNotEmpty) {
@@ -139,6 +150,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         _bioController.text = bio;
         _email = email;
         _pendingEmail = pendingEmail;
+        _emailVerified = emailVerified;
         _emailController.text = email;
       });
 
@@ -194,12 +206,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       final data = snap.data() ?? {};
       final newEmail = (data['email'] ?? '').toString().trim();
       final newPending = (data['pendingEmail'] ?? '').toString().trim();
+      final newVerified = data['emailVerifiedAt'] != null;
 
-      // Wenn vorher pending war und jetzt nicht mehr → Verifikation hat
-      // gerade stattgefunden. Optisches Feedback geben.
-      final wasPending = _pendingEmail.isNotEmpty;
-      final justVerified =
-          wasPending && newPending.isEmpty && newEmail.isNotEmpty;
+      // Übergang von „nicht verifiziert" → „verifiziert" → Feedback geben.
+      final justVerified = !_emailVerified && newVerified;
 
       // Spiegel in SharedPreferences (für Ticket-Kauf-Resolver).
       if (newEmail.isNotEmpty && newEmail != _email) {
@@ -211,6 +221,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       setState(() {
         _email = newEmail;
         _pendingEmail = newPending;
+        _emailVerified = newVerified;
         if (_editing != 'email') {
           _emailController.text = newEmail;
         }
@@ -247,40 +258,22 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
   // ---------- Avatar / Foto ----------
   Future<bool> _ensureCameraPermission() async {
-    // Check current status WITHOUT triggering a request first.
-    // On iOS: .notDetermined → isDenied, .denied → isPermanentlyDenied
     var status = await Permission.camera.status;
 
-    if (status.isGranted) return true;
+    if (status.isGranted || status.isLimited) return true;
 
-    // Screen Time / MDM restriction — can't change from within the app
+    // Screen Time / MDM restriction — kann der Nutzer selbst nicht ändern
     if (status.isRestricted) {
       if (mounted) _showSnack(Lang.t('profile_cam_restricted'), color: Colors.redAccent);
       return false;
     }
 
-    // Already permanently denied — go straight to settings
-    Future<bool> _ensureCameraPermission() async {
-      var status = await Permission.camera.status;
-
-      if (status.isGranted) return true;
-
-      // IMMER versuchen zu requesten (wichtig für iOS)
-      status = await Permission.camera.request();
-
-      if (status.isGranted) return true;
-
-      // erst danach Settings zeigen
-      _showPermissionSettingsDialog(Lang.t('perm_camera'));
-      return false;
-    }
-
-    // Not yet asked (isDenied = notDetermined on iOS) — show the native dialog
+    // iOS .notDetermined sowie alles andere → nativen Dialog auslösen
     status = await Permission.camera.request();
 
-    if (status.isGranted) return true;
+    if (status.isGranted || status.isLimited) return true;
 
-    // After the dialog: still not granted → guide to settings
+    // Permanent denied → Settings-Dialog
     _showPermissionSettingsDialog(Lang.t('perm_camera'));
     return false;
   }
@@ -823,9 +816,15 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
   Future<void> _showAvatarOptions() async {
     final hasAvatar = _avatar != null && _avatar!.isNotEmpty;
-    await showModalBottomSheet<void>(
+
+    // Sheet liefert das Ergebnis zurück — genau EIN Pop pro Tap.
+    // useRootNavigator: true sorgt dafür, dass das Sheet am Root-
+    // Navigator hängt, nicht an einem ggf. eingebetteten Tab-Navigator;
+    // das macht die Dismiss-Animation auf iOS deterministisch.
+    final action = await showModalBottomSheet<_AvatarAction>(
       context: context,
       backgroundColor: _panel,
+      useRootNavigator: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -859,14 +858,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                 ctx: ctx,
                 icon: Icons.photo_library_outlined,
                 label: Lang.t('profile_avatar_gallery'),
-                onTap: () => _pickFromSource(ImageSource.gallery),
+                onTap: () => Navigator.pop(ctx, _AvatarAction.gallery),
               ),
               const Divider(height: 1, indent: 56, color: Color(0xFF2A2D35)),
               _avatarOption(
                 ctx: ctx,
                 icon: Icons.photo_camera_outlined,
                 label: Lang.t('profile_avatar_camera'),
-                onTap: () => _pickFromSource(ImageSource.camera),
+                onTap: () => Navigator.pop(ctx, _AvatarAction.camera),
               ),
               if (hasAvatar) ...[
                 const Divider(height: 1, indent: 56, color: Color(0xFF2A2D35)),
@@ -874,7 +873,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                   ctx: ctx,
                   icon: Icons.image_search_outlined,
                   label: Lang.t('profile_avatar_view'),
-                  onTap: _viewProfilePicture,
+                  onTap: () => Navigator.pop(ctx, _AvatarAction.view),
                 ),
               ],
               const SizedBox(height: 8),
@@ -883,6 +882,27 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         );
       },
     );
+
+    if (!mounted || action == null) return;
+
+    // iOS: einen Render-Frame abwarten, damit das Sheet komplett
+    // entfernt ist, bevor UIImagePickerController präsentiert wird.
+    if (Platform.isIOS) {
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      if (!mounted) return;
+    }
+
+    switch (action) {
+      case _AvatarAction.gallery:
+        await _pickFromSource(ImageSource.gallery);
+        break;
+      case _AvatarAction.camera:
+        await _pickFromSource(ImageSource.camera);
+        break;
+      case _AvatarAction.view:
+        _viewProfilePicture();
+        break;
+    }
   }
 
   Widget _avatarOption({
@@ -891,11 +911,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     required String label,
     required VoidCallback onTap,
   }) {
+    // Pop passiert ausschließlich im onTap-Callback des Aufrufers
+    // (Navigator.pop(ctx, _AvatarAction.x)). Kein zweiter Pop hier.
     return InkWell(
-      onTap: () {
-        Navigator.pop(ctx);
-        onTap();
-      },
+      onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
         child: Row(
@@ -1261,16 +1280,16 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       );
 
   /// Liefert das Status-Icon, das rechts neben dem E-Mail-Eintrag erscheint.
-  ///   • Verifizierte Mail (email vorhanden, kein pending)  → grüner Haken
-  ///   • Pending Verifikation (pendingEmail gesetzt)        → orange Sanduhr
-  ///   • Sonst                                              → leer
+  ///   • Verifiziert (emailVerifiedAt gesetzt + kein pending) → grüner Haken
+  ///   • Pending Verifikation (pendingEmail gesetzt)          → orange Sanduhr
+  ///   • Mail vorhanden aber unbestätigt                      → graues Info
+  ///   • Sonst                                                → leer
   ///
-  /// AnimatedSwitcher sorgt dafür, dass der Wechsel von „pending" zu
-  /// „verifiziert" sanft fadet — wir bekommen das per Live-Listener
-  /// automatisch ohne Reload.
+  /// AnimatedSwitcher sorgt für sanften Wechsel beim Live-Update aus dem
+  /// User-Doc-Listener.
   Widget _emailStatusBadge() {
     Widget child;
-    if (_email.isNotEmpty && _pendingEmail.isEmpty) {
+    if (_emailVerified && _pendingEmail.isEmpty) {
       child = Container(
         key: const ValueKey('verified'),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1318,6 +1337,35 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
               'wartet',
               style: TextStyle(
                 color: Color(0xFFFFA000),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (_email.isNotEmpty) {
+      // Mail ist hinterlegt, aber nie verifiziert (z. B. Bar-Self-Signup).
+      child = Container(
+        key: const ValueKey('unverified'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: AppColors.muted.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+              color: AppColors.muted.withOpacity(0.4), width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.info_outline_rounded,
+                color: AppColors.muted, size: 14),
+            SizedBox(width: 4),
+            Text(
+              'unbestätigt',
+              style: TextStyle(
+                color: AppColors.muted,
                 fontSize: 10.5,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 0.2,

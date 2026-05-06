@@ -27,7 +27,7 @@ class ChatDetailScreen extends StatefulWidget {
 }
 
 class _ChatDetailScreenState extends State<ChatDetailScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   static const _reactionEmojis = ['😂', '❤️', '🔥', '👍', '😮', '😢'];
 
   final _textCtrl = TextEditingController();
@@ -40,6 +40,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _chatDocSub;
   bool _otherIsTyping = false;
   Timestamp? _otherLastRead;
+  AppLifecycleState _appLifecycle = AppLifecycleState.resumed;
   Timer? _typingHideTimer;
   Timer? _typingTimer;
   bool _amTyping = false;
@@ -69,9 +70,21 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _markRead();
     _chatDocSub = _chatRef.snapshots().listen(_onChatDocUpdate);
     _loadOtherProfile();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final wasResumed = _appLifecycle == AppLifecycleState.resumed;
+    _appLifecycle = state;
+    // Wenn der User wieder in die App zurückkehrt UND der Chat-Screen
+    // sichtbar war, jetzt erst die offenen Nachrichten als gelesen markieren.
+    if (!wasResumed && state == AppLifecycleState.resumed && mounted) {
+      _markRead();
+    }
   }
 
   Future<void> _loadOtherProfile() async {
@@ -113,6 +126,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _stopTyping();
     _chatDocSub?.cancel();
     _typingHideTimer?.cancel();
@@ -172,6 +186,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   Future<void> _markRead() async {
+    // Nicht markieren, wenn die App im Hintergrund/Inactive ist —
+    // sonst sieht der Sender "Gelesen", obwohl der User nie hingeschaut hat.
+    if (!mounted || _appLifecycle != AppLifecycleState.resumed) return;
     try {
       await _chatRef.set({
         'unread_${widget.currentUsername}': 0,
@@ -656,16 +673,19 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
             return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
           }();
 
-    // Read-status: ✓ pending (no ts), ✓✓ delivered, blue ✓✓ read
+    // Read-Status (Instagram-Stil): "Gelesen" erscheint AUSSCHLIESSLICH
+    // unter der jeweils letzten eigenen Nachricht, die der Empfänger
+    // tatsächlich gesehen hat. Ältere oder neuere Nachrichten zeigen kein
+    // Indicator-Label.
     _ReadState readState;
     if (!isMe) {
       readState = _ReadState.none;
     } else if (ts == null) {
       readState = _ReadState.pending;
-    } else if (i == lastReadIndex || (lastReadIndex >= 0 && i < lastReadIndex)) {
+    } else if (i == lastReadIndex) {
       readState = _ReadState.read;
     } else {
-      readState = _ReadState.delivered;
+      readState = _ReadState.none;
     }
 
     final emojiClusters = _emojiOnlyClusterCount(text);
@@ -762,6 +782,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                           _toggleReaction(msgId, emoji, reactions),
                     ),
                   ),
+                // "Gelesen" nur unter der letzten eigenen, gesehenen Nachricht.
+                if (isMe && readState == _ReadState.read) const _SeenLabel(),
               ],
             ),
           ),
@@ -1013,15 +1035,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.emoji_emotions_outlined,
-                        color: AppColors.muted, size: 22),
-                    onPressed: () => _inputFocus.requestFocus(),
-                    splashRadius: 20,
-                    constraints: const BoxConstraints(
-                        minHeight: 44, minWidth: 40),
-                    padding: const EdgeInsets.only(left: 6, right: 0),
-                  ),
+                  const SizedBox(width: 16),
                   Expanded(
                     child: TextField(
                       controller: _textCtrl,
@@ -1043,85 +1057,56 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
                       onSubmitted: (_) => _send(),
                     ),
                   ),
-                  // Mic icon — only when empty
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 180),
-                    transitionBuilder: (c, a) =>
-                        FadeTransition(opacity: a, child: c),
-                    child: _hasText
-                        ? const SizedBox(width: 8, key: ValueKey('empty'))
-                        : IconButton(
-                            key: const ValueKey('mic'),
-                            icon: const Icon(Icons.mic_none_rounded,
-                                color: AppColors.muted, size: 22),
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: const Text(
-                                      'Sprachnachrichten kommen bald.'),
-                                  behavior: SnackBarBehavior.floating,
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius:
-                                          BorderRadius.circular(10)),
-                                ),
-                              );
-                            },
-                            splashRadius: 20,
-                            constraints: const BoxConstraints(
-                                minHeight: 44, minWidth: 40),
-                            padding: const EdgeInsets.only(right: 6),
-                          ),
-                  ),
+                  const SizedBox(width: 8),
                 ],
               ),
             ),
           ),
-          // Send button — appears with scale+fade only when text is present
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 180),
-            transitionBuilder: (child, anim) => ScaleTransition(
-              scale: anim,
-              child: FadeTransition(opacity: anim, child: child),
-            ),
-            child: _hasText
-                ? Padding(
-                    key: const ValueKey('send'),
-                    padding: const EdgeInsets.only(left: 8),
-                    child: GestureDetector(
-                      onTap: _send,
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [
-                              Color(0xFFFF3B30),
-                              Color(0xFFFF6B81),
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.accent.withOpacity(0.35),
-                              blurRadius: 12,
-                              offset: const Offset(0, 3),
-                            ),
+          // Send button — always visible
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: GestureDetector(
+              onTap: _hasText && !_sending ? _send : null,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: _hasText
+                        ? const [
+                            Color(0xFFFF3B30),
+                            Color(0xFFFF6B81),
+                          ]
+                        : [
+                            AppColors.panelAlt,
+                            AppColors.panelAlt,
                           ],
-                        ),
-                        child: _sending
-                            ? const Padding(
-                                padding: EdgeInsets.all(12),
-                                child: CircularProgressIndicator(
-                                    color: Colors.white, strokeWidth: 2),
-                              )
-                            : const Icon(Icons.arrow_upward_rounded,
-                                color: Colors.white, size: 22),
-                      ),
-                    ),
-                  )
-                : const SizedBox.shrink(key: ValueKey('no-send')),
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  shape: BoxShape.circle,
+                  boxShadow: _hasText
+                      ? [
+                          BoxShadow(
+                            color: AppColors.accent.withOpacity(0.35),
+                            blurRadius: 12,
+                            offset: const Offset(0, 3),
+                          ),
+                        ]
+                      : null,
+                ),
+                child: _sending
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2),
+                      )
+                    : Icon(Icons.send_rounded,
+                        color: _hasText ? Colors.white : AppColors.muted,
+                        size: 20),
+              ),
+            ),
           ),
         ],
       ),
@@ -1253,46 +1238,64 @@ class _MetaRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (timeStr.isEmpty) return const SizedBox.shrink();
+    if (timeStr.isEmpty && readState == _ReadState.none) {
+      return const SizedBox.shrink();
+    }
     final timeColor = isMe
         ? Colors.white.withOpacity(0.6)
         : AppColors.subtle;
+
+    // Inline-Indicator innerhalb der Bubble: nur Sendezustand ("Senden…").
+    // Das "Gelesen"-Label wird bewusst NICHT hier, sondern als eigene Zeile
+    // unterhalb der Bubble gerendert (siehe unten in der Bubble-Spalte).
+    Widget? inlineHint;
+    if (isMe && readState == _ReadState.pending) {
+      inlineHint = Text(
+        'Senden…',
+        style: TextStyle(
+          color: Colors.white.withOpacity(0.7),
+          fontSize: 10.5,
+          fontStyle: FontStyle.italic,
+        ),
+      );
+    }
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          timeStr,
-          style: TextStyle(color: timeColor, fontSize: 10.5),
-        ),
-        if (readState != _ReadState.none) ...[
-          const SizedBox(width: 4),
-          _ReadTicks(state: readState, isMe: isMe),
+        if (timeStr.isNotEmpty)
+          Text(
+            timeStr,
+            style: TextStyle(color: timeColor, fontSize: 10.5),
+          ),
+        if (inlineHint != null) ...[
+          const SizedBox(width: 6),
+          inlineHint,
         ],
       ],
     );
   }
 }
 
-class _ReadTicks extends StatelessWidget {
-  const _ReadTicks({required this.state, required this.isMe});
-  final _ReadState state;
-  final bool isMe;
+/// "Gelesen"-Label im Instagram-Stil — wird NUR unter der letzten
+/// eigenen, vom Empfänger gesehenen Nachricht angezeigt.
+class _SeenLabel extends StatelessWidget {
+  const _SeenLabel();
 
   @override
   Widget build(BuildContext context) {
-    final baseColor =
-        isMe ? Colors.white.withOpacity(0.75) : AppColors.subtle;
-    switch (state) {
-      case _ReadState.pending:
-        return Icon(Icons.check_rounded, size: 12, color: baseColor);
-      case _ReadState.delivered:
-        return Icon(Icons.done_all_rounded, size: 13, color: baseColor);
-      case _ReadState.read:
-        return const Icon(Icons.done_all_rounded,
-            size: 13, color: Color(0xFF4FC3F7));
-      case _ReadState.none:
-        return const SizedBox.shrink();
-    }
+    return const Padding(
+      padding: EdgeInsets.only(top: 4, right: 6),
+      child: Text(
+        'Gelesen',
+        style: TextStyle(
+          color: AppColors.subtle,
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+          letterSpacing: 0.1,
+        ),
+      ),
+    );
   }
 }
 

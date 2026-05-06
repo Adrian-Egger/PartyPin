@@ -1503,13 +1503,14 @@ class _BarBottomSheetState extends State<BarBottomSheet> {
                 ),
               if (text.isNotEmpty)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
                   child: Text(
                     text,
                     style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12.5,
+                      color: Colors.white,
+                      fontSize: 14,
                       height: 1.4,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),

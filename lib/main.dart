@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -43,19 +44,19 @@ Future<void> main() async {
     mapsFuture,
   ]);
 
-  // 3. App Check FORCED DEBUG MODE — KRITISCHER SYNC-POINT.
+  // 3. App Check — KRITISCHER SYNC-POINT.
   //    Muss unmittelbar nach Firebase.initializeApp() laufen, bevor
   //    irgendein Firebase-Service einen App-Check-Token anfordert.
-  //    Sonst greift der native Default-Provider und liefert 403.
-  //
-  //    Vor Production-Release auf Play Integrity / Device Check
-  //    zurueckstellen.
+  //    Release: Play Integrity / Device Check. Debug: Debug-Provider
+  //    (Token muss in der Firebase Console hinterlegt sein).
   await FirebaseAppCheck.instance.activate(
-    androidProvider: AndroidProvider.debug,
-    appleProvider: AppleProvider.debug,
+    androidProvider: kReleaseMode ? AndroidProvider.playIntegrity : AndroidProvider.debug,
+    appleProvider: kReleaseMode ? AppleProvider.deviceCheck : AppleProvider.debug,
   );
-  // ignore: avoid_print
-  print("DEBUG APPCHECK ACTIVE");
+  if (kDebugMode) {
+    // ignore: avoid_print
+    print("DEBUG APPCHECK ACTIVE");
+  }
 
   // 4. Phase 2: Stripe + (optional) anonyme Auth parallel.
   //    Stripe haengt nicht von Auth ab und umgekehrt.
