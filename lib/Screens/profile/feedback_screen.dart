@@ -398,7 +398,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         docs.addAll(fallback.take(10));
       }
 
-      // 3) Eigenes letztes Feedback (falls existiert) – NUR wenn nicht gebannt
+      // 3) Eigenes letztes Feedback (falls existiert) – NUR wenn nicht gebannt.
+      // Query benötigt Composite-Index (userKey ASC, timestamp DESC) —
+      // siehe firestore.indexes.json. Bei FAILED_PRECONDITION früher
+      // wurde der Fehler hier still geschluckt, sodass das eigene
+      // Feedback unsichtbar verschwand. Jetzt: lesbares Logging,
+      // damit ein fehlender Index sofort auffällt.
       QueryDocumentSnapshot<Map<String, dynamic>>? mine;
       if (!_isBanned) {
         try {
@@ -409,7 +414,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               .limit(1)
               .get();
           if (qMine.docs.isNotEmpty) mine = qMine.docs.first;
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[feedback] mine-query failed: $e');
+        }
       }
 
       // 4) rand nachschreiben für Zukunft (nur die geladenen)

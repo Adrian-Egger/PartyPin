@@ -78,7 +78,10 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   bool _isLoading = false;
   bool _triedSubmit = false;
 
-  String? _stripeAccountId;
+  // Frontend hält bewusst KEINEN stripeAccountId-Snapshot. Die ID ist
+  // einzig Wahrheit unter users/{hostUid}/stripe/account und wird vom
+  // Tickets-Backend zur Payment-Zeit aufgelöst (dynamisches Routing).
+  // Hier reicht der Boolean, ob Auszahlungen aktiv sind.
   bool _stripeChargesEnabled = false;
   bool _checkingStripe = true;
 
@@ -344,9 +347,9 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     });
   }
 
-  /// Liest den aktuellen Stripe-Connect-Status aus dem User-Doc.
-  /// Wird beim Onboarding via `refreshStripeAccountStatus` Cloud Function
-  /// aktualisiert; wir lesen hier nur.
+  /// Liest den aktuellen Stripe-Connect-Status aus der User-Subcollection
+  /// (users/{uid}/stripe/account). Wird beim Onboarding via
+  /// `refreshStripeAccountStatus` Cloud Function aktualisiert.
   Future<void> _loadStripeStatus() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
@@ -364,9 +367,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       final data = snap.data() ?? {};
       if (!mounted) return;
       setState(() {
-        _stripeAccountId = (data['stripeAccountId'] ?? '').toString().isEmpty
-            ? null
-            : data['stripeAccountId'] as String;
         _stripeChargesEnabled = data['stripeChargesEnabled'] == true;
         _checkingStripe = false;
       });
@@ -1522,8 +1522,11 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       'address': address,
       'hostName': _hostName ?? 'unknown',
       'hostId': username,
+      // hostUid ist die einzige Stripe-Identität, die wir auf der Party
+      // speichern. Das Tickets-Backend resolved daraus zur Payment-Zeit
+      // users/{hostUid}/stripe/account.stripeAccountId — niemals ein
+      // Snapshot, der veralten könnte.
       'hostUid': FirebaseAuth.instance.currentUser?.uid,
-      'stripeAccountId': _stripeAccountId,
       'ticketsEnabled': _ticketsEnabled,
       'ticketPriceCents': ticketPriceCents,
       'ticketsAvailable': ticketsAvailable,

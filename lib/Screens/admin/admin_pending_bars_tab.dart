@@ -1,9 +1,8 @@
 // lib/Screens/admin/admin_pending_bars_tab.dart
 //
-// Listet alle `bars` mit `status: "pending"` und bietet Approve/Reject in
-// einem Tap. Zusätzlich gibt es einen Migrations-Button, der Legacy-Docs
-// aus dem alten `barAnfragen`-Collection in `bars` mit Status `pending`
-// überträgt — einmalig auszuführen, falls Altdaten vorhanden sind.
+// Listet alle `bars` mit `status: "pending"` und bietet Approve / Reject /
+// Delete in einem Tap. Manuell reloadbar — kein App-Restart, keine
+// Navigation, keine Crashes wenn Firestore mal scheitert.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -11,124 +10,124 @@ import 'package:flutter/material.dart';
 import '../../Theme/app_theme.dart';
 import '../bar/AdminCreatesBarScreen.dart';
 
-class AdminPendingBarsTab extends StatelessWidget {
+class AdminPendingBarsTab extends StatefulWidget {
   const AdminPendingBarsTab({super.key});
 
+  @override
+  State<AdminPendingBarsTab> createState() => _AdminPendingBarsTabState();
+}
+
+class _AdminPendingBarsTabState extends State<AdminPendingBarsTab> {
   CollectionReference<Map<String, dynamic>> get _bars =>
       FirebaseFirestore.instance.collection('bars');
-  CollectionReference<Map<String, dynamic>> get _legacyRequests =>
-      FirebaseFirestore.instance.collection('barAnfragen');
 
-  Stream<QuerySnapshot<Map<String, dynamic>>> _stream() => _bars
-      .where('status', isEqualTo: 'pending')
-      .orderBy('createdAt', descending: true)
-      .snapshots();
+  late Future<QuerySnapshot<Map<String, dynamic>>> _future;
+  bool _reloading = false;
 
-  Future<void> _approve(BuildContext context,
-      QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
-    final ok = await _confirm(context,
-        title: 'Bar freischalten?',
-        body: 'Die Bar wird ab sofort auf der Karte sichtbar und kann sich '
-            'einloggen.',
-        confirmLabel: 'Freischalten',
-        confirmColor: AppColors.success);
-    if (!ok) return;
-    await doc.reference.update({
-      'status': 'approved',
-      'approvedAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
+  @override
+  void initState() {
+    super.initState();
+    _future = _fetch();
+  }
+
+  Future<QuerySnapshot<Map<String, dynamic>>> _fetch() {
+    return _bars
+        .where('status', isEqualTo: 'pending')
+        .orderBy('createdAt', descending: true)
+        .get();
+  }
+
+  /// Manueller Reload. Setzt das Future neu — der FutureBuilder
+  /// re-evaluiert sich, ohne dass der Tab neu aufgebaut oder neu
+  /// navigiert werden muss. Wirft die `_fetch()` einen Fehler (Index
+  /// fehlt, kein Netz, Rules verweigern), zeigt der catch-Block die
+  /// SnackBar — kein Crash, kein roter Screen.
+  Future<void> _reload() async {
+    if (_reloading) return;
+    setState(() {
+      _reloading = true;
+      _future = _fetch();
     });
-  }
-
-  Future<void> _reject(BuildContext context,
-      QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
-    final ok = await _confirm(context,
-        title: 'Anfrage ablehnen?',
-        body:
-            'Der Account bleibt im Status "rejected". Die Bar kann sich nicht einloggen.',
-        confirmLabel: 'Ablehnen',
-        confirmColor: AppColors.accent);
-    if (!ok) return;
-    await doc.reference.update({
-      'status': 'rejected',
-      'rejectedAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-  }
-
-  Future<void> _delete(BuildContext context,
-      QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
-    final ok = await _confirm(context,
-        title: 'Anfrage löschen?',
-        body: 'Komplett aus Firestore entfernen. Kann nicht rückgängig gemacht werden.',
-        confirmLabel: 'Löschen',
-        confirmColor: AppColors.accent);
-    if (!ok) return;
-    await doc.reference.delete();
-  }
-
-  Future<void> _migrateLegacy(BuildContext context) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final ok = await _confirm(context,
-        title: 'Legacy-Anfragen migrieren?',
-        body: 'Übernimmt alle Docs aus `barAnfragen` ins `bars`-Collection '
-            'mit Status "pending". Vorhandene Bars werden NICHT überschrieben.',
-        confirmLabel: 'Migrieren',
-        confirmColor: AppColors.accent);
-    if (!ok) return;
-
-    int migrated = 0;
-    int skipped = 0;
     try {
-      final snap = await _legacyRequests.get();
-      for (final d in snap.docs) {
-        final data = d.data();
-        final username = (data['username'] ?? '').toString().trim();
-        if (username.isEmpty) {
-          skipped++;
-          continue;
-        }
-        final target = _bars.doc(username);
-        final exists = await target.get();
-        if (exists.exists) {
-          skipped++;
-          continue;
-        }
-        await target.set({
-          'barId': username,
-          'barName': data['barName'] ?? data['barname'] ?? 'Bar',
-          'barName_lower':
-              (data['barName'] ?? data['barname'] ?? 'bar').toString().toLowerCase(),
-          'username': username,
-          'username_lower': username.toLowerCase(),
-          'email': data['email'] ?? '',
-          'phoneNumber': data['phoneNumber'] ?? '',
-          'description': data['description'] ?? '',
-          'address': '',
-          'city': '',
-          'country': 'Austria',
-          if (data['requestedPassword'] != null)
-            'requestedPassword': data['requestedPassword'],
-          'status': 'pending',
-          'createdViaSelfRegistration': true,
-          'migratedFromLegacy': true,
-          'createdAt': data['createdAt'] ?? FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-        migrated++;
-      }
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Fehler: $e')));
-      return;
+      await _future;
+    } catch (_) {
+      if (!mounted) return;
+      _snack('Anfragen konnten nicht neu geladen werden.');
+    } finally {
+      if (mounted) setState(() => _reloading = false);
     }
-    messenger.showSnackBar(SnackBar(
-      content: Text('Migration: $migrated übernommen, $skipped übersprungen.'),
-      backgroundColor: AppColors.success,
+  }
+
+  void _snack(String msg, {bool ok = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: ok ? AppColors.success : AppColors.accent,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
     ));
   }
 
-  Future<bool> _confirm(
-    BuildContext context, {
+  Future<void> _approve(QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
+    final ok = await _confirm(
+      title: 'Bar freischalten?',
+      body: 'Die Bar wird ab sofort auf der Karte sichtbar und kann sich '
+          'einloggen.',
+      confirmLabel: 'Freischalten',
+      confirmColor: AppColors.success,
+    );
+    if (!ok) return;
+    try {
+      await doc.reference.update({
+        'status': 'approved',
+        'approvedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      await _reload();
+    } catch (e) {
+      _snack('Freischalten fehlgeschlagen: $e');
+    }
+  }
+
+  Future<void> _reject(QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
+    final ok = await _confirm(
+      title: 'Anfrage ablehnen?',
+      body: 'Der Account bleibt im Status "rejected". Die Bar kann sich '
+          'nicht einloggen.',
+      confirmLabel: 'Ablehnen',
+      confirmColor: AppColors.accent,
+    );
+    if (!ok) return;
+    try {
+      await doc.reference.update({
+        'status': 'rejected',
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      await _reload();
+    } catch (e) {
+      _snack('Ablehnen fehlgeschlagen: $e');
+    }
+  }
+
+  Future<void> _delete(QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
+    final ok = await _confirm(
+      title: 'Anfrage löschen?',
+      body: 'Komplett aus Firestore entfernen. Kann nicht rückgängig gemacht '
+          'werden.',
+      confirmLabel: 'Löschen',
+      confirmColor: AppColors.accent,
+    );
+    if (!ok) return;
+    try {
+      await doc.reference.delete();
+      await _reload();
+    } catch (e) {
+      _snack('Löschen fehlgeschlagen: $e');
+    }
+  }
+
+  Future<bool> _confirm({
     required String title,
     required String body,
     required String confirmLabel,
@@ -175,51 +174,58 @@ class AdminPendingBarsTab extends StatelessWidget {
                   style: TextStyle(color: AppColors.muted, fontSize: 13),
                 ),
               ),
-              TextButton.icon(
-                onPressed: () => _migrateLegacy(context),
-                icon: const Icon(Icons.upload_outlined, size: 16),
-                label: const Text('Legacy übernehmen',
-                    style: TextStyle(fontSize: 12)),
-                style: TextButton.styleFrom(
-                    foregroundColor: AppColors.muted,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 4)),
+              IconButton(
+                onPressed: _reloading ? null : _reload,
+                tooltip: 'Neu laden',
+                color: AppColors.muted,
+                icon: _reloading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded, size: 18),
               ),
             ],
           ),
         ),
         Expanded(
-          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: _stream(),
+          child: FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            future: _future,
             builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting &&
-                  !snap.hasData) {
+              if (snap.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
               }
               if (snap.hasError) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text('Fehler: ${snap.error}',
-                        style: const TextStyle(color: AppColors.accent)),
-                  ),
+                // Sichtbarer Fehlerstate, damit eine leere Liste nicht
+                // als „keine Anfragen" missverstanden wird. Zusätzlich
+                // hat der initState-Fehler keine Reload-Trigger-Chance
+                // — dieser Button ist die einzige Recovery-Option ohne
+                // App-Restart.
+                return _ErrorState(
+                  onRetry: _reloading ? null : _reload,
                 );
               }
               final docs = snap.data?.docs ?? [];
               if (docs.isEmpty) {
                 return _emptyState();
               }
-              return ListView.separated(
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
-                itemCount: docs.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (_, i) =>
-                    _PendingBarCard(
-                      doc: docs[i],
-                      onApprove: () => _approve(context, docs[i]),
-                      onReject: () => _reject(context, docs[i]),
-                      onDelete: () => _delete(context, docs[i]),
-                    ),
+              return RefreshIndicator(
+                onRefresh: _reload,
+                color: AppColors.accent,
+                backgroundColor: AppColors.panel,
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  itemCount: docs.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (_, i) => _PendingBarCard(
+                    doc: docs[i],
+                    onApprove: () => _approve(docs[i]),
+                    onReject: () => _reject(docs[i]),
+                    onDelete: () => _delete(docs[i]),
+                  ),
+                ),
               );
             },
           ),
@@ -247,6 +253,44 @@ class AdminPendingBarsTab extends StatelessWidget {
             const Text('Sobald sich eine Bar registriert, taucht sie hier auf.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.muted, fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorState extends StatelessWidget {
+  const _ErrorState({this.onRetry});
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_rounded,
+                size: 40, color: AppColors.muted),
+            const SizedBox(height: 8),
+            const Text(
+              'Anfragen konnten nicht geladen werden.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('Erneut versuchen'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.text,
+                side: const BorderSide(color: AppColors.accentBorder),
+                shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+              ),
+            ),
           ],
         ),
       ),

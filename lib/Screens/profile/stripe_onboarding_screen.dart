@@ -1,10 +1,10 @@
 // lib/Screens/profile/stripe_onboarding_screen.dart
 // Hosts onboarden ihren Stripe-Connect-Express-Account, damit sie
-// Tickets verkaufen können.
+// Tickets verkaufen können. Ein Account pro User —
+// users/{uid}/stripe/account ist die einzige Wahrheit.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -76,64 +76,6 @@ class _StripeOnboardingScreenState extends State<StripeOnboardingScreen> {
     }
   }
 
-  /// DEBUG-ONLY: Simuliert ein erfolgreiches Onboarding, indem die
-  /// Stripe-Felder im User-Doc auf "active" gesetzt werden.
-  /// Echte Käufe schlagen damit fehl (kein echter Stripe-Account),
-  /// aber UI-Flows (Toggle, Eingaben, Sichtbarkeit) sind testbar.
-  Future<void> _devBypass(bool enable) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
-
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('stripe')
-          .doc('account')
-          .set(
-            enable
-                ? {
-                    'stripeAccountId': 'acct_DEV_BYPASS',
-                    'stripeChargesEnabled': true,
-                    'stripePayoutsEnabled': true,
-                    'stripeDetailsSubmitted': true,
-                    'stripeOnboardingStatus': 'active',
-                    'stripeIsDevBypass': true,
-                    'stripeStatusUpdatedAt': FieldValue.serverTimestamp(),
-                  }
-                : {
-                    'stripeAccountId': FieldValue.delete(),
-                    'stripeChargesEnabled': false,
-                    'stripePayoutsEnabled': false,
-                    'stripeDetailsSubmitted': false,
-                    'stripeOnboardingStatus': 'incomplete',
-                    'stripeIsDevBypass': false,
-                    'stripeStatusUpdatedAt': FieldValue.serverTimestamp(),
-                  },
-            SetOptions(merge: true),
-          );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(enable
-              ? '🧪 Test-Bypass aktiviert (Käufe werden trotzdem fehlschlagen)'
-              : '🧪 Test-Bypass deaktiviert'),
-          backgroundColor: enable ? Colors.purple : AppColors.muted,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
-        ),
-      );
-    } catch (e) {
-      setState(() => _error = e.toString());
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -161,7 +103,6 @@ class _StripeOnboardingScreenState extends State<StripeOnboardingScreen> {
               final chargesEnabled = data['stripeChargesEnabled'] == true;
               final payoutsEnabled = data['stripePayoutsEnabled'] == true;
               final fullyActive = chargesEnabled && payoutsEnabled;
-              final isDevBypass = data['stripeIsDevBypass'] == true;
 
               return SingleChildScrollView(
                 padding: const EdgeInsets.all(20),
@@ -291,82 +232,6 @@ class _StripeOnboardingScreenState extends State<StripeOnboardingScreen> {
                         height: 1.5,
                       ),
                     ),
-
-                    // ── DEBUG-ONLY: Test-Bypass ─────────────────────────────
-                    if (kDebugMode) ...[
-                      const SizedBox(height: 28),
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: Colors.purple.withAlpha(30),
-                          borderRadius: AppRadius.smBr,
-                          border: Border.all(
-                              color: Colors.purple.withAlpha(110),
-                              width: 1.5),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              children: const [
-                                Icon(Icons.science_rounded,
-                                    color: Colors.purple, size: 18),
-                                SizedBox(width: 8),
-                                Text(
-                                  'Debug-Modus',
-                                  style: TextStyle(
-                                    color: Colors.purple,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 13,
-                                    letterSpacing: 0.4,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              isDevBypass
-                                  ? 'Test-Bypass ist aktiv. Du kannst Tickets in der UI aktivieren, aber echte Käufe schlagen fehl.'
-                                  : 'Stripe-Onboarding überspringen, um die UI zu testen. Käufe funktionieren damit nicht echt.',
-                              style: const TextStyle(
-                                color: AppColors.text,
-                                fontSize: 12,
-                                height: 1.5,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            ElevatedButton.icon(
-                              onPressed: _busy
-                                  ? null
-                                  : () => _devBypass(!isDevBypass),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: isDevBypass
-                                    ? AppColors.muted
-                                    : Colors.purple,
-                                foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 12),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: AppRadius.smBr),
-                              ),
-                              icon: Icon(
-                                isDevBypass
-                                    ? Icons.toggle_off_outlined
-                                    : Icons.bolt_rounded,
-                                size: 16,
-                              ),
-                              label: Text(
-                                isDevBypass
-                                    ? 'Bypass deaktivieren'
-                                    : 'Test-Bypass aktivieren',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w800),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               );

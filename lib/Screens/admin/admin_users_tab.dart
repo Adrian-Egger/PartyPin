@@ -7,6 +7,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../Theme/app_theme.dart';
+import 'admin_user_detail_screen.dart';
 
 class AdminUsersTab extends StatefulWidget {
   const AdminUsersTab({super.key});
@@ -39,7 +40,7 @@ class _AdminUsersTabState extends State<AdminUsersTab> {
             decoration: InputDecoration(
               prefixIcon:
                   const Icon(Icons.search_rounded, color: AppColors.muted),
-              hintText: 'Username oder Name suchen…',
+              hintText: 'Username, Email oder UID suchen…',
               hintStyle: const TextStyle(color: AppColors.subtle),
               filled: true,
               fillColor: AppColors.panelAlt,
@@ -75,13 +76,14 @@ class _AdminUsersTabState extends State<AdminUsersTab> {
               if (_q.isNotEmpty) {
                 docs = docs.where((d) {
                   final data = d.data();
-                  final u = (data['username'] ?? '')
-                      .toString()
-                      .toLowerCase();
-                  final fn = (data['fullName'] ?? '')
-                      .toString()
-                      .toLowerCase();
-                  return u.contains(_q) || fn.contains(_q);
+                  final u  = (data['username']  ?? '').toString().toLowerCase();
+                  final fn = (data['fullName']  ?? '').toString().toLowerCase();
+                  final em = (data['email']     ?? '').toString().toLowerCase();
+                  final id = d.id.toLowerCase();
+                  return u.contains(_q)
+                      || fn.contains(_q)
+                      || em.contains(_q)
+                      || id.contains(_q);
                 }).toList();
               }
               if (docs.isEmpty) {
@@ -128,6 +130,15 @@ class _UserTile extends StatelessWidget {
         border: Border.all(color: AppColors.accentBorder),
       ),
       child: ListTile(
+        // Tap → Detail-Screen mit allen Sektionen + Moderation-Buttons.
+        // Der frühere Inline-Ban-Toggle ist ersetzt — Ban läuft nun
+        // über die adminBanUser-Cloud-Function, damit auch Firebase Auth
+        // disabled wird (sonst läuft das Cached-Token bis zu 1h weiter).
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => AdminUserDetailScreen(uid: doc.id),
+          ),
+        ),
         leading: CircleAvatar(
           radius: 18,
           backgroundColor: AppColors.panelAlt,
@@ -167,23 +178,8 @@ class _UserTile extends StatelessWidget {
         ),
         subtitle: Text(fullName.isEmpty ? doc.id : fullName,
             style: const TextStyle(color: AppColors.muted, fontSize: 12)),
-        trailing: IconButton(
-          icon: Icon(
-            banned ? Icons.lock_open_rounded : Icons.block_rounded,
-            color: banned ? AppColors.success : AppColors.accent,
-          ),
-          tooltip: banned ? 'Ban aufheben' : 'User bannen',
-          onPressed: () async {
-            await doc.reference.set(
-              {
-                'banned': !banned,
-                if (!banned) 'bannedAt': FieldValue.serverTimestamp(),
-                'updatedAt': FieldValue.serverTimestamp(),
-              },
-              SetOptions(merge: true),
-            );
-          },
-        ),
+        trailing: const Icon(Icons.chevron_right_rounded,
+            color: AppColors.muted),
       ),
     );
   }

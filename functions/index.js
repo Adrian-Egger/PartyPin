@@ -30,6 +30,10 @@ const stripeWebhook = require("./stripe/webhook");
 const stripeScan = require("./stripe/scan");
 const emailVerify = require("./stripe/emailVerify");
 
+// 🛡 Admin-Moderation (Ban / Unban / VerifyEmail / Delete).
+// Hinter request.auth.token.admin === true gesichert.
+const adminModeration = require("./admin/userModeration");
+
 // =======================
 // Stripe Connect Onboarding & Tickets (Callable v2)
 // =======================
@@ -38,6 +42,14 @@ exports.refreshStripeAccountStatus = stripeOnboarding.refreshStripeAccountStatus
 exports.createTicketPaymentIntent = stripeTickets.createTicketPaymentIntent;
 exports.stripeWebhook = stripeWebhook.stripeWebhook;
 exports.validateAndUseTicket = stripeScan.validateAndUseTicket;
+
+// =======================
+// Admin-Moderation Callables
+// =======================
+exports.adminBanUser     = adminModeration.adminBanUser;
+exports.adminUnbanUser   = adminModeration.adminUnbanUser;
+exports.adminVerifyEmail = adminModeration.adminVerifyEmail;
+exports.adminDeleteUser  = adminModeration.adminDeleteUser;
 
 // =======================
 // E-Mail Verifikation für QR-Code-Versand

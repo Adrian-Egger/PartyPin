@@ -32,7 +32,13 @@ async function sendVerifyEmail({ to, link, displayName }) {
   const user = (SMTP_USER.value() || "").trim();
   const pass = (SMTP_PASSWORD.value() || "").trim();
   if (!user || !pass) {
-    throw new Error("SMTP secrets nicht gesetzt.");
+    // Niemals rohen Error werfen — sonst landet das ungefangen als
+    // INTERNAL beim Client. HttpsError wird vom äußeren Catch-Block
+    // unverändert durchgereicht (siehe Aufrufer-Pattern).
+    throw new HttpsError(
+      "failed-precondition",
+      "E-Mail-Versand ist serverseitig nicht konfiguriert. Bitte Support kontaktieren."
+    );
   }
 
   const transporter = nodemailer.createTransport({
@@ -141,8 +147,15 @@ exports.requestEmailVerification = onCall(
           displayName: data.username || data.fullName || "",
         });
       } catch (e) {
-        console.error("[requestEmailVerification] send failed:", e.message);
-        throw new HttpsError("internal", "send_failed");
+        // HttpsError aus sendVerifyEmail (z.B. failed-precondition bei
+        // fehlenden Secrets) unverändert durchreichen — sonst maskieren
+        // wir die lesbare Message hinter "internal/send_failed".
+        if (e instanceof HttpsError) throw e;
+        console.error("[requestEmailVerification] send failed:", e?.message || e);
+        throw new HttpsError(
+          "unavailable",
+          "Verifizierungs-Mail konnte nicht versendet werden — bitte später erneut versuchen."
+        );
       }
 
       return {

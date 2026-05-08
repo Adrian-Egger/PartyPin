@@ -2,6 +2,8 @@
 // Gemeinsamer Stripe-Client + Secret-Definitionen.
 
 const { defineSecret } = require("firebase-functions/params");
+const { HttpsError } = require("firebase-functions/v2/https");
+const { logger } = require("firebase-functions/v2");
 const Stripe = require("stripe");
 
 // Secrets — werden via `firebase functions:secrets:set <NAME>` gesetzt.
@@ -18,7 +20,22 @@ const CURRENCY = "eur";
 
 function getStripe() {
   const key = (STRIPE_SECRET_KEY.value() || "").trim();
-  if (!key) throw new Error("STRIPE_SECRET_KEY secret nicht gesetzt.");
+  if (!key) {
+    // Defense-in-depth: auch wenn der Aufrufer das nicht in einem try
+    // hat, bekommt der Client einen lesbaren HttpsError statt INTERNAL.
+    logger.error("[stripe] STRIPE_SECRET_KEY secret ist leer/nicht gesetzt.");
+    throw new HttpsError(
+      "failed-precondition",
+      "Stripe ist nicht konfiguriert. Bitte STRIPE_SECRET_KEY setzen und Functions neu deployen."
+    );
+  }
+  if (!key.startsWith("sk_live_") && !key.startsWith("sk_test_")) {
+    logger.error("[stripe] STRIPE_SECRET_KEY hat ein ungültiges Format.");
+    throw new HttpsError(
+      "failed-precondition",
+      "Stripe-Schlüssel ist ungültig. Bitte STRIPE_SECRET_KEY prüfen."
+    );
+  }
   return new Stripe(key, { apiVersion: "2024-11-20.acacia" });
 }
 

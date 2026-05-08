@@ -13,6 +13,7 @@ import 'package:party_pin/Upgrade/phone_upgrade_screen.dart';
 import '../../Theme/app_theme.dart';
 import '../../l10n/lang.dart';
 import '../../Services/notification_service.dart';
+import '../../Services/platform_info.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({Key? key}) : super(key: key);
@@ -360,6 +361,15 @@ class _LoginScreenState extends State<LoginScreen> {
 
       // Save FCM token now that username is known
       try { await NotificationService.saveCurrentToken(); } catch (_) {}
+
+      // lastActive + platform fürs Admin-Dashboard nachziehen.
+      // Telemetrie — Login-Flow fällt NICHT, wenn das hier scheitert.
+      try {
+        await foundDocRef?.update({
+          'lastActive': FieldValue.serverTimestamp(),
+          'platform': PlatformInfo.detectName(),
+        });
+      } catch (_) {}
 
       await _checkNavigation();
     } catch (e) {

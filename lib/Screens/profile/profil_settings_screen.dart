@@ -257,26 +257,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   // ---------- Avatar / Foto ----------
-  Future<bool> _ensureCameraPermission() async {
-    var status = await Permission.camera.status;
-
-    if (status.isGranted || status.isLimited) return true;
-
-    // Screen Time / MDM restriction — kann der Nutzer selbst nicht ändern
-    if (status.isRestricted) {
-      if (mounted) _showSnack(Lang.t('profile_cam_restricted'), color: Colors.redAccent);
-      return false;
-    }
-
-    // iOS .notDetermined sowie alles andere → nativen Dialog auslösen
-    status = await Permission.camera.request();
-
-    if (status.isGranted || status.isLimited) return true;
-
-    // Permanent denied → Settings-Dialog
-    _showPermissionSettingsDialog(Lang.t('perm_camera'));
-    return false;
-  }
+  // Hinweis: KEINE manuelle Camera-Permission-Abfrage mehr.
+  // Auf iOS hat permission_handler.Permission.camera.request() vor
+  // _picker.pickImage(source: camera) zu einem Race mit dem
+  // UIImagePickerController-Permission-Lifecycle geführt — Resultat:
+  // "Kamera-Zugriff nicht erlaubt", obwohl die Berechtigung da war.
+  // image_picker selbst löst den nativen iOS-Permission-Dialog aus.
+  // permission_handler wird unten in _showPermissionSettingsDialog
+  // weiterhin für openAppSettings() benutzt (permanente Verweigerung).
 
   void _showPermissionSettingsDialog(String permissionName) {
     if (!mounted) return;
@@ -319,26 +307,45 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   Future<void> _pickFromSource(ImageSource source) async {
     if (_busyAvatar) return;
 
-    if (source == ImageSource.camera) {
-      final ok = await _ensureCameraPermission();
-      if (!ok) return;
-    }
-
+    // KEINE vorgeschaltete Permission-Abfrage. image_picker triggert den
+    // nativen iOS-Permission-Dialog beim ersten Aufruf selbst. Eine
+    // PlatformException kommt nur bei permanenter Verweigerung oder
+    // Hardware-Restriktion zurück; in dem Fall verweisen wir auf die
+    // App-Settings.
     XFile? image;
     try {
       image = await _picker.pickImage(
         source: source,
         imageQuality: 85,
         maxWidth: 900,
+        // Auf iOS spart das einen zusätzlichen Photo-Library-Permission-
+        // Roundtrip über PHPickerViewController.
+        requestFullMetadata: false,
       );
-    } catch (e) {
+    } on PlatformException catch (e) {
       if (!mounted) return;
-      // Only show the Fotos-dialog for gallery errors, not for camera failures
-      if (source == ImageSource.gallery) {
-        _showPermissionSettingsDialog(Lang.t('perm_photos'));
+      final code = e.code.toLowerCase();
+      // iOS-Codes: 'camera_access_denied', 'photo_access_denied',
+      // 'camera_access_restricted', 'photo_access_restricted'
+      if (code.contains('denied') || code.contains('restricted')) {
+        _showPermissionSettingsDialog(
+          source == ImageSource.camera
+              ? Lang.t('perm_camera')
+              : Lang.t('perm_photos'),
+        );
       } else {
-        _showSnack(Lang.t('profile_cam_unavailable'), color: Colors.redAccent);
+        // z.B. 'camera_access_unknown', iPad-Simulator ohne Kamera, etc.
+        _showSnack(
+          source == ImageSource.camera
+              ? Lang.t('profile_cam_unavailable')
+              : Lang.t('profile_cam_unavailable'),
+          color: Colors.redAccent,
+        );
       }
+      return;
+    } catch (_) {
+      if (!mounted) return;
+      _showSnack(Lang.t('profile_cam_unavailable'), color: Colors.redAccent);
       return;
     }
 
