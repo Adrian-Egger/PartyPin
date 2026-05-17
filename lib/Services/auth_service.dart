@@ -243,14 +243,20 @@ class AuthService {
           );
         case 'failed-precondition':
         case 'internal':
-          return const LoginResult.fail(
+          // Nicht generisch verstecken — Originalmeldung mitgeben, damit
+          // wir IAM-/Konfig-Fehler beim Pre-Launch sehen statt zu raten.
+          return LoginResult.fail(
             LoginError.serverInternal,
-            'Server-Fehler. Bitte später erneut versuchen.',
+            e.message != null && e.message!.isNotEmpty
+                ? 'Server: ${e.message} (${e.code})'
+                : 'Server-Fehler (${e.code}). Bitte später erneut versuchen.',
           );
         default:
           return LoginResult.fail(
             LoginError.unknown,
-            'Login fehlgeschlagen: ${e.code}',
+            e.message != null && e.message!.isNotEmpty
+                ? 'Login fehlgeschlagen: ${e.message} (${e.code})'
+                : 'Login fehlgeschlagen: ${e.code}',
           );
       }
     } catch (e) {
@@ -439,10 +445,20 @@ class AuthService {
             SignupError.network,
             'Keine Verbindung zum Server.',
           );
+        case 'internal':
+          // Originalmeldung mitgeben (z.B. IAM-Probleme) statt generisch.
+          return SignupResult.fail(
+            SignupError.serverInternal,
+            e.message != null && e.message!.isNotEmpty
+                ? 'Server: ${e.message} (${e.code})'
+                : 'Server-Fehler (${e.code}).',
+          );
         default:
           return SignupResult.fail(
             SignupError.unknown,
-            'Signup fehlgeschlagen: ${e.code}',
+            e.message != null && e.message!.isNotEmpty
+                ? 'Signup fehlgeschlagen: ${e.message} (${e.code})'
+                : 'Signup fehlgeschlagen: ${e.code}',
           );
       }
     } catch (e) {
