@@ -11,37 +11,85 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
+const { setGlobalOptions, logger } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 
 // ✅ EINMAL init
 if (!admin.apps.length) admin.initializeApp();
 
+// ============================================================
+// Global Defaults — gilt für JEDE Function, die nichts eigenes
+// setzt. Das ist der Kosten-Backstop:
+//   - region: alles in europe-west1 (DSGVO + niedrige Latenz für AT)
+//   - maxInstances: kein Runaway-Auto-Scale → harte Obergrenze
+//   - timeoutSeconds: kurze CFs sollen nicht 9 Min hängen
+//   - memory: Standard 256MiB → ~0.50€/Mio Invocations
+//   - concurrency: pro Container mehrere parallel — billiger
+// ============================================================
+setGlobalOptions({
+  region: "europe-west1",
+  maxInstances: 10,
+  timeoutSeconds: 15,
+  memory: "256MiB",
+  concurrency: 80,
+});
+
 const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
 
 // ✅ Scheduler (v2)
 const eventsCleanup = require("./eventCleanup");
+const avatarCleanup = require("./avatarCleanup");
 
-// ✅ Stripe Ticket Callables (v2)
-const stripeTickets = require("./stripe/tickets");
-const stripeOnboarding = require("./stripe/onboarding");
-const stripeWebhook = require("./stripe/webhook");
-const stripeScan = require("./stripe/scan");
-const emailVerify = require("./stripe/emailVerify");
+// SECURITY_HARDENING (Audit M2): `cleanupExpiredEvents` wurde vorher
+// zweimal exportiert (hier UND weiter unten). Die zweite Stelle ist
+// entfernt — Single source of truth.
+exports.cleanupExpiredEvents = eventsCleanup.cleanupExpiredEvents;
+exports.cleanupOrphanAvatars = avatarCleanup.cleanupOrphanAvatars;
+
+// FEATURE_DISABLED_TICKETING — Stripe/Ticket Callables sind archiviert.
+// Quelle: archived/ticketing/functions/stripe/{tickets,onboarding,webhook,scan}.js
+// see archived/ticketing/README.md
+
+// 📧 E-Mail-Verifikation (Account/Profil) — generisch, nicht ticketing-spezifisch.
+// Früher: functions/stripe/emailVerify.js. Heute: functions/email/verify.js.
+// Export-Namen sind stabil geblieben.
+const emailVerify = require("./email/verify");
 
 // 🛡 Admin-Moderation (Ban / Unban / VerifyEmail / Delete).
 // Hinter request.auth.token.admin === true gesichert.
 const adminModeration = require("./admin/userModeration");
 
-// =======================
-// Stripe Connect Onboarding & Tickets (Callable v2)
-// =======================
-exports.createStripeOnboardingLink = stripeOnboarding.createStripeOnboardingLink;
-exports.refreshStripeAccountStatus = stripeOnboarding.refreshStripeAccountStatus;
-exports.createTicketPaymentIntent = stripeTickets.createTicketPaymentIntent;
-exports.stripeWebhook = stripeWebhook.stripeWebhook;
-exports.validateAndUseTicket = stripeScan.validateAndUseTicket;
+// 🍻 Admin-Bar-Approval (approve / reject pending bars).
+// Operational Readiness Sprint 2026-05-17.
+const adminBarApproval = require("./admin/barApproval");
+
+// 🏆 Host Reputation & Creator System.
+// Aggregiert Party-/RSVP-/Report-Daten in users/{username}/hostStats/current
+// und schreibt täglich Top-10 nach trendingHosts/global.
+const hostStats = require("./hostStats/recompute");
+
+// 👥 Friends & Social Activity Layer.
+// Trigger auf RSVPs → pflegt goingCount + goingRecent (avatars) auf
+// jedem Party-Doc. Map/Discovery rendern Social-Proof aus 1 Doc-Read.
+const partyActivity = require("./partyActivity/aggregate");
+
+// 🔐 Auth-Migration (Pre-Launch Audit Hardening, Audit C1+C2).
+// - loginCallable:      server-seitiger Login, gibt Custom Token zurück.
+// - signupCallable:     server-seitige Account-Creation, schreibt
+//                       passwordHash NUR nach users_secrets/bars_secrets.
+// - migrateAuthSecrets: Admin-only Backfill von users/bars → *_secrets.
+// - deleteLegacyPasswordHashes: Admin-only Cleanup nach Migration.
+const authLogin = require("./auth/loginCallable");
+const authSignup = require("./auth/signupCallable");
+const authChangePw = require("./auth/changePasswordCallable");
+const authMigrate = require("./auth/migrateSecretsCallable");
+const authCleanup = require("./auth/deleteLegacyPasswordHashes");
+
+// 🔑 Password Reset (Operational Readiness, 2026-05-17).
+// requestPasswordReset (callable) + passwordResetPage (HTTPS form).
+const passwordReset = require("./passwordReset/reset");
 
 // =======================
 // Admin-Moderation Callables
@@ -50,6 +98,38 @@ exports.adminBanUser     = adminModeration.adminBanUser;
 exports.adminUnbanUser   = adminModeration.adminUnbanUser;
 exports.adminVerifyEmail = adminModeration.adminVerifyEmail;
 exports.adminDeleteUser  = adminModeration.adminDeleteUser;
+
+// =======================
+// Admin — Bar Approval
+// =======================
+exports.adminApproveBar = adminBarApproval.adminApproveBar;
+exports.adminRejectBar  = adminBarApproval.adminRejectBar;
+
+// =======================
+// Host Reputation & Creator System
+// =======================
+exports.recomputeHostStats     = hostStats.recomputeHostStats;
+exports.recomputeAllHostStats  = hostStats.recomputeAllHostStats;
+
+// =======================
+// Friends & Social Activity Layer
+// =======================
+exports.onRsvpWrite = partyActivity.onRsvpWrite;
+
+// =======================
+// Auth (siehe functions/auth/*.js für Deployment-Checkliste).
+// =======================
+exports.loginCallable = authLogin.loginCallable;
+exports.signupCallable = authSignup.signupCallable;
+exports.changePasswordCallable = authChangePw.changePasswordCallable;
+exports.migrateAuthSecrets = authMigrate.migrateAuthSecrets;
+exports.deleteLegacyPasswordHashes = authCleanup.deleteLegacyPasswordHashes;
+
+// =======================
+// Password Reset
+// =======================
+exports.requestPasswordReset = passwordReset.requestPasswordReset;
+exports.passwordResetPage = passwordReset.passwordResetPage;
 
 // =======================
 // E-Mail Verifikation für QR-Code-Versand
@@ -91,7 +171,18 @@ function parsePartyStart(party) {
     return new Date(base.getFullYear(), base.getMonth(), base.getDate(), hh, mm, 0, 0);
 }
 
-exports.setPartyRating = onCall({ region: "europe-west1" }, async (request) => {
+exports.setPartyRating = onCall(
+    {
+        region: "europe-west1",
+        maxInstances: 10,
+        timeoutSeconds: 15,
+        memory: "256MiB",
+        concurrency: 80,
+        // App Check verpflichtend: nur Calls aus der echten App.
+        // TODO(appcheck): nach Console-Setup auf `true` setzen
+        enforceAppCheck: false,
+    },
+    async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Not logged in.");
 
@@ -230,11 +321,6 @@ exports.setPartyRating = onCall({ region: "europe-west1" }, async (request) => {
 });
 
 // =======================
-// Scheduler Export
-// =======================
-exports.cleanupExpiredEvents = eventsCleanup.cleanupExpiredEvents;
-
-// =======================
 // Nearby Party Notifications (Scheduled — Thu + Fri 17:00 CET)
 // =======================
 
@@ -254,6 +340,13 @@ exports.sendNearbyPartyNotifications = onSchedule(
         region: "europe-west1",
         schedule: "0 17 * * 4,5", // Thu + Fri at 17:00
         timeZone: "Europe/Vienna",
+        // Schedule-Functions sollen sich nicht selbst überschneiden.
+        maxInstances: 1,
+        // Bis zu 9 Min für den weekend-sweep (Party + Bars + Users).
+        timeoutSeconds: 540,
+        // Mehr Speicher: in-memory join über mehrere Collections.
+        memory: "512MiB",
+        // Trigger ist nicht user-facing → App Check N/A.
     },
     async () => {
         const now = new Date();
@@ -389,7 +482,17 @@ exports.sendNearbyPartyNotifications = onSchedule(
 // =======================
 // sendFriendRequest (Callable v2) — idempotent, race-condition-safe
 // =======================
-exports.sendFriendRequest = onCall({ region: "europe-west1" }, async (request) => {
+exports.sendFriendRequest = onCall(
+    {
+        region: "europe-west1",
+        maxInstances: 10,
+        timeoutSeconds: 15,
+        memory: "256MiB",
+        concurrency: 80,
+        // TODO(appcheck): nach Console-Setup auf `true` setzen
+        enforceAppCheck: false,
+    },
+    async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Not logged in.");
 
     const uid = request.auth.uid;
@@ -450,7 +553,15 @@ exports.sendFriendRequest = onCall({ region: "europe-west1" }, async (request) =
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 
 exports.onFriendRequest = onDocumentCreated(
-  { document: "friendRequests/{requestId}", region: "europe-west1" },
+  {
+    document: "friendRequests/{requestId}",
+    region: "europe-west1",
+    // Trigger ist server-intern, App Check N/A.
+    maxInstances: 10,
+    timeoutSeconds: 30, // FCM send + 2 collection lookups
+    memory: "256MiB",
+    concurrency: 20,
+  },
   async (event) => {
     const data = event.data?.data();
     if (!data) return;
@@ -502,46 +613,223 @@ exports.onFriendRequest = onDocumentCreated(
 // =======================
 // Party Anfrage Status Notification (Callable v2)
 // =======================
-exports.sendPushNotification = onCall({ region: "europe-west1" }, async (request) => {
-  const { toUsername, title, body, data: extraData } = request.data || {};
-  if (!toUsername || !title || !body) return { ok: false, reason: "missing fields" };
+//
+// SECURITY_HARDENING (Pre-Launch Audit): Vor dieser Hardening konnte
+// jeder anonym-authed Client beliebigen Usern Pushes mit beliebigem
+// Title/Body schicken (siehe Audit C3). Push-Spam-Vektor.
+//
+// Jetzt:
+//   1. Rate-Limit hart: max 30 Pushes pro Stunde pro Caller-UID,
+//      gespeichert in `pushQuota/{uid}` mit serverTimestamp + count.
+//   2. Beziehungs-Check (fail-closed): Push nur wenn
+//      a) Friendship Caller<->Target existiert, ODER
+//      b) Common Party: Caller ist Host und Target hat RSVP/Request/
+//         Approved, ODER umgekehrt.
+//   3. Reject wird mit warn-log + payload-size geloggt.
+//
+// Push ist UI-optional — wenn der Check fehlschlägt, ist das kein
+// Beinbruch, der zugrundeliegende RSVP/Chat-Write läuft trotzdem
+// durch (er passiert client-seitig vor diesem Call).
 
-  const lower = toUsername.toLowerCase();
-  let fcmToken = null;
+const PUSH_QUOTA_LIMIT_PER_HOUR = 30;
 
-  // Search users and bars collections by username / username_lower
-  for (const col of ["users", "bars"]) {
-    if (fcmToken) break;
-    for (const [field, val] of [["username", toUsername], ["username_lower", lower]]) {
-      if (fcmToken) break;
-      try {
-        const q = await db.collection(col).where(field, "==", val).limit(1).get();
-        if (!q.empty) fcmToken = q.docs[0].data()?.fcmToken || null;
-      } catch (_) {}
+async function _resolveUsernameForUid(uid) {
+  // Strategie: erst Doc per uid lookup, dann fallback per `uid` field.
+  try {
+    const direct = await db.collection("users").doc(uid).get();
+    if (direct.exists) {
+      const u = (direct.data()?.username || "").toString().trim();
+      if (u) return u;
     }
+  } catch (_) {}
+  try {
+    const q = await db.collection("users").where("uid", "==", uid).limit(1).get();
+    if (!q.empty) {
+      const u = (q.docs[0].data()?.username || "").toString().trim();
+      if (u) return u;
+    }
+  } catch (_) {}
+  return null;
+}
+
+async function _checkAndIncrementPushQuota(uid) {
+  const ref = db.collection("pushQuota").doc(uid);
+  const nowMs = Date.now();
+  const oneHourMs = 60 * 60 * 1000;
+  return await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    let count = 0;
+    let windowStart = nowMs;
+    if (snap.exists) {
+      const d = snap.data() || {};
+      const ws = (d.windowStartMs || 0);
+      if (nowMs - ws < oneHourMs) {
+        count = d.count || 0;
+        windowStart = ws;
+      } // else: Fenster abgelaufen, Reset auf 0
+    }
+    if (count >= PUSH_QUOTA_LIMIT_PER_HOUR) {
+      return { allowed: false, count };
+    }
+    tx.set(ref, {
+      windowStartMs: windowStart,
+      count: count + 1,
+      lastAt: FieldValue.serverTimestamp(),
+    });
+    return { allowed: true, count: count + 1 };
+  });
+}
+
+async function _areFriends(usernameA, usernameB) {
+  if (!usernameA || !usernameB) return false;
+  const shipId = [usernameA, usernameB].sort().join("__");
+  try {
+    const snap = await db.collection("friendships").doc(shipId).get();
+    return snap.exists;
+  } catch (_) {
+    return false;
   }
+}
 
-  if (!fcmToken) return { ok: false, reason: "no fcm token" };
+async function _haveCommonParty(callerUsername, targetUsername) {
+  if (!callerUsername || !targetUsername) return false;
+  // Caller ist Host einer Party — Target hat dort RSVP/Request/Approved?
+  // ODER Target ist Host — Caller hat dort RSVP/Request/Approved?
+  // Wir limitieren auf jeweils 10 Parties, sonst kann ein Spam-Host mit
+  // tausenden Parties die CF lange laufen lassen.
+  for (const [hostName, guestName] of [
+    [callerUsername, targetUsername],
+    [targetUsername, callerUsername],
+  ]) {
+    try {
+      const hostedSnap = await db
+        .collection("Party")
+        .where("hostId", "==", hostName)
+        .limit(10)
+        .get();
+      for (const pdoc of hostedSnap.docs) {
+        for (const sub of ["rsvps", "requests", "approved", "coming", "maybe"]) {
+          try {
+            const r = await pdoc.ref.collection(sub).doc(guestName).get();
+            if (r.exists) return true;
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+  return false;
+}
 
-  await admin.messaging().send({
-    token: fcmToken,
-    notification: { title, body },
-    data: extraData || {},
-    android: {
-      priority: "high",
-      notification: { channelId: "party_requests", sound: "default" },
-    },
-    apns: {
-      headers: { "apns-priority": "10" },
-      payload: {
-        aps: {
-          sound: "default",
-          badge: 1,
-          "content-available": 1,
+exports.sendPushNotification = onCall(
+  {
+    region: "europe-west1",
+    maxInstances: 10,
+    timeoutSeconds: 30, // mehr als vorher: Relation-Check + FCM
+    memory: "256MiB",
+    concurrency: 40,
+    // TODO(appcheck): nach Console-Setup auf `true` setzen
+    enforceAppCheck: false,
+  },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Not logged in.");
+    }
+    const callerUid = request.auth.uid;
+
+    const { toUsername, title, body, data: extraData } = request.data || {};
+    if (!toUsername || !title || !body) {
+      return { ok: false, reason: "missing fields" };
+    }
+    if (String(title).length > 120 || String(body).length > 400) {
+      throw new HttpsError("invalid-argument", "title/body too long.");
+    }
+    const targetUsername = String(toUsername).trim();
+    if (!targetUsername) {
+      return { ok: false, reason: "empty target" };
+    }
+
+    // --- 1. Rate-Limit ---
+    const quota = await _checkAndIncrementPushQuota(callerUid);
+    if (!quota.allowed) {
+      logger.warn("[push] rate limited", {
+        callerUid,
+        target: targetUsername,
+        countInWindow: quota.count,
+      });
+      throw new HttpsError(
+        "resource-exhausted",
+        "Push rate-limit reached. Try later."
+      );
+    }
+
+    // --- 2. Beziehungs-Check ---
+    const callerUsername = await _resolveUsernameForUid(callerUid);
+    // Wenn wir den Caller-Username nicht auflösen können, ist das mit
+    // dem aktuellen anonymous-Auth-Modell ein gültiger Zustand (User
+    // direkt nach Signup ohne username-Set). Wir verweigern den Push
+    // trotzdem, weil wir die Beziehung nicht prüfen können — das
+    // führt nur dazu, dass ein noch nicht ge-onboardeter User keine
+    // Pushes schicken kann, was OK ist.
+    if (!callerUsername) {
+      logger.warn("[push] caller username unresolved", { callerUid });
+      return { ok: false, reason: "caller username unresolved" };
+    }
+    if (callerUsername === targetUsername) {
+      return { ok: false, reason: "self push" };
+    }
+
+    const isFriend = await _areFriends(callerUsername, targetUsername);
+    let hasRelation = isFriend;
+    if (!hasRelation) {
+      hasRelation = await _haveCommonParty(callerUsername, targetUsername);
+    }
+    if (!hasRelation) {
+      logger.warn("[push] no relation — rejected", {
+        callerUsername,
+        target: targetUsername,
+      });
+      return { ok: false, reason: "no relation" };
+    }
+
+    // --- 3. FCM-Token auflösen ---
+    const lower = targetUsername.toLowerCase();
+    let fcmToken = null;
+    for (const col of ["users", "bars"]) {
+      if (fcmToken) break;
+      for (const [field, val] of [
+        ["username", targetUsername],
+        ["username_lower", lower],
+      ]) {
+        if (fcmToken) break;
+        try {
+          const q = await db.collection(col).where(field, "==", val).limit(1).get();
+          if (!q.empty) fcmToken = q.docs[0].data()?.fcmToken || null;
+        } catch (_) {}
+      }
+    }
+
+    if (!fcmToken) return { ok: false, reason: "no fcm token" };
+
+    await admin.messaging().send({
+      token: fcmToken,
+      notification: { title, body },
+      data: extraData || {},
+      android: {
+        priority: "high",
+        notification: { channelId: "party_requests", sound: "default" },
+      },
+      apns: {
+        headers: { "apns-priority": "10" },
+        payload: {
+          aps: {
+            sound: "default",
+            badge: 1,
+            "content-available": 1,
+          },
         },
       },
-    },
-  });
+    });
 
-  return { ok: true };
-});
+    return { ok: true };
+  }
+);

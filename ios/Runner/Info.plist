@@ -41,11 +41,13 @@
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 
+	<!-- SECURITY_HARDENING / Pre-Launch Audit: iPhone auf Portrait-only
+	     beschränkt — UI ist Portrait-designed, Landscape verursacht
+	     Layout-Probleme auf Map + Bottom-Sheets. iPad behält die volle
+	     Orientation-Suite (Tablet-Nutzung kann Landscape sinnvoll sein). -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 
 	<key>UISupportedInterfaceOrientations~ipad</key>
@@ -68,7 +70,11 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 
-	<!-- 🔥 Deep-Link Scheme: partypin:// (Stripe-Onboarding-Bridge) -->
+	<!-- Deep-Link Scheme: partypin:// — wird vom DeepLinkHandler
+	     verarbeitet (lib/Services/deep_link_handler.dart). Aktuell keine
+	     konkreten Hosts registriert (Stripe-Bridge ist mit Ticketing-
+	     Removal weggefallen). Scheme bleibt für künftige Party-Share /
+	     Invite-Links. -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -81,7 +87,10 @@
 		</dict>
 	</array>
 
-	<!-- BERECHTIGUNGEN FÜR PROFILBILDER / PHOTO PICKER / KAMERA / STANDORT -->
+	<!-- BERECHTIGUNGEN: minimal halten — App-Store-Review zickt bei
+	     unjustified permissions. SECURITY_HARDENING (Pre-Launch Audit):
+	     NSMicrophone + NSLocation entfernt (werden nicht genutzt),
+	     NSCamera-Text auf reale Nutzung (Profilbild) reduziert. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Die App benötigt Zugriff auf deine Fotogalerie, um ein Profilbild hochzuladen.</string>
 
@@ -89,13 +98,7 @@
 	<string>Die App benötigt Zugriff, um Bilder in deiner Galerie zu speichern.</string>
 
 	<key>NSCameraUsageDescription</key>
-	<string>Die App benötigt Zugriff auf die Kamera, um Profilbilder aufzunehmen und QR-Codes zu scannen.</string>
-
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Das Mikrofon wird benötigt, wenn du ein Video aufnehmen möchtest.</string>
-
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Die App verwendet deinen Standort, um dir standortbasierte Funktionen wie Partys und Events in deiner Nähe auf der Karte anzeigen zu können.</string>
+	<string>Die App benötigt Zugriff auf die Kamera, um ein Profilbild aufzunehmen.</string>
 
 </dict>
 </plist>

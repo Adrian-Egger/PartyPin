@@ -4,6 +4,9 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import '../../Theme/app_theme.dart';
 import '../../Social/friends_model.dart';
+import '../../Social/host_stats.dart';
+import '../../Social/host_stats_card.dart';
+import '../../Social/host_stats_service.dart';
 import 'chat_detail_screen.dart';
 
 class UserProfileScreen extends StatefulWidget {
@@ -291,6 +294,29 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     ],
                   ),
 
+                  // ── Host Reputation Card ──────────────────────────────
+                  // Public-Profil zeigt IMMER irgendwas — auch für brand-new
+                  // Hosts ohne Party. Phase 1 der App braucht Sichtbarkeit
+                  // > Exklusivität (siehe project_host_reputation):
+                  //   - partyCount > 0  → volle HostStatsCard
+                  //   - sonst           → subtile "New Host"-Empty-Card
+                  // Bar-Accounts haben keinen Host-Reputation-Track.
+                  if (!isBar) ...[
+                    const SizedBox(height: 20),
+                    StreamBuilder<HostStats>(
+                      stream: HostStatsService.watch(widget.username),
+                      builder: (context, snap) {
+                        final stats = snap.data;
+                        if (stats == null) return const SizedBox.shrink();
+                        if (stats.partyCount > 0 ||
+                            stats.reputationScore > 0) {
+                          return HostStatsCard(stats: stats);
+                        }
+                        return const _NewHostEmptyCard();
+                      },
+                    ),
+                  ],
+
                   // ── Info cards ────────────────────────────────────────
                   const SizedBox(height: 20),
                   _infoCard(
@@ -498,6 +524,70 @@ class _FullscreenAvatarState extends State<_FullscreenAvatar> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// Subtile "New Host"-Karte für Profile ohne Hosting-Historie. Nicht
+// gamified, kein CTA, keine Punkte — nur ein neutraler Hinweis dass
+// der User noch keine Party gehostet hat. Hält die App "voll" statt
+// auf einem leeren Profil tot zu wirken.
+class _NewHostEmptyCard extends StatelessWidget {
+  const _NewHostEmptyCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: AppColors.panel,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.accentBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: AppColors.muted.withOpacity(0.12),
+              shape: BoxShape.circle,
+              border: Border.all(color: AppColors.muted.withOpacity(0.30)),
+            ),
+            child: const Icon(Icons.star_outline_rounded,
+                color: AppColors.muted, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Text(
+                  'New Host',
+                  style: TextStyle(
+                    color: AppColors.text,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Noch keine Events gehostet.',
+                  style: TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

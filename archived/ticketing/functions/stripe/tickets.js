@@ -26,7 +26,16 @@ const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
 
 exports.createTicketPaymentIntent = onCall(
-  { region: "europe-west1", secrets: [STRIPE_SECRET_KEY] },
+  {
+    region: "europe-west1",
+    secrets: [STRIPE_SECRET_KEY],
+    maxInstances: 10,        // Ticket-Bursts vor Events
+    timeoutSeconds: 30,      // Stripe API roundtrip
+    memory: "256MiB",
+    concurrency: 20,
+    // TODO(appcheck): nach Console-Setup auf `true` setzen
+    enforceAppCheck: false,
+  },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Not logged in.");
     const uid = request.auth.uid;

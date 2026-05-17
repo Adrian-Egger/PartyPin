@@ -14,7 +14,8 @@ import 'Screens/home/home_shell.dart';
 import 'Theme/app_theme.dart';
 import 'Services/deep_link_handler.dart';
 import 'Services/notification_service.dart';
-import 'Services/stripe_service.dart';
+// FEATURE_DISABLED_TICKETING — Stripe-Init entfernt.
+// see archived/ticketing/README.md
 import 'l10n/lang.dart';
 
 @pragma('vm:entry-point')
@@ -58,15 +59,13 @@ Future<void> main() async {
     print("DEBUG APPCHECK ACTIVE");
   }
 
-  // 4. Phase 2: Stripe + (optional) anonyme Auth parallel.
-  //    Stripe haengt nicht von Auth ab und umgekehrt.
-  //    signInAnonymously nur, wenn noch kein User da ist — vermeidet
+  // 4. Phase 2: Anonyme Auth, wenn noch kein User da ist — vermeidet
   //    einen unnoetigen Netzwerk-Roundtrip beim Warmstart.
-  await Future.wait<void>([
-    StripeService.init(),
-    if (FirebaseAuth.instance.currentUser == null)
-      FirebaseAuth.instance.signInAnonymously().then((_) {}),
-  ]);
+  //    FEATURE_DISABLED_TICKETING — StripeService.init() ist entfernt.
+  //    see archived/ticketing/README.md
+  if (FirebaseAuth.instance.currentUser == null) {
+    await FirebaseAuth.instance.signInAnonymously();
+  }
 
   // Background-Handler: SYNCHRONOUS Registrierung, kein await.
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);

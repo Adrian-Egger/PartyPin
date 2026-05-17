@@ -1,19 +1,45 @@
-// functions/stripe/emailVerify.js
-// E-Mail-Verifikation über Bestätigungslink:
-//   1. requestEmailVerification (Callable) — speichert pendingEmail + Token
-//      auf dem User-Doc und sendet eine Bestätigungsmail mit Link.
-//   2. verifyEmailToken (HTTPS)            — wird vom Klick im Mail-Link
-//      aufgerufen, verschiebt pendingEmail → email und löscht den Token.
+// functions/email/verify.js
+//
+// Generische E-Mail-Verifikation für PartyPin (Account/Profil).
+//
+// Verlauf:
+//   1. Stripe-Ticketing wurde aus der App entfernt — siehe
+//      archived/ticketing/README.md
+//   2. Dieser Service hieß früher `functions/stripe/emailVerify.js`,
+//      lebte im Stripe-Modul und wurde irreführend dort hinein gehängt.
+//      E-Mail-Verifizierung ist kein Ticketing-Feature: sie dient
+//      Account-Recovery, Moderation, Trust, Host-Identität, Sicherheit.
+//   3. Die Cloud-Function-Export-Namen (`requestEmailVerification`,
+//      `verifyEmailToken`) bleiben stabil, damit Bestehende Clients
+//      unverändert weiter funktionieren.
+//
+// Funktionen:
+//   - requestEmailVerification (Callable) — speichert pendingEmail +
+//     Token auf dem User-/Bar-Doc und verschickt eine Bestätigungsmail
+//     mit Link.
+//   - verifyEmailToken (HTTPS) — wird vom Klick im Mail-Link aufgerufen,
+//     verschiebt pendingEmail → email und löscht den Token.
+//
+// Locked-Fields:
+//   Alle hier gesetzten Felder (pending*, email, emailVerified*) sind in
+//   firestore.rules als `lockedUserFields`/`lockedBarFields` markiert,
+//   d.h. der Client darf sie nicht direkt schreiben — nur diese CF.
 
 const { onCall, onRequest, HttpsError } =
     require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
-const { SMTP_USER, SMTP_PASSWORD } = require("./client");
 
 const db = admin.firestore();
 const FieldValue = admin.firestore.FieldValue;
+
+// SMTP-Secrets — werden via `firebase functions:secrets:set <NAME>`
+// gesetzt. Identische Namen wie früher in `functions/stripe/client.js`,
+// damit kein Re-Set nötig ist.
+const SMTP_USER = defineSecret("SMTP_USER");
+const SMTP_PASSWORD = defineSecret("SMTP_PASSWORD");
 
 const PROJECT_ID = "partypin-5dc3f";
 const REGION = "europe-west1";
@@ -24,6 +50,16 @@ const TOKEN_TTL_HOURS = 24;
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const ALLOWED_COLLECTIONS = ["users", "bars"];
 
+// ── Rate-Limit Konstanten ──────────────────────────────────
+// Stoppt Mail-Bombing: pro User max 1 Mail/Minute UND max 5/Tag.
+// Quelle der Wahrheit: Felder direkt am User/Bar-Doc.
+//   pendingEmailRequestedAt       → letzter Versand-Zeitpunkt
+//   pendingEmailDailyCount        → Anzahl seit `pendingEmailDailyResetAt`
+//   pendingEmailDailyResetAt      → Beginn des aktuellen 24h-Fensters
+const MIN_RESEND_INTERVAL_MS = 60 * 1000;          // 1 Mail / Minute
+const DAILY_LIMIT             = 5;
+const DAILY_WINDOW_MS         = 24 * 60 * 60 * 1000;
+
 function genToken() {
   return crypto.randomBytes(32).toString("hex");
 }
@@ -32,9 +68,6 @@ async function sendVerifyEmail({ to, link, displayName }) {
   const user = (SMTP_USER.value() || "").trim();
   const pass = (SMTP_PASSWORD.value() || "").trim();
   if (!user || !pass) {
-    // Niemals rohen Error werfen — sonst landet das ungefangen als
-    // INTERNAL beim Client. HttpsError wird vom äußeren Catch-Block
-    // unverändert durchgereicht (siehe Aufrufer-Pattern).
     throw new HttpsError(
       "failed-precondition",
       "E-Mail-Versand ist serverseitig nicht konfiguriert. Bitte Support kontaktieren."
@@ -48,13 +81,13 @@ async function sendVerifyEmail({ to, link, displayName }) {
 
   const html = `
     <div style="font-family:Arial,sans-serif;color:#222;max-width:520px;margin:0 auto">
-      <h2 style="color:#e53e3e">Bestätige deine E-Mail 🎉</h2>
+      <h2 style="color:#e53e3e">Bestätige deine E-Mail</h2>
       <p>Hi ${displayName || "PartyPin User"}!</p>
       <p>
         Du (oder jemand mit deinem Account) hat diese Adresse als
-        Kontakt-Mail für PartyPin angegeben. Klicke den folgenden Button,
-        um die Adresse zu bestätigen — erst dann wird sie für den
-        QR-Code-Versand bei Ticket-Käufen verwendet.
+        Kontakt-Mail für PartyPin hinterlegt. Klicke den folgenden Button,
+        um die Adresse zu bestätigen — erst dann wird sie deinem Account
+        zugeordnet.
       </p>
       <p style="text-align:center;margin:32px 0">
         <a href="${link}"
@@ -88,12 +121,21 @@ async function sendVerifyEmail({ to, link, displayName }) {
 /**
  * requestEmailVerification (Callable v2)
  * Eingabe: { email, docId, collection? }
- * - Validiert Format, schreibt pendingEmail/Token/Expiry auf das User-Doc,
- *   verschickt Bestätigungsmail. Die bestehende verifizierte E-Mail
- *   (Feld `email`) bleibt unverändert.
+ * - Validiert Format, schreibt pendingEmail/Token/Expiry auf das User-/
+ *   Bar-Doc, verschickt Bestätigungsmail. Die bestehende verifizierte
+ *   E-Mail (Feld `email`) bleibt unverändert, bis der Link geklickt wurde.
  */
 exports.requestEmailVerification = onCall(
-    { region: REGION, secrets: [SMTP_USER, SMTP_PASSWORD] },
+    {
+      region: REGION,
+      secrets: [SMTP_USER, SMTP_PASSWORD],
+      maxInstances: 5,
+      timeoutSeconds: 30,
+      memory: "256MiB",
+      concurrency: 10,
+      // TODO(appcheck): nach Console-Setup auf `true` setzen
+      enforceAppCheck: false,
+    },
     async (request) => {
       if (!request.auth) {
         throw new HttpsError("unauthenticated", "Login required.");
@@ -120,15 +162,54 @@ exports.requestEmailVerification = onCall(
 
       const data = snap.data() || {};
 
-      // Ist die Mail bereits als verifiziert hinterlegt? Dann nichts tun.
       const currentVerified = (data.email || "").toString().toLowerCase();
       if (currentVerified === email) {
         return { ok: true, alreadyVerified: true };
       }
 
+      // ── RATE LIMIT ─────────────────────────────────────────
+      const nowMs = Date.now();
+
+      const lastReq = data.pendingEmailRequestedAt;
+      const lastReqMs = (lastReq && typeof lastReq.toMillis === "function")
+          ? lastReq.toMillis()
+          : 0;
+      if (lastReqMs > 0 && nowMs - lastReqMs < MIN_RESEND_INTERVAL_MS) {
+        const wait = Math.ceil(
+            (MIN_RESEND_INTERVAL_MS - (nowMs - lastReqMs)) / 1000);
+        throw new HttpsError(
+            "resource-exhausted",
+            `Bitte ${wait} Sekunden warten, bevor du eine weitere Bestätigungs-Mail anforderst.`,
+        );
+      }
+
+      const resetTs = data.pendingEmailDailyResetAt;
+      const resetMs = (resetTs && typeof resetTs.toMillis === "function")
+          ? resetTs.toMillis()
+          : 0;
+      const windowActive = resetMs > 0 && (nowMs - resetMs) < DAILY_WINDOW_MS;
+      const currentCount = windowActive
+          ? Number(data.pendingEmailDailyCount || 0)
+          : 0;
+
+      if (windowActive && currentCount >= DAILY_LIMIT) {
+        const remainingHours = Math.ceil(
+            (DAILY_WINDOW_MS - (nowMs - resetMs)) / 3600000);
+        throw new HttpsError(
+            "resource-exhausted",
+            `Du hast das Tageslimit von ${DAILY_LIMIT} Verifikations-Mails ` +
+            `erreicht. Bitte in ${remainingHours}h erneut versuchen.`,
+        );
+      }
+
+      const newCount = currentCount + 1;
+      const newResetTs = windowActive
+          ? resetTs
+          : admin.firestore.Timestamp.fromMillis(nowMs);
+
       const token = genToken();
       const expiresAt = admin.firestore.Timestamp.fromMillis(
-          Date.now() + TOKEN_TTL_HOURS * 3600 * 1000,
+          nowMs + TOKEN_TTL_HOURS * 3600 * 1000,
       );
 
       await ref.set({
@@ -136,6 +217,8 @@ exports.requestEmailVerification = onCall(
         pendingEmailToken: token,
         pendingEmailExpiresAt: expiresAt,
         pendingEmailRequestedAt: FieldValue.serverTimestamp(),
+        pendingEmailDailyCount: newCount,
+        pendingEmailDailyResetAt: newResetTs,
       }, { merge: true });
 
       const link = `${VERIFY_BASE_URL}?t=${encodeURIComponent(token)}`;
@@ -147,9 +230,6 @@ exports.requestEmailVerification = onCall(
           displayName: data.username || data.fullName || "",
         });
       } catch (e) {
-        // HttpsError aus sendVerifyEmail (z.B. failed-precondition bei
-        // fehlenden Secrets) unverändert durchreichen — sonst maskieren
-        // wir die lesbare Message hinter "internal/send_failed".
         if (e instanceof HttpsError) throw e;
         console.error("[requestEmailVerification] send failed:", e?.message || e);
         throw new HttpsError(
@@ -211,7 +291,14 @@ function htmlPage(title, message, success) {
  *  - Liefert eine HTML-Seite mit Erfolg/Fehler
  */
 exports.verifyEmailToken = onRequest(
-    { region: REGION },
+    {
+      region: REGION,
+      maxInstances: 5,
+      timeoutSeconds: 15,
+      memory: "256MiB",
+      concurrency: 80,
+      invoker: "public",
+    },
     async (req, res) => {
       const token = (req.query?.t || "").toString().trim();
       if (!token) {
@@ -302,7 +389,7 @@ exports.verifyEmailToken = onRequest(
           .send(htmlPage(
               "E-Mail bestätigt!",
               `Deine Adresse <strong>${newEmail}</strong> ist jetzt aktiv ` +
-                  "und wird für QR-Codes bei Ticket-Käufen verwendet.",
+                  "und mit deinem PartyPin-Account verknüpft.",
               true,
           ));
     },

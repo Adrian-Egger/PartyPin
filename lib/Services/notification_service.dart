@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
@@ -5,6 +7,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class NotificationService {
   static final _messaging = FirebaseMessaging.instance;
+
+  // SECURITY_HARDENING (Audit M3): Token-Refresh-Listener wurde vorher
+  // ohne Cancel-Handling registriert. Bei zweitem init() (z.B. nach
+  // logout/login) lebten beide Listener parallel und schrieben Token
+  // doppelt. Jetzt: gespeicherte Subscription, vor jedem Re-Init
+  // gecancelt.
+  static StreamSubscription<String>? _tokenRefreshSub;
 
   static void _log(String msg) {
     if (kDebugMode) {
@@ -28,7 +37,9 @@ class NotificationService {
       final token = await _messaging.getToken();
       _log('[FCM] Token: $token');
       if (token != null) await _saveToken(token);
-      _messaging.onTokenRefresh.listen((t) {
+      // Re-subscribe sauber.
+      await _tokenRefreshSub?.cancel();
+      _tokenRefreshSub = _messaging.onTokenRefresh.listen((t) {
         _log('[FCM] Token refreshed: $t');
         _saveToken(t);
       });

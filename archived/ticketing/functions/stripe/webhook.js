@@ -81,6 +81,13 @@ exports.stripeWebhook = onRequest(
   {
     region: "europe-west1",
     secrets: [STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SMTP_USER, SMTP_PASSWORD],
+    // KEIN enforceAppCheck — Stripe sendet die Webhook-Calls.
+    // Signatur-Verifikation in constructEvent() ist der Auth-Mechanismus.
+    invoker: "public",
+    maxInstances: 10,
+    timeoutSeconds: 30,        // PI + Mail + Firestore
+    memory: "256MiB",
+    concurrency: 40,
   },
   async (req, res) => {
     const stripe = getStripe();

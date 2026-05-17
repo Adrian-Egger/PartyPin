@@ -1,0 +1,38 @@
+--- archived/ticketing/patches/_originals/index.js.orig	2026-05-14 13:05:24.083542400 +0200
++++ functions/index.js	2026-05-14 13:06:51.159579900 +0200
+@@ -45,27 +45,20 @@
+ exports.cleanupExpiredEvents = eventsCleanup.cleanupExpiredEvents;
+ exports.cleanupOrphanAvatars = avatarCleanup.cleanupOrphanAvatars;
+ 
+-// ✅ Stripe Ticket Callables (v2)
+-const stripeTickets = require("./stripe/tickets");
+-const stripeOnboarding = require("./stripe/onboarding");
+-const stripeWebhook = require("./stripe/webhook");
+-const stripeScan = require("./stripe/scan");
+-const emailVerify = require("./stripe/emailVerify");
++// FEATURE_DISABLED_TICKETING — Stripe/Ticket Callables sind archiviert.
++// Quelle: archived/ticketing/functions/stripe/{tickets,onboarding,webhook,scan}.js
++// see archived/ticketing/README.md
++
++// 📧 E-Mail-Verifikation (Account/Profil) — generisch, nicht ticketing-spezifisch.
++// Früher: functions/stripe/emailVerify.js. Heute: functions/email/verify.js.
++// Export-Namen sind stabil geblieben.
++const emailVerify = require("./email/verify");
+ 
+ // 🛡 Admin-Moderation (Ban / Unban / VerifyEmail / Delete).
+ // Hinter request.auth.token.admin === true gesichert.
+ const adminModeration = require("./admin/userModeration");
+ 
+ // =======================
+-// Stripe Connect Onboarding & Tickets (Callable v2)
+-// =======================
+-exports.createStripeOnboardingLink = stripeOnboarding.createStripeOnboardingLink;
+-exports.refreshStripeAccountStatus = stripeOnboarding.refreshStripeAccountStatus;
+-exports.createTicketPaymentIntent = stripeTickets.createTicketPaymentIntent;
+-exports.stripeWebhook = stripeWebhook.stripeWebhook;
+-exports.validateAndUseTicket = stripeScan.validateAndUseTicket;
+-
+-// =======================
+ // Admin-Moderation Callables
+ // =======================
+ exports.adminBanUser     = adminModeration.adminBanUser;

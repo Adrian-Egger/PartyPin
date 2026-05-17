@@ -13,8 +13,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../home/menu_screen.dart';
 import '../profile/profil_settings_screen.dart';
+import '../profile/user_profile_screen.dart';
 import '../../Services/geocoding_services.dart';
+import '../../Social/city_mood.dart';
+import '../../Social/city_mood_strip.dart';
 import '../../Social/friends_model.dart';
+import '../../Social/map_social_layer.dart';
+import '../../Social/trending_hosts_strip.dart';
 import '../bar/bar_bottom_sheet.dart';
 import '../../Theme/app_theme.dart';
 import '../../Services/timestamp_ext.dart';
@@ -76,6 +81,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   String? _currentUsername;
   String? _currentFullName;
+  String? profileImageUrl;
 
   bool _isBarAccount = false;
   String? _barId;
@@ -100,6 +106,13 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   BitmapDescriptor? _partyIconGreen;
   BitmapDescriptor? _partyIconOrange;
   BitmapDescriptor? _partyIconRed;
+
+  // 👥 Social-Overlay-Icons — Live Social Map Layer.
+  // Werden EINMAL gerendert (kein per-Party Bitmap), als kleine
+  // Sekundär-Marker mit anchor-offset oben rechts am Haupt-Marker.
+  // Zoom-invariant: keine Re-Rendering im _updateCustomMarkerSizesForZoom-Pfad.
+  BitmapDescriptor? _friendDotIcon;       // 1 Freund going
+  BitmapDescriptor? _friendDotDoubleIcon; // ≥2 Freunde going (Phase 3)
 
   final Map<String, bool> _verifiedCache = {};
   bool _ratingPromptShown = false;
@@ -136,6 +149,19 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   // Status-Cache für offene Partys
   final Map<String, String?> _openPartyStatus = {};
   final Map<String, bool> _openPartyIsHost = {};
+
+  // City Mood — Phase 4. Wird in _refreshMap berechnet aus dem
+  // bereits geladenen _partyCache (keine extra Reads).
+  CityMood _cityMood = CityMood.empty;
+
+  // SECURITY_HARDENING / Audit-Fix H3: Re-Entry-Guard für _refreshMap.
+  // Vorher konnte ein schneller Filter-Toggle zwei parallele Refreshes
+  // starten — beide riefen _markers.clear() und await load() mit dem
+  // Risiko dass Marker aus Lauf A nach clear() von Lauf B wieder
+  // eingefügt werden → Duplikate ODER stale `_partyCache[id]!` →
+  // Null-Bang-Crash. Coalescing: zweiter Aufruf wartet auf den
+  // laufenden Future statt parallel zu starten.
+  Future<void>? _refreshFuture;
 
   @override
   void initState() {
@@ -227,9 +253,13 @@ String _safeDocId(String input) => input
 
   Future<void> _loadCurrentUser() async {
     final prefs = await SharedPreferences.getInstance();
+
     final uname =
-    (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '')
+    (prefs.getString('currentUsername') ??
+        prefs.getString('username') ??
+        '')
         .trim();
+
     final vorname = (prefs.getString('vorname') ?? '').trim();
     final nachname = (prefs.getString('nachname') ?? '').trim();
     final fullName = ('$vorname $nachname').trim();
@@ -237,12 +267,44 @@ String _safeDocId(String input) => input
     final isBar = prefs.getBool('isBarAccount') ?? false;
     final barId = prefs.getString('barId');
 
+    // ✅ Profilbild laden
+    String profileImg =
+    (prefs.getString('profileImageUrl') ?? '').trim();
+
+    if (uname.isNotEmpty) {
+      try {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uname)
+            .get();
+
+        final firestoreImg =
+        (userDoc.data()?['profileImageUrl'] ?? '')
+            .toString()
+            .trim();
+
+        if (firestoreImg.isNotEmpty) {
+          profileImg = firestoreImg;
+
+          // optional lokal cachen
+          await prefs.setString(
+            'profileImageUrl',
+            firestoreImg,
+          );
+        }
+      } catch (_) {}
+    }
     if (!mounted) return;
+
     setState(() {
       _currentUsername = uname.isEmpty ? null : uname;
       _currentFullName = fullName.isEmpty ? null : fullName;
       _isBarAccount = isBar;
       _barId = barId;
+
+      // ✅ setzen
+      profileImageUrl =
+      profileImg.isEmpty ? null : profileImg;
     });
 
     if (_isBarAccount) {
@@ -250,9 +312,12 @@ String _safeDocId(String input) => input
       return;
     }
 
-    if (_currentUsername != null && _currentUsername!.isNotEmpty) {
+    if (_currentUsername != null &&
+        _currentUsername!.isNotEmpty) {
       try {
-        final list = await _friendsModel.myFriends(_currentUsername!);
+        final list =
+        await _friendsModel.myFriends(_currentUsername!);
+
         _myFriendsSet = list.toSet();
       } catch (_) {
         _myFriendsSet = {};
@@ -436,7 +501,105 @@ String _safeDocId(String input) => input
       emojiScale: .62,
     ));
 
+    // Friend-Dot — kleiner grüner Kreis mit weißem Border. Zoom-stabil
+    // weil als Sekundär-Marker mit fixer Anchor-Offset montiert wird.
+    _friendDotIcon = BitmapDescriptor.fromBytes(
+      await _drawSolidDot(
+        diameter: 36,
+        fillColor: AppColors.success,
+        borderColor: Colors.white,
+        borderWidth: 4,
+      ),
+    );
+
+    // Doppel-Dot für ≥2 Freunde going. Zwei überlappende grüne Punkte
+    // — sichtbar "mehr als ein Freund" ohne Zahlenbadge (anti-cringe).
+    _friendDotDoubleIcon = BitmapDescriptor.fromBytes(
+      await _drawDoubleDot(
+        canvasWidth: 52,
+        canvasHeight: 36,
+        dotDiameter: 32,
+        offsetX: 16,
+        fillColor: AppColors.success,
+        borderColor: Colors.white,
+        borderWidth: 4,
+      ),
+    );
+
     if (mounted) setState(() {});
+  }
+
+  /// Zwei überlappende Solid-Dots für „2+ Freunde". Bewusst breiter
+  /// als das Single-Icon (52×36 statt 36×36), damit beide Dots Platz
+  /// haben. Anchor-Offset im Marker kompensiert die Breite.
+  Future<Uint8List> _drawDoubleDot({
+    required int canvasWidth,
+    required int canvasHeight,
+    required int dotDiameter,
+    required int offsetX,
+    required Color fillColor,
+    required Color borderColor,
+    required double borderWidth,
+  }) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final r = dotDiameter / 2.0;
+    final cy = canvasHeight / 2.0;
+
+    void drawDot(double cx) {
+      // Drop-shadow
+      canvas.drawCircle(
+        Offset(cx, cy),
+        r,
+        Paint()
+          ..color = Colors.black.withOpacity(0.25)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+      );
+      canvas.drawCircle(Offset(cx, cy), r - borderWidth / 2,
+          Paint()..color = borderColor);
+      canvas.drawCircle(Offset(cx, cy), r - borderWidth,
+          Paint()..color = fillColor);
+    }
+
+    // Hinterer Dot zuerst (rechts), vorderer Dot überlappend (links).
+    drawDot(offsetX + r);
+    drawDot(r);
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(canvasWidth, canvasHeight);
+    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+    return bytes!.buffer.asUint8List();
+  }
+
+  /// Volle Kreisscheibe mit Outline — für Social-Dot-Marker.
+  /// Bewusst klein (≤40px) und pre-rendered, kein per-Party-Bitmap.
+  Future<Uint8List> _drawSolidDot({
+    required int diameter,
+    required Color fillColor,
+    required Color borderColor,
+    required double borderWidth,
+  }) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final size = ui.Size(diameter.toDouble(), diameter.toDouble());
+    final center = Offset(size.width / 2, size.height / 2);
+    final r = diameter / 2.0;
+
+    // Subtle drop-shadow für besseren Kontrast auf hellen Map-Stellen.
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..color = Colors.black.withOpacity(0.25)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+    );
+    canvas.drawCircle(center, r - borderWidth / 2, Paint()..color = borderColor);
+    canvas.drawCircle(center, r - borderWidth, Paint()..color = fillColor);
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(diameter, diameter);
+    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+    return bytes!.buffer.asUint8List();
   }
 
   Future<Uint8List> _drawCircleWithIcon({
@@ -812,6 +975,11 @@ String _safeDocId(String input) => input
   }
 
   void _setOpenMarkerColor(String partyId, {required String? status, required bool isHost}) {
+    // Invariant: dieser Pfad rebuildet NUR den Haupt-Marker (mid =
+    // partyId). Social-Overlays (`social_dot_*` Marker, `social_*`
+    // Circle) bleiben unberührt — sie hängen an friend-overlap, nicht
+    // am User-eigenen RSVP-Status. Wenn du hier Marker-Cleanup machst,
+    // achte darauf, social_* nicht aus Versehen zu killen.
     final mid = partyId;
     final existing = _markers.where((m) => m.markerId.value == mid).toList();
     if (existing.isEmpty) return;
@@ -848,7 +1016,22 @@ String _safeDocId(String input) => input
   // ✅ LOAD / REFRESH
   // =========================
 
-  Future<void> _refreshMap() async {
+  Future<void> _refreshMap() {
+    // Coalescing: wenn schon ein Refresh läuft, gib den existierenden
+    // Future zurück. Caller die `await` machen, hängen am gleichen Run —
+    // die Inner-Mutations (_markers.clear etc.) passieren nur einmal.
+    final existing = _refreshFuture;
+    if (existing != null) return existing;
+    final f = _refreshMapImpl().whenComplete(() {
+      // Erst nach Abschluss freigeben, sonst startet ein gleichzeitiger
+      // zweiter Caller einen neuen Lauf in der setState-Lücke.
+      _refreshFuture = null;
+    });
+    _refreshFuture = f;
+    return f;
+  }
+
+  Future<void> _refreshMapImpl() async {
     _partyCache.clear();
     _markers.clear();
     _circles.clear();
@@ -858,6 +1041,13 @@ String _safeDocId(String input) => input
 
     await _loadPartiesFromFirebase();
     await _loadBarsFromFirebase();
+
+    // Phase 4: City-Mood aus den bereits geladenen Party-Docs ableiten.
+    // Pure function, O(n) — keine zusätzlichen Reads.
+    _cityMood = computeCityMood(
+      parties: _partyCache.values,
+      myFriends: _myFriendsSet,
+    );
 
     if (mounted) setState(() {});
   }
@@ -973,6 +1163,18 @@ String _safeDocId(String input) => input
         if (_onlyClosedParties && !isClosed) continue;
         if (_onlyOpenParties && isClosed) continue;
 
+        // Social-Flags aus Aggregat-Feldern + Friend-Set ableiten.
+        // Closed-Partys werden auf der echten LatLng (pos) bewertet,
+        // aber visuell am verschobenen Pin angezeigt — Aura geht am
+        // Pin auf, nicht am echten Ort (damit Privacy gewahrt bleibt).
+        //
+        // Phase 3: startTime mit reingeben → momentum + startingSoon.
+        final social = computeMapSocialFlags(
+          partyData: data,
+          myFriends: _myFriendsSet,
+          startTime: _partyStart(data),
+        );
+
         // =================================================
         // 🔒 CLOSED PARTY
         // =================================================
@@ -1009,8 +1211,17 @@ String _safeDocId(String input) => input
             markerId: MarkerId('lock_${doc.id}'),
             position: fakeCenter,
             icon: icon,
+            zIndex: _socialZIndexFor(social, base: 0),
             onTap: () => _openPartySheet(data, doc.id),
           ));
+
+          _applySocialOverlay(
+            partyId: doc.id,
+            markerId: 'lock_${doc.id}',
+            position: fakeCenter,
+            flags: social,
+            onTap: () => _openPartySheet(data, doc.id),
+          );
         }
         // =================================================
         // 🎉 OPEN PARTY
@@ -1035,8 +1246,17 @@ String _safeDocId(String input) => input
             markerId: MarkerId(doc.id),
             position: pos,
             icon: icon,
+            zIndex: _socialZIndexFor(social, base: 0),
             onTap: () => _openPartySheet(data, doc.id),
           ));
+
+          _applySocialOverlay(
+            partyId: doc.id,
+            markerId: doc.id,
+            position: pos,
+            flags: social,
+            onTap: () => _openPartySheet(data, doc.id),
+          );
         }
       } catch (_) {
         continue;
@@ -1044,6 +1264,108 @@ String _safeDocId(String input) => input
     }
   }
 
+  // =========================
+  // 👥 LIVE SOCIAL MAP LAYER
+  // =========================
+
+  /// Mappt Social-Signals auf einen Marker-zIndex. Hot-Parties +
+  /// Friends-Parties liegen visuell über plain Markern bei Cluster.
+  /// Bewusst klein gehalten — kein Ranking-Spiel.
+  ///
+  /// Phase-3: Surging bringt Momentum-Parties zusätzlich nach vorn.
+  double _socialZIndexFor(MapSocialFlags flags, {double base = 0}) {
+    double z = base;
+    if (flags.hasFriend) z += 4;
+    else if (flags.isHot) z += 2;
+    if (flags.momentum == PartyMomentum.surging) z += 1;
+    return z;
+  }
+
+  /// Fügt Social-Overlays für eine Party hinzu — Aura (Circle) +
+  /// optional Friend-Dot-Marker oben rechts vom Haupt-Marker.
+  ///
+  /// Performance-Garantien:
+  ///   - 1 zusätzlicher Circle nur wenn `hasAnySignal`
+  ///   - 1 zusätzlicher Marker nur wenn `hasFriend`
+  ///   - Reused werden die PRE-RENDERED `_friendDotIcon` /
+  ///     `_friendDotDoubleIcon` — KEIN per-Party Bitmap-Rendering
+  ///   - Tap auf Dot-Marker fällt durch zum Haupt-Marker
+  ///     (consumeTapEvents: false)
+  ///
+  /// Phase-3-Skalierung:
+  ///   - rising  → Radius +4m, Stroke +0.10 opacity
+  ///   - surging → Radius +8m, Stroke +0.20 opacity
+  void _applySocialOverlay({
+    required String partyId,
+    required String markerId,
+    required LatLng position,
+    required MapSocialFlags flags,
+    required VoidCallback onTap,
+  }) {
+    if (!flags.hasAnySignal) return;
+
+    // Aura: Radius in Metern → bei Far-Zoom unsichtbar (Map ist clean),
+    // bei Close-Up sichtbares Glühen. Genau das gewünschte Verhalten:
+    // weit weg = aufgeräumt, nah dran = lebendig.
+    //
+    // Friends-Aura (grün) gewinnt über Hot-Aura (accent).
+    final auraColor = flags.hasFriend ? AppColors.success : AppColors.accent;
+    double auraRadius = 22;
+    double auraFillOpacity = flags.hasFriend ? 0.10 : 0.07;
+    double auraStrokeOpacity = flags.hasFriend ? 0.45 : 0.30;
+
+    // Momentum-Skalierung. Subtle stärker, kein neuer Farbcode.
+    switch (flags.momentum) {
+      case PartyMomentum.rising:
+        auraRadius += 4;
+        auraFillOpacity += 0.04;
+        auraStrokeOpacity += 0.10;
+        break;
+      case PartyMomentum.surging:
+        auraRadius += 8;
+        auraFillOpacity += 0.08;
+        auraStrokeOpacity += 0.20;
+        break;
+      case PartyMomentum.none:
+        break;
+    }
+
+    _circles.add(Circle(
+      circleId: CircleId('social_$partyId'),
+      center: position,
+      radius: auraRadius,
+      fillColor: auraColor.withOpacity(auraFillOpacity),
+      strokeColor: auraColor.withOpacity(auraStrokeOpacity),
+      strokeWidth: flags.momentum == PartyMomentum.surging ? 2 : 1,
+      zIndex: 0,
+    ));
+
+    // Friend-Dot: nur wenn ≥1 Freund going. Bei nur "hot" ohne
+    // Freunde kommt KEIN Dot — Aura allein signalisiert Crowd.
+    //
+    // 2+ Freunde → Doppel-Dot. Anchor angepasst weil Bitmap breiter ist.
+    if (flags.hasFriend) {
+      final useDouble = flags.hasManyFriends && _friendDotDoubleIcon != null;
+      final icon = useDouble ? _friendDotDoubleIcon! : _friendDotIcon;
+      if (icon == null) return;
+
+      _markers.add(Marker(
+        markerId: MarkerId('social_dot_$markerId'),
+        position: position,
+        icon: icon,
+        // Anchor verschiebt den Dot oben rechts vom Haupt-Marker.
+        // Doppel-Dot ist breiter (52px vs 36px) → x-Anchor leicht
+        // anders gewählt damit der vordere Dot etwa an derselben
+        // optischen Position sitzt wie der Single-Dot.
+        anchor: useDouble
+            ? const Offset(-0.25, 1.6)
+            : const Offset(-0.4, 1.6),
+        zIndex: _socialZIndexFor(flags, base: 0) + 0.5,
+        consumeTapEvents: false,
+        onTap: onTap,
+      ));
+    }
+  }
 
   Future<void> _loadBarsFromFirebase() async {
     try {
@@ -2478,7 +2800,7 @@ String _safeDocId(String input) => input
                   onTap: _isReloading ? null : _reload,
                 ),
                 const SizedBox(width: 10),
-                // Profile button
+                // Profile button mit Profilbild
                 GestureDetector(
                   onTap: () => Navigator.push(
                     context,
@@ -2488,17 +2810,43 @@ String _safeDocId(String input) => input
                     width: 40,
                     height: 40,
                     decoration: BoxDecoration(
-                      color: AppColors.accent,
                       shape: BoxShape.circle,
+                      border: Border.all(
+                        color: AppColors.accentBorder2,
+                        width: 1.5,
+                      ),
                       boxShadow: [
                         BoxShadow(
-                          color: AppColors.accentBorder2,
+                          color: Colors.black.withOpacity(0.25),
                           blurRadius: 10,
                           offset: const Offset(0, 4),
                         ),
                       ],
                     ),
-                    child: const Icon(Icons.person_rounded, color: Colors.white, size: 20),
+                    child: ClipOval(
+                      child: profileImageUrl != null &&
+                          profileImageUrl!.isNotEmpty
+                          ? Image.network(
+                        profileImageUrl!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          color: AppColors.panel,
+                          child: const Icon(
+                            Icons.person_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      )
+                          : Container(
+                        color: AppColors.panel,
+                        child: const Icon(
+                          Icons.person_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -2537,6 +2885,35 @@ String _safeDocId(String input) => input
                 }
               },
               onClear: () => _searchCtrl.clear(),
+            ),
+          ),
+
+          // ── City Mood Strip (Phase 4) ───────────────────────────────────
+          // Slimme atmosphärische Mood-Pillen direkt unter der Search-Bar.
+          // Auto-Hide wenn _cityMood.level == quiet. Komplett aus bereits
+          // geladenen Party-Daten abgeleitet — keine extra Reads.
+          if (_cityMood.isVisible)
+            Positioned(
+              left: 0,
+              right: 0,
+              top: topPad + 116,
+              child: CityMoodStrip(mood: _cityMood),
+            ),
+
+          // ── Trending-Hosts-Pills ────────────────────────────────────────
+          // Slim horizontale Pills unter Mood-Strip (wenn vorhanden) bzw.
+          // direkt unter der Search-Bar. Auto-Hide wenn keine Trending-Hosts.
+          // Tap → öffnet User-Profile mit voller HostStatsCard.
+          Positioned(
+            left: 0,
+            right: 0,
+            top: topPad + (_cityMood.isVisible ? 150 : 116),
+            child: TrendingHostsPills(
+              onTapHost: (username) {
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => UserProfileScreen(username: username),
+                ));
+              },
             ),
           ),
         ],

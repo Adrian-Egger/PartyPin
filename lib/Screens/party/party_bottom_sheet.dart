@@ -7,8 +7,14 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'new_party.dart';
-import 'ticket_purchase_section.dart';
-import 'ticket_scanner_screen.dart';
+import '../../Social/avatar_stack.dart';
+import '../../Social/host_badge.dart';
+import '../../Social/host_stats.dart';
+import '../../Social/host_stats_service.dart';
+import '../../Social/map_social_layer.dart';
+import '../../Social/party_activity.dart';
+// FEATURE_DISABLED_TICKETING — TicketPurchaseSection + TicketScannerScreen
+// sind archiviert. see archived/ticketing/README.md
 import '../../Services/app_draggable_sheet.dart';
 import '../profile/user_profile_screen.dart';
 import '../../Theme/app_theme.dart';
@@ -22,6 +28,54 @@ typedef QStream       = Stream<QuerySnapshot<Map<String, dynamic>>>?;
 
 String safeDocId(String input) =>
     input.trim().replaceAll('/', '_').replaceAll('#', '_').replaceAll('?', '_');
+
+/// Liest den Party-Start aus Doc-Daten. Spiegelt die Logik in
+/// party_map_screen._partyStart und functions/index.js — Wenn Du eine
+/// kanonische Version baust, hier auch wieder anschließen.
+DateTime? _parsePartyStartFromData(Map<String, dynamic> d) {
+  final st = d['startTime'];
+  if (st is Timestamp) return st.toDate().toLocal();
+  if (st is String) {
+    final parsed = DateTime.tryParse(st);
+    if (parsed != null) return parsed.toLocal();
+  }
+  DateTime? base;
+  final v = d['date'];
+  if (v is Timestamp) base = v.toDate().toLocal();
+  if (v is String) base = DateTime.tryParse(v);
+  if (base == null) return null;
+
+  final timeStr = (d['time'] ?? '').toString().trim();
+  int hh = 0, mm = 0;
+  if (timeStr.contains(':')) {
+    final parts = timeStr.split(':');
+    if (parts.isNotEmpty) hh = int.tryParse(parts[0]) ?? 0;
+    if (parts.length > 1) mm = int.tryParse(parts[1]) ?? 0;
+  }
+  return DateTime(base.year, base.month, base.day, hh, mm);
+}
+
+/// Sehr kleine atmosphärische Status-Pille für das Bottom-Sheet —
+/// gleicher Stil wie Card-Pille (access_parties_screen._AtmosphericPill)
+/// aber inline reusable.
+Widget _atmosphericPill(String text) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.accent.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.accent.withOpacity(0.40), width: 0.9),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: AppColors.accent,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.1,
+          height: 1.0,
+        ),
+      ),
+    );
 
 void showStatusSnack(BuildContext context, String message, {required bool positive}) {
   ScaffoldMessenger.of(context).showSnackBar(
@@ -308,22 +362,8 @@ class PartyBottomSheet extends StatelessWidget {
     }
   }
 
-  /// Liefert true, sobald der eingeloggte Nutzer mindestens ein bezahltes
-  /// Ticket für diese Party hat. Nutzt einen Live-Stream, damit der
-  /// Bewertungsbereich automatisch erscheint, sobald Stripe die Buchung
-  /// bestätigt.
-  Stream<bool> _hasPaidTicketStream() {
-    final uid = _uid();
-    if (uid == null) return Stream.value(false);
-    return FirebaseFirestore.instance
-        .collection('tickets')
-        .where('buyerUid', isEqualTo: uid)
-        .where('partyId', isEqualTo: partyId)
-        .where('status', isEqualTo: 'paid')
-        .limit(1)
-        .snapshots()
-        .map((s) => s.docs.isNotEmpty);
-  }
+  // FEATURE_DISABLED_TICKETING — _hasPaidTicketStream entfernt, das Rating-
+  // Gate prüft nur noch den RSVP-Status. see archived/ticketing/README.md
 
   Widget _ratingGate(BuildContext context) {
     if (currentUsername == null || isHost || !inRatingWindow) {
@@ -333,16 +373,9 @@ class PartyBottomSheet extends StatelessWidget {
       context,
       builder: (status) {
         final isComing = status == 'going';
-        return StreamBuilder<bool>(
-          stream: _hasPaidTicketStream(),
-          builder: (context, ticketSnap) {
-            final hasPaidTicket = ticketSnap.data == true;
-            // Nur "Ich komme" oder zahlende Gäste dürfen bewerten.
-            // "Vielleicht" reicht ausdrücklich NICHT mehr.
-            if (isComing || hasPaidTicket) return _ratingButtons(context);
-            return const SizedBox.shrink();
-          },
-        );
+        // Nur "Ich komme" darf bewerten. "Vielleicht" reicht nicht.
+        if (isComing) return _ratingButtons(context);
+        return const SizedBox.shrink();
       },
     );
   }
@@ -940,9 +973,64 @@ class PartyBottomSheet extends StatelessWidget {
                     },
                   ),
                 ),
+                // Host Level Badge — auch für Rookie sichtbar ("New Host"),
+                // aber subtil (kein Glow, gedämpfte Farben). Phase 1 der App
+                // braucht Sichtbarkeit > Exklusivität.
+                // Stream auf users/{hostId}/hostStats/current — 1 Doc-Read pro
+                // Bottom-Sheet, danach gecached.
+                if (hostIdStr.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  StreamBuilder<HostStats>(
+                    stream: HostStatsService.watch(hostIdStr),
+                    builder: (context, snap) {
+                      final stats = snap.data;
+                      if (stats == null) return const SizedBox.shrink();
+                      return HostBadge.small(
+                        level: stats.hostLevel,
+                        onTap: () => _showHostProfile(
+                          context,
+                          hostIdStr.isNotEmpty ? hostIdStr : hostNameStr,
+                          displayName: hostNameStr,
+                        ),
+                      );
+                    },
+                  ),
+                ],
               ],
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 10),
+
+            // ── Social-Proof: Atmosphäre + Avatare + "X going" ───────────
+            // Aus Party-Doc-Aggregat (functions/partyActivity/aggregate.js),
+            // self-join bereits server-seitig gefiltert. Phase 3: zusätzliche
+            // atmosphärische Pille (in X Min / füllt sich / läuft) wenn
+            // ein sinnvolles Signal vorliegt.
+            Builder(builder: (_) {
+              final activity = PartyActivity.fromPartyData(data);
+              final start = _parsePartyStartFromData(data);
+              final flags = computeMapSocialFlagsFromActivity(
+                activity: activity,
+                myFriends: const <String>{},
+                startTime: start,
+              );
+              final label = atmosphericLabel(flags: flags, startTime: start);
+
+              final hasAvatars = activity.goingCount > 0;
+              final hasLabel = label != null;
+              if (!hasAvatars && !hasLabel) return const SizedBox(height: 4);
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Row(
+                  children: [
+                    if (hasAvatars)
+                      AvatarStack(activity: activity, size: 26),
+                    if (hasAvatars && hasLabel) const SizedBox(width: 10),
+                    if (hasLabel) _atmosphericPill(label),
+                  ],
+                ),
+              );
+            }),
 
             // ── Status pill ──────────────────────────────────────────────
             if (isFriendsOnly)
@@ -973,36 +1061,9 @@ class PartyBottomSheet extends StatelessWidget {
               else
                 _hostOpenLists(context),
               const SizedBox(height: 16),
-              if (data['ticketsEnabled'] == true) ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
-                      elevation: 0,
-                    ),
-                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
-                    label: const Text(
-                      "Tickets scannen",
-                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                    ),
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => TicketScannerScreen(
-                            partyId: partyId,
-                            partyName: (data['name'] ?? 'Party').toString(),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 8),
-              ],
+              // FEATURE_DISABLED_TICKETING — Host-Button "Tickets scannen"
+              // wurde mit dem Ticketing-Removal entfernt.
+              // see archived/ticketing/README.md
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
@@ -1036,23 +1097,16 @@ class PartyBottomSheet extends StatelessWidget {
 
             // ── Guest view ───────────────────────────────────────────────
             ] else ...[
-              // Bezahlte Party: ausschließlich Ticketkauf — kein RSVP.
-              // Gratis Party: ausschließlich RSVP — keine Ticket-Option.
-              if (data['ticketsEnabled'] == true) ...[
-                if (canSeeFull && isActive)
-                  TicketPurchaseSection(partyId: partyId, partyData: data)
-                else if (!isClosed || isFriendsOnly)
-                  // Closed-Party-Hinweis (Anfrage stellen) bleibt erhalten,
-                  // damit der User überhaupt Zugang bekommt.
-                  _guestClosedActions(context),
-              ] else ...[
-                if (!isClosed || isFriendsOnly)
-                  _guestOpenActions(context)
-                else if (canSeeFull)
-                  const SizedBox.shrink()
-                else
-                  _guestClosedActions(context),
-              ],
+              // FEATURE_DISABLED_TICKETING — der Bezahl-Pfad
+              // (TicketPurchaseSection) ist archiviert; alle Partys laufen
+              // jetzt über RSVP-Aktionen, unabhängig vom Eintrittspreis.
+              // see archived/ticketing/README.md
+              if (!isClosed || isFriendsOnly)
+                _guestOpenActions(context)
+              else if (canSeeFull)
+                const SizedBox.shrink()
+              else
+                _guestClosedActions(context),
 
               // Rating
               const SizedBox(height: 12),

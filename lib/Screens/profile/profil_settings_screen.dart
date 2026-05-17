@@ -1,9 +1,7 @@
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart'; // ✅ anonymous auth (Storage)
@@ -15,9 +13,13 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../auth/login_screen.dart';
+import '../../Services/auth_service.dart';
 import '../../Theme/app_theme.dart';
 import '../../l10n/lang.dart';
-import '../../Services/stripe_service.dart';
+// FEATURE_DISABLED_TICKETING — StripeService entfernt.
+// E-Mail-Verifizierung läuft jetzt über EmailVerifyService.
+// see archived/ticketing/README.md
+import '../../Services/email_verify_service.dart';
 
 // Auswahl aus dem Avatar-BottomSheet. Wir geben das Ergebnis aus dem
 // Sheet zurück (statt direkt eine Aktion auszulösen), damit die
@@ -25,6 +27,11 @@ import '../../Services/stripe_service.dart';
 // Photo-Picker öffnen — sonst kollidiert das auf iOS mit dem
 // UIImagePickerController-Presenter.
 enum _AvatarAction { gallery, camera, view }
+
+// Einheitliches Log-Tag, damit der Avatar-Flow über `flutter logs`
+// bzw. Xcode/Android-Studio-Console klar filterbar ist:
+//   flutter logs | grep '\[AVATAR\]'
+const String _kAvatarTag = '[AVATAR]';
 
 // ---------- Farben wie bei PartyMap / NewParty ----------
 const _gradTop = AppColors.bgTop;
@@ -56,6 +63,15 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   String _collection = "users";
   CollectionReference<Map<String, dynamic>> get _col =>
       FirebaseFirestore.instance.collection(_collection);
+
+  // Für User-Docs heißt das Bild `avatarUrl`, für Bar-Docs `profileImageUrl`
+  // (Quelle der Wahrheit ist in "Meine Bar"). Wir lesen und schreiben hier
+  // einheitlich über diesen Getter — sonst hätten Bars zwei konkurrierende
+  // Bildfelder, was zu Drift zwischen "Profil" und "Meine Bar" führt.
+  String get _avatarFieldName =>
+      _collection == "bars" ? "profileImageUrl" : "avatarUrl";
+
+  bool get _isBarAccount => _collection == "bars";
 
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _bioController = TextEditingController();
@@ -121,7 +137,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       final doc = query.docs.first;
       final data = doc.data();
 
-      avatarUrl = (data['avatarUrl'] ?? '').toString().trim();
+      // Bars verwenden `profileImageUrl` (gleiches Feld wie "Meine Bar"),
+      // damit das Bild zwischen Profil und Bar-Screen synchron bleibt.
+      final avatarField =
+          collectionName == "bars" ? "profileImageUrl" : "avatarUrl";
+      avatarUrl = (data[avatarField] ?? '').toString().trim();
       password = (data['password'] ?? '').toString();
       final bio = (data['bio'] ?? '').toString();
       final email = (data['email'] ?? '').toString().trim();
@@ -131,7 +151,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       // hat. Bar-Accounts kommen z. B. ohne diesen aus dem Wizard.
       final emailVerified = data['emailVerifiedAt'] != null;
 
-      // Mail in Prefs spiegeln, damit der Ticket-Kauf sie ohne Roundtrip findet.
+      // Mail in Prefs spiegeln, damit andere Screens sie ohne Roundtrip lesen können.
       if (email.isNotEmpty) {
         await prefs.setString('userEmail', email);
       }
@@ -153,6 +173,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         _emailVerified = emailVerified;
         _emailController.text = email;
       });
+      debugPrint(
+          '$_kAvatarTag _loadUserData: collection=$collectionName docId=${doc.id} '
+          'avatarUrl(firestore)="${avatarUrl ?? ""}" cachedAvatar="${cachedAvatar ?? ""}" '
+          '_avatar="${_avatar ?? ""}"');
 
       // ✅ merken, damit künftig sofort richtig gesucht wird
       await prefs.setString(
@@ -207,11 +231,16 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       final newEmail = (data['email'] ?? '').toString().trim();
       final newPending = (data['pendingEmail'] ?? '').toString().trim();
       final newVerified = data['emailVerifiedAt'] != null;
+      // Avatar live spiegeln — wenn „Meine Bar" das profileImageUrl
+      // wechselt, soll der Profil-Screen das sofort übernehmen (und
+      // umgekehrt). Für User-Accounts liest das den `avatarUrl`-Wert.
+      final newAvatar =
+          (data[_avatarFieldName] ?? '').toString().trim();
 
       // Übergang von „nicht verifiziert" → „verifiziert" → Feedback geben.
       final justVerified = !_emailVerified && newVerified;
 
-      // Spiegel in SharedPreferences (für Ticket-Kauf-Resolver).
+      // Spiegel in SharedPreferences für schnellen Zugriff aus anderen Screens.
       if (newEmail.isNotEmpty && newEmail != _email) {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('userEmail', newEmail);
@@ -222,6 +251,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         _email = newEmail;
         _pendingEmail = newPending;
         _emailVerified = newVerified;
+        if (newAvatar != (_avatar ?? '')) {
+          _avatar = newAvatar.isEmpty ? null : newAvatar;
+        }
         if (_editing != 'email') {
           _emailController.text = newEmail;
         }
@@ -245,12 +277,20 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   Future<User?> _ensureFirebaseUser(BuildContext context) async {
     final auth = FirebaseAuth.instance;
 
-    if (auth.currentUser != null) return auth.currentUser;
+    if (auth.currentUser != null) {
+      debugPrint(
+          '$_kAvatarTag _ensureFirebaseUser: existing uid=${auth.currentUser!.uid} anon=${auth.currentUser!.isAnonymous}');
+      return auth.currentUser;
+    }
 
     try {
+      debugPrint('$_kAvatarTag _ensureFirebaseUser: signInAnonymously()');
       final cred = await auth.signInAnonymously();
+      debugPrint(
+          '$_kAvatarTag _ensureFirebaseUser: signed in uid=${cred.user?.uid}');
       return cred.user;
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('$_kAvatarTag _ensureFirebaseUser FAILED: $e\n$st');
       _showSnack('${Lang.t('profile_firebase_fail')}: $e', color: Colors.redAccent);
       return null;
     }
@@ -305,7 +345,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   }
 
   Future<void> _pickFromSource(ImageSource source) async {
-    if (_busyAvatar) return;
+    if (_busyAvatar) {
+      debugPrint('$_kAvatarTag _pickFromSource: ignored, _busyAvatar=true');
+      return;
+    }
+
+    debugPrint('$_kAvatarTag _pickFromSource start, source=$source');
 
     // KEINE vorgeschaltete Permission-Abfrage. image_picker triggert den
     // nativen iOS-Permission-Dialog beim ersten Aufruf selbst. Eine
@@ -322,7 +367,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         // Roundtrip über PHPickerViewController.
         requestFullMetadata: false,
       );
-    } on PlatformException catch (e) {
+    } on PlatformException catch (e, st) {
+      debugPrint('$_kAvatarTag pickImage PlatformException code=${e.code} msg=${e.message}\n$st');
       if (!mounted) return;
       final code = e.code.toLowerCase();
       // iOS-Codes: 'camera_access_denied', 'photo_access_denied',
@@ -343,59 +389,132 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         );
       }
       return;
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('$_kAvatarTag pickImage generic error: $e\n$st');
       if (!mounted) return;
       _showSnack(Lang.t('profile_cam_unavailable'), color: Colors.redAccent);
       return;
     }
 
-    if (image == null) return;
+    if (image == null) {
+      debugPrint('$_kAvatarTag pickImage returned null (user cancelled)');
+      return;
+    }
+    debugPrint('$_kAvatarTag picked: ${image.path}');
 
     if (_docId.isEmpty) {
+      debugPrint('$_kAvatarTag abort: _docId is empty');
       _showSnack(Lang.t('profile_doc_not_found'), color: Colors.redAccent);
       return;
     }
 
     // ✅ FIX: sicherstellen, dass wir in Firebase auth sind (Storage Rules)
     final fbUser = await _ensureFirebaseUser(context);
-    if (fbUser == null) return;
+    if (fbUser == null) {
+      debugPrint('$_kAvatarTag abort: ensureFirebaseUser returned null');
+      return;
+    }
+    debugPrint('$_kAvatarTag firebase user uid=${fbUser.uid} anonymous=${fbUser.isAnonymous}');
 
     if (!mounted) return;
     setState(() => _busyAvatar = true);
 
     final file = File(image.path);
+    final int fileSize = await file.length();
+    debugPrint('$_kAvatarTag local file exists=${file.existsSync()} size=$fileSize bytes');
+
+    // Alten Storage-Pfad merken, um ihn NACH erfolgreichem Upload zu löschen.
+    // Wir parsen den Pfad aus der derzeit hinterlegten URL — wenn das schief
+    // geht, ignorieren wir das (kein Block für den Upload).
+    final String? previousStoragePath = _storagePathFromUrl(_avatar);
+    debugPrint(
+        '$_kAvatarTag previous storage path to delete after upload: $previousStoragePath');
 
     try {
       // Cache-busting: immer neuer Dateiname
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final ref = FirebaseStorage.instance
-          .ref()
-          .child('avatars')
-          .child('$_docId-$ts.jpg');
+      final storagePath = 'avatars/$_docId-$ts.jpg';
+      final ref = FirebaseStorage.instance.ref().child(storagePath);
+      debugPrint('$_kAvatarTag uploading to bucket=${ref.bucket} path=$storagePath');
 
-      await ref.putFile(
+      final task = await ref.putFile(
         file,
         SettableMetadata(contentType: 'image/jpeg'),
       );
+      debugPrint(
+        '$_kAvatarTag upload done: state=${task.state} '
+        'bytesTransferred=${task.bytesTransferred}/${task.totalBytes}',
+      );
 
       final url = await ref.getDownloadURL();
+      debugPrint('$_kAvatarTag getDownloadURL OK -> $url');
+
+      // Falls Flutter ImageCache eine alte/fehlerhafte Variante derselben
+      // URL noch im RAM hat (z. B. nach einem 403), aggressiv rausschmeißen
+      // — sonst rendert NetworkImage stumm das alte Failure-Result neu.
+      final evicted = await NetworkImage(url).evict();
+      debugPrint('$_kAvatarTag imageCache.evict($url) -> $evicted');
+
+      // Zwingen, dass NetworkImage HIER lädt, damit Storage-Read-Fehler
+      // (Rules, TLS, Token) im Log sichtbar werden — statt später still
+      // im CircleAvatar zu verschwinden.
+      if (mounted) {
+        try {
+          await precacheImage(NetworkImage(url), context);
+          debugPrint('$_kAvatarTag precacheImage OK');
+        } catch (e, st) {
+          debugPrint('$_kAvatarTag precacheImage FAILED: $e\n$st');
+          // Wir setzen die URL trotzdem; der errorBuilder im Widget
+          // gibt dem User dann ein visuelles Broken-Image-Icon.
+        }
+      }
 
       if (!mounted) return;
       setState(() => _avatar = url);
+      debugPrint('$_kAvatarTag setState applied, _avatar=$_avatar');
 
-      // Firestore + Prefs speichern (URL)
-      await _updateFirestoreField("avatarUrl", url);
+      // Firestore + Prefs speichern. Für Bars landet das Bild auf
+      // `profileImageUrl` — selbes Feld wie „Meine Bar", damit Profil
+      // und Bar-Detail-Screen denselben Wert sehen.
+      await _updateFirestoreField(_avatarFieldName, url);
+      debugPrint(
+          '$_kAvatarTag Firestore $_collection/$_docId .$_avatarFieldName updated');
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('avatar', url);
+      debugPrint('$_kAvatarTag SharedPreferences "avatar" cached');
+
+      // Alte Datei aufräumen — erst NACH erfolgreichem Firestore-Write,
+      // damit ein Fehler hier nichts kaputtmacht. Wir gucken auch, dass
+      // wir uns nicht selbst überschreiben (gleicher Pfad).
+      if (previousStoragePath != null && previousStoragePath != storagePath) {
+        try {
+          await FirebaseStorage.instance
+              .ref()
+              .child(previousStoragePath)
+              .delete();
+          debugPrint(
+              '$_kAvatarTag deleted previous avatar at $previousStoragePath');
+        } on FirebaseException catch (e) {
+          // object-not-found ist OK (Datei war schon weg).
+          debugPrint(
+              '$_kAvatarTag could not delete previous avatar ($previousStoragePath): code=${e.code}');
+        } catch (e) {
+          debugPrint(
+              '$_kAvatarTag could not delete previous avatar ($previousStoragePath): $e');
+        }
+      }
 
       _showSnack(Lang.t('profile_updated'), color: AppColors.success);
-    } on FirebaseException catch (e) {
+    } on FirebaseException catch (e, st) {
+      debugPrint('$_kAvatarTag FirebaseException code=${e.code} msg=${e.message}\n$st');
       _showSnack('${Lang.t('profile_upload_failed')}: ${e.code}', color: Colors.redAccent);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('$_kAvatarTag generic upload failure: $e\n$st');
       _showSnack('${Lang.t('profile_upload_failed')}: $e', color: Colors.redAccent);
     } finally {
       if (mounted) setState(() => _busyAvatar = false);
+      debugPrint('$_kAvatarTag flow finished, _busyAvatar=false');
     }
   }
 
@@ -551,11 +670,13 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
   }
 
-  static String _hashPassword(String username, String password) {
-    final key = utf8.encode(username.toLowerCase());
-    final bytes = utf8.encode(password);
-    return Hmac(sha256, key).convert(bytes).toString();
-  }
+  // SECURITY_HARDENING (Audit C1, Session 2026-05-17):
+  // _hashPassword wurde entfernt — Hashing + Verifikation + Write
+  // passieren server-seitig in functions/auth/changePasswordCallable.js.
+  // Damit liest/schreibt der Client KEINEN passwordHash mehr direkt.
+  //
+  // Voraussetzung: User muss per Custom Token eingeloggt sein
+  // (anonymous-Sessions kommen serverseitig nicht durch).
 
   Future<void> _savePassword() async {
     final current = _currentPasswordController.text.trim();
@@ -565,35 +686,31 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       _showSnack(Lang.t('profile_password_empty'), color: Colors.redAccent);
       return;
     }
-    if (_docId.isEmpty) {
-      _showSnack(Lang.t('profile_doc_not_found_short'), color: Colors.redAccent);
-      return;
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    final username = (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '').trim();
-
-    final snap = await _col.doc(_docId).get();
-    final data = snap.data();
-    final storedHash  = (data?['passwordHash'] ?? '').toString();
-    final storedPlain = (data?['password']     ?? '').toString();
-    final currentHash = _hashPassword(username, current);
-
-    final verified = (storedHash.isNotEmpty && storedHash == currentHash) ||
-                     (storedPlain.isNotEmpty && storedPlain == current);
-
-    if (!verified) {
+    if (current.isEmpty) {
       _showSnack(Lang.t('profile_password_wrong'), color: Colors.redAccent);
       return;
     }
 
-    final newHash = _hashPassword(username, newPass);
-    await _col.doc(_docId).update({
-      'passwordHash': newHash,
-      'password': FieldValue.delete(),
-    });
+    final err = await AuthService.changePassword(
+      currentPassword: current,
+      newPassword: newPass,
+    );
 
     if (!mounted) return;
+
+    if (err != null) {
+      // Spezialfall: CF meldet falsches Passwort als permission-denied
+      // mit unserer Standard-Message — wir mappen das auf die i18n-Key.
+      final isWrongPw =
+          err.toLowerCase().contains('falsch') ||
+          err.toLowerCase().contains('aktuelles passwort');
+      _showSnack(
+        isWrongPw ? Lang.t('profile_password_wrong') : err,
+        color: Colors.redAccent,
+      );
+      return;
+    }
+
     setState(() {
       _editing = null;
       _currentPasswordController.clear();
@@ -756,7 +873,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       // Anonymen Login sicherstellen (für Cloud Function Auth-Check).
       await _ensureFirebaseUser(context);
 
-      final result = await StripeService.requestEmailVerification(
+      final result = await EmailVerifyService.requestEmailVerification(
         docId: _docId,
         email: newEmail,
         collection: _collection,
@@ -1014,6 +1131,13 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 // ── Avatar ──────────────────────────────────────
+                // WICHTIG: KEIN `CircleAvatar.backgroundImage` mehr.
+                // backgroundImage hat KEINEN errorBuilder — schlägt der
+                // NetworkImage-Decode/Download fehl (Storage Rules,
+                // abgelaufener Token, TLS, Decode-Fehler), bleibt der
+                // Kreis stumm leer. Wir verwenden ClipOval + Image.network
+                // mit loadingBuilder/errorBuilder, damit Fehler sichtbar
+                // werden und ins Log fließen.
                 GestureDetector(
                   onTap: _busyAvatar ? null : _showAvatarOptions,
                   child: Stack(
@@ -1029,13 +1153,13 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                             end: Alignment.bottomRight,
                           ),
                         ),
-                        child: CircleAvatar(
-                          radius: 46,
-                          backgroundColor: _card,
-                          backgroundImage: _buildAvatarImageProvider(),
-                          child: _buildAvatarImageProvider() == null
-                              ? const Icon(Icons.person, color: Colors.white38, size: 40)
-                              : null,
+                        child: ClipOval(
+                          child: Container(
+                            width: 92,
+                            height: 92,
+                            color: _card,
+                            child: _buildAvatarWidget(),
+                          ),
                         ),
                       ),
                       if (_busyAvatar)
@@ -1144,7 +1268,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         }),
                       ),
                       const Divider(height: 1, color: Color(0xFF2A2D35)),
-                      // E-Mail row (für QR-Code-Versand bei Ticket-Käufen).
+                      // E-Mail row (Account-Kontakt-Adresse).
                       // Status-Badge rechts:
                       //   • verifiziert (email vorhanden, pending leer) → grünes ✓
                       //   • pending vorhanden                            → oranges Sanduhr-Icon
@@ -1239,16 +1363,82 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     );
   }
 
-  ImageProvider? _buildAvatarImageProvider() {
-    final avatar = _avatar;
-    if (avatar == null || avatar.trim().isEmpty) return null;
-    if (avatar.startsWith('http://') || avatar.startsWith('https://')) {
-      // Avatar wird klein dargestellt → 256 px reichen, spart RAM.
-      return ResizeImage(NetworkImage(avatar), width: 256);
+  /// Extrahiert den Storage-Pfad (z.B. `avatars/<docId>-<ts>.jpg`) aus einer
+  /// Firebase-Storage-Download-URL bzw. einem `gs://` Pfad. Liefert null, wenn
+  /// es keine Storage-URL ist (z. B. ein lokaler Datei-Pfad oder eine externe
+  /// Bild-URL) — dann darf NICHT gelöscht werden.
+  String? _storagePathFromUrl(String? url) {
+    if (url == null || url.isEmpty) return null;
+    if (url.startsWith('gs://')) {
+      // gs://<bucket>/<path>
+      final without = url.substring('gs://'.length);
+      final slash = without.indexOf('/');
+      if (slash == -1) return null;
+      return without.substring(slash + 1);
     }
-    final f = File(avatar);
-    if (f.existsSync()) return FileImage(f);
-    return null;
+    // https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<urlencoded-path>?...
+    const marker = '/o/';
+    final i = url.indexOf(marker);
+    if (i == -1) return null;
+    final rest = url.substring(i + marker.length);
+    final q = rest.indexOf('?');
+    final encoded = q == -1 ? rest : rest.substring(0, q);
+    try {
+      return Uri.decodeComponent(encoded);
+    } catch (_) {
+      return encoded;
+    }
+  }
+
+  /// Rendert den Avatar.
+  ///
+  /// - **Bar-Accounts**: zeigt das echte `profileImageUrl` (gleiches Bild wie
+  ///   in „Meine Bar"). Inkl. error-/loadingBuilder.
+  /// - **User-Accounts**: ABSICHTLICH immer das Default-Icon
+  ///   (per früherer Anforderung „immer so als hätte man kein Profilbild").
+  Widget _buildAvatarWidget() {
+    if (!_isBarAccount) {
+      return const Icon(Icons.person, color: Colors.white38, size: 40);
+    }
+
+    final avatar = _avatar;
+    if (avatar == null || avatar.trim().isEmpty) {
+      return const Icon(Icons.local_bar, color: Colors.white38, size: 40);
+    }
+    if (avatar.startsWith('http://') || avatar.startsWith('https://')) {
+      return Image.network(
+        avatar,
+        key: ValueKey(avatar),
+        width: 92,
+        height: 92,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        loadingBuilder: (ctx, child, progress) {
+          if (progress == null) {
+            debugPrint('$_kAvatarTag bar Image.network rendered OK: $avatar');
+            return child;
+          }
+          return const Center(
+            child: SizedBox(
+              width: 24, height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white70,
+              ),
+            ),
+          );
+        },
+        errorBuilder: (ctx, error, stack) {
+          debugPrint('$_kAvatarTag bar Image.network ERROR for $avatar');
+          debugPrint('$_kAvatarTag   error: $error');
+          return const Center(
+            child: Icon(Icons.local_bar,
+                color: Colors.white38, size: 40),
+          );
+        },
+      );
+    }
+    return const Icon(Icons.local_bar, color: Colors.white38, size: 40);
   }
 
   static Widget _sectionLabel(String label) => Align(
@@ -1504,8 +1694,23 @@ class _FullscreenAvatarPageState extends State<_FullscreenAvatarPage> {
                 child: Image.network(
                   widget.imageUrl,
                   fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) =>
-                      const Icon(Icons.broken_image, color: Colors.white38, size: 60),
+                  loadingBuilder: (ctx, child, progress) {
+                    if (progress == null) return child;
+                    return const Center(
+                      child: SizedBox(
+                        width: 32, height: 32,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5, color: Colors.white70,
+                        ),
+                      ),
+                    );
+                  },
+                  errorBuilder: (_, error, stack) {
+                    debugPrint(
+                        '$_kAvatarTag Fullscreen Image.network ERROR for ${widget.imageUrl}: $error');
+                    return const Icon(Icons.broken_image,
+                        color: Colors.white38, size: 60);
+                  },
                 ),
               ),
             ),

@@ -1,0 +1,165 @@
+--- archived/ticketing/patches/_originals/admin_user_detail_screen.dart.orig	2026-05-14 13:10:49.561175300 +0200
++++ lib/Screens/admin/admin_user_detail_screen.dart	2026-05-14 13:15:58.952463500 +0200
+@@ -1,18 +1,21 @@
+ // lib/Screens/admin/admin_user_detail_screen.dart
+ //
+-// Admin-Detail-Screen für genau einen User. Lädt den User-Doc, das
+-// Stripe-Subcollection-Doc und die letzten Parties parallel via Streams.
++// Admin-Detail-Screen für genau einen User. Lädt den User-Doc und die
++// letzten Parties parallel via Streams.
+ // Moderations-Aktionen laufen über Cloud Functions, die hinter dem
+ // `admin`-Custom-Claim gesichert sind — direkter Firestore-Write
+ // reicht NICHT, weil "User bannen" auch Firebase Auth disablen muss
+ // (sonst kann der User mit gecachtem Token weiter API-Calls machen)
+ // und "User löschen" Firestore + Auth gleichzeitig braucht.
++//
++// FEATURE_DISABLED_TICKETING — die frühere Stripe-Section
++// (_StripeCard, _stripeStream, _openStripeDashboard) ist mit dem
++// Ticketing-Removal entfernt worden. see archived/ticketing/README.md
+ 
+ import 'package:cloud_firestore/cloud_firestore.dart';
+ import 'package:cloud_functions/cloud_functions.dart';
+ import 'package:flutter/material.dart';
+ import 'package:flutter/services.dart';
+-import 'package:url_launcher/url_launcher.dart';
+ 
+ import '../../Services/age_services.dart';
+ import '../../Services/platform_info.dart';
+@@ -35,14 +38,6 @@
+   Stream<DocumentSnapshot<Map<String, dynamic>>> _userStream() =>
+       FirebaseFirestore.instance.collection('users').doc(widget.uid).snapshots();
+ 
+-  Stream<DocumentSnapshot<Map<String, dynamic>>> _stripeStream() =>
+-      FirebaseFirestore.instance
+-          .collection('users')
+-          .doc(widget.uid)
+-          .collection('stripe')
+-          .doc('account')
+-          .snapshots();
+-
+   Stream<QuerySnapshot<Map<String, dynamic>>> _partiesStream() =>
+       FirebaseFirestore.instance
+           .collection('Party')
+@@ -103,7 +98,7 @@
+             style: TextStyle(
+                 color: AppColors.text, fontWeight: FontWeight.w800)),
+         content: const Text(
+-          'Löscht den User-Doc + Stripe-Subcollection + Firebase-Auth-Account. '
++          'Löscht den User-Doc + Firebase-Auth-Account. '
+           'Andere Querverweise (Parties, Reports, ...) bleiben unberührt. '
+           'Diese Aktion ist nicht rückgängig machbar.',
+           style: TextStyle(color: AppColors.muted, height: 1.45),
+@@ -152,11 +147,8 @@
+             onCopyEmail: (email) => _copy('Email', email),
+           ),
+           const SizedBox(height: 12),
+-          _StripeCard(
+-            stream: _stripeStream(),
+-            onOpenDashboard: _openStripeDashboard,
+-          ),
+-          const SizedBox(height: 12),
++          // FEATURE_DISABLED_TICKETING — _StripeCard entfernt.
++          // see archived/ticketing/README.md
+           _PartiesCard(stream: _partiesStream()),
+           const SizedBox(height: 12),
+           _ModerationCard(
+@@ -182,15 +174,6 @@
+     if (!mounted) return;
+     _toast('$label kopiert.', ok: true);
+   }
+-
+-  Future<void> _openStripeDashboard(String accountId) async {
+-    final uri = Uri.parse('https://dashboard.stripe.com/connect/accounts/$accountId');
+-    if (await canLaunchUrl(uri)) {
+-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+-    } else if (mounted) {
+-      _toast('Konnte Stripe-Dashboard nicht öffnen.');
+-    }
+-  }
+ }
+ 
+ // ───────────────────────── Sektions-Cards ──────────────────────────────
+@@ -410,72 +393,8 @@
+   }
+ }
+ 
+-// ── Stripe-Sektion ────────────────────────────────────────────────────
+-
+-class _StripeCard extends StatelessWidget {
+-  const _StripeCard({required this.stream, required this.onOpenDashboard});
+-  final Stream<DocumentSnapshot<Map<String, dynamic>>> stream;
+-  final void Function(String accountId) onOpenDashboard;
+-
+-  @override
+-  Widget build(BuildContext context) {
+-    return _Section(
+-      title: 'Stripe',
+-      icon: Icons.payment_rounded,
+-      child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+-        stream: stream,
+-        builder: (context, snap) {
+-          if (snap.hasError) {
+-            return _ErrorBlock(msg: 'Fehler beim Laden: ${snap.error}');
+-          }
+-          if (!snap.hasData) {
+-            return const Padding(
+-              padding: EdgeInsets.symmetric(vertical: 12),
+-              child: Center(
+-                child: SizedBox(
+-                  width: 18,
+-                  height: 18,
+-                  child: CircularProgressIndicator(strokeWidth: 2),
+-                ),
+-              ),
+-            );
+-          }
+-          final d = snap.data?.data() ?? const <String, dynamic>{};
+-          final accountId = (d['stripeAccountId'] ?? '').toString();
+-          final hasAccount = accountId.isNotEmpty;
+-
+-          return Column(
+-            crossAxisAlignment: CrossAxisAlignment.start,
+-            children: [
+-              _KV(k: 'account id',
+-                  v: hasAccount ? accountId : '—', mono: true),
+-              _KV(k: 'status',
+-                  v: (d['stripeOnboardingStatus'] ?? '').toString()),
+-              _KV(k: 'charges',
+-                  v: d['stripeChargesEnabled'] == true ? 'enabled' : 'disabled'),
+-              _KV(k: 'payouts',
+-                  v: d['stripePayoutsEnabled'] == true ? 'enabled' : 'disabled'),
+-              if (hasAccount) ...[
+-                const SizedBox(height: 8),
+-                OutlinedButton.icon(
+-                  onPressed: () => onOpenDashboard(accountId),
+-                  icon: const Icon(Icons.open_in_new_rounded, size: 14),
+-                  label: const Text('Stripe-Dashboard öffnen'),
+-                  style: OutlinedButton.styleFrom(
+-                    foregroundColor: AppColors.text,
+-                    side: const BorderSide(color: AppColors.accentBorder),
+-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+-                    shape: RoundedRectangleBorder(borderRadius: AppRadius.smBr),
+-                  ),
+-                ),
+-              ],
+-            ],
+-          );
+-        },
+-      ),
+-    );
+-  }
+-}
++// FEATURE_DISABLED_TICKETING — _StripeCard wurde entfernt.
++// see archived/ticketing/README.md
+ 
+ // ── Parties-Sektion ───────────────────────────────────────────────────
+ 
+@@ -623,8 +542,6 @@
+                 _KV(k: 'time',    v: (d['time'] ?? '').toString()),
+                 _KV(k: 'address', v: (d['address'] ?? '').toString()),
+                 _KV(k: 'visibility', v: (d['visibility'] ?? '').toString()),
+-                _KV(k: 'tickets',
+-                    v: d['ticketsEnabled'] == true ? 'aktiv' : 'inaktiv'),
+               ],
+             ),
+           ),

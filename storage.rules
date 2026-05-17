@@ -1,0 +1,99 @@
+rules_version = '2';
+
+// ============================================================
+// Firebase Storage Rules — party_pin
+// ------------------------------------------------------------
+// SECURITY_HARDENING (Pre-Launch Audit 2026-05-17):
+//
+// Vorherige Rules hatten einen catch-all `/{allPaths=**}` mit
+// `if request.auth != null` — d.h. jeder anonymous-authed Client
+// konnte beliebig viele beliebig große Dateien in beliebige Pfade
+// schreiben. Storage-Bill-Explosion ein paar Skripte entfernt.
+//
+// Jetzt:
+//   - Whitelist der bekannten App-Pfade (avatars, bar_avatars,
+//     bar_highlights, bars, events, sections)
+//   - Pro Pfad: Größenlimit + content-type-Check
+//   - Kein catch-all mehr — alles Unbekannte ist gesperrt
+//
+// Bekannte App-Schreibpfade (aus grep über lib/):
+//   - avatars/...              user avatar uploads
+//   - bar_avatars/...          bar logo (bar_signup_wizard, bar_settings_screen)
+//   - bar_highlights/...       bar highlight images
+//   - bars/...                 bar profile assets
+//   - events/...               event/party images (bar_event_screen)
+//   - sections/...             event section images
+//
+// Deployen:
+//   firebase deploy --only storage
+// ============================================================
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helpers
+    function authed() {
+      return request.auth != null;
+    }
+    function imageFile(maxBytes) {
+      return authed()
+          && request.resource.size < maxBytes
+          && request.resource.contentType.matches('image/.*');
+    }
+
+    // ── User-Avatare ───────────────────────────────────────
+    // Read public (damit NetworkImage/getDownloadURL ohne Auth-
+    // Roundtrip funktioniert), Write authed + Image-Type + 5MB.
+    //
+    // SECURITY_HARDENING-Hinweis: ohne uid-Path-Binding kann ein
+    // anonymous-authed Client weiterhin fremde Avatar-Dateinamen
+    // überschreiben. Echter Schutz erfordert Pfad-Struktur
+    // avatars/{uid}/... + Owner-Check via request.auth.uid. Solange
+    // App-Code aber nicht uid in den Pfad schreibt (legacy: free-
+    // form filenames), würde die Härtung Uploads brechen. Daher
+    // bleibt das hier — ein bekanntes, dokumentiertes Restrisiko.
+    match /avatars/{file=**} {
+      allow read: if true;
+      allow write: if imageFile(5 * 1024 * 1024);
+    }
+
+    // ── Bar-Logos ──────────────────────────────────────────
+    // bar_signup_wizard.dart + bar_settings_screen.dart laden hierhin.
+    match /bar_avatars/{file=**} {
+      allow read: if true;
+      allow write: if imageFile(5 * 1024 * 1024);
+    }
+
+    // ── Bar-Highlights / Marketing-Bilder ──────────────────
+    match /bar_highlights/{file=**} {
+      allow read: if true;
+      allow write: if imageFile(8 * 1024 * 1024);
+    }
+
+    // ── Bar-Profil-Assets ──────────────────────────────────
+    match /bars/{file=**} {
+      allow read: if true;
+      allow write: if imageFile(8 * 1024 * 1024);
+    }
+
+    // ── Event-/Party-Bilder ───────────────────────────────
+    match /events/{file=**} {
+      allow read: if true;
+      allow write: if imageFile(8 * 1024 * 1024);
+    }
+
+    // ── Event-Section-Bilder ──────────────────────────────
+    match /sections/{file=**} {
+      allow read: if true;
+      allow write: if imageFile(8 * 1024 * 1024);
+    }
+
+    // ── DEFAULT-DENY ──────────────────────────────────────
+    // KEIN catch-all mehr. Alles was hier oben nicht explizit ist,
+    // wird abgelehnt. Wenn ein neuer Upload-Pfad eingeführt wird,
+    // MUSS er hier ergänzt werden.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

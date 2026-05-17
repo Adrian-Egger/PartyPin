@@ -1,0 +1,55 @@
+--- archived/ticketing/patches/_originals/menu_screen.dart.orig	2026-05-14 13:10:49.545171700 +0200
++++ lib/Screens/home/menu_screen.dart	2026-05-14 13:12:02.293212700 +0200
+@@ -7,9 +7,9 @@
+ import 'selection_screen.dart';
+ import '../../l10n/lang.dart';
+ import '../profile/feedback_screen.dart';
+-import '../profile/my_tickets_screen.dart';
++// FEATURE_DISABLED_TICKETING — my_tickets_screen + stripe_onboarding_screen
++// sind archiviert. see archived/ticketing/README.md
+ import '../profile/notification_settings_screen.dart';
+-import '../profile/stripe_onboarding_screen.dart';
+ import '../admin/admin_screen.dart';
+ import '../party/access_parties_screen.dart';
+ 
+@@ -1157,36 +1157,10 @@
+                           },
+                         ),
+ 
+-                      // ── Tickets (nur fuer User-Accounts) ────────────────
+-                      // Bars verwalten ihre Events ueber den eigenen Tab,
+-                      // nicht ueber Tickets / Stripe-Onboarding.
+-                      if (!isBar) ...[
+-                        _sectionHeader('Tickets'),
+-                        _menuTile(
+-                          icon: Icons.confirmation_number_rounded,
+-                          title: 'Meine Tickets',
+-                          onTap: () {
+-                            Navigator.push(
+-                              context,
+-                              MaterialPageRoute(
+-                                  builder: (_) => const MyTicketsScreen()),
+-                            );
+-                          },
+-                        ),
+-                        _menuTile(
+-                          icon: Icons.account_balance_wallet_rounded,
+-                          title: 'Stripe Anmeldung',
+-                          subtitle: 'Hosts: Auszahlungen aktivieren',
+-                          onTap: () {
+-                            Navigator.push(
+-                              context,
+-                              MaterialPageRoute(
+-                                  builder: (_) =>
+-                                      const StripeOnboardingScreen()),
+-                            );
+-                          },
+-                        ),
+-                      ],
++                      // FEATURE_DISABLED_TICKETING — Section „Tickets" (Meine
++                      // Tickets + Stripe Anmeldung) entfernt. Die zugehörigen
++                      // Screens liegen unter archived/ticketing/lib/Screens/.
++                      // see archived/ticketing/README.md
+ 
+                       // ── Einstellungen ───────────────────────────────────
+                       _sectionHeader('Einstellungen'),

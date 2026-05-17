@@ -1,13 +1,7 @@
-import 'dart:typed_data';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../../Services/timestamp_ext.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
+import '../../Services/timestamp_ext.dart';
 import 'bar_event_screen.dart';
 import 'bar_settings_screen.dart';
 import '../../Theme/app_theme.dart';
@@ -101,20 +95,11 @@ class _MyBarBodyState extends State<_MyBarBody> {
   static const _text = AppColors.text;
   static const _muted = AppColors.muted;
   static const _accent = AppColors.accent;
-  static const _ok = AppColors.success;
-  static const _warn = Color(0xFFFFB020);
-  static const _err = AppColors.accent;
 
   static const _accentSoft = Color(0x26FF3B30); // ~15%
   static const _accentLine = Color(0x66FF3B30); // ~40%
 
   bool _showEvent = true;
-
-  bool get _isMobile {
-    if (kIsWeb) return false;
-    return defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS;
-  }
 
   void _dismissKeyboard() {
     FocusManager.instance.primaryFocus?.unfocus();
@@ -129,13 +114,6 @@ class _MyBarBodyState extends State<_MyBarBody> {
     _DayMeta(key: 'sat', short: 'Sa', emoji: '🎉'),
     _DayMeta(key: 'sun', short: 'So', emoji: '🌙'),
   ];
-
-  DocumentReference<Map<String, dynamic>> get _barRef =>
-      FirebaseFirestore.instance.collection('bars').doc(widget.barId);
-
-  Future<void> _updateBar(Map<String, dynamic> patch) async {
-    await _barRef.set(patch, SetOptions(merge: true));
-  }
 
   // ---------------- data helpers ----------------
 
@@ -229,599 +207,10 @@ class _MyBarBodyState extends State<_MyBarBody> {
     return out;
   }
 
-  Map<String, dynamic> _buildOpeningHoursPayload(Map<String, _OpeningHoursDay> opening) {
-    final Map<String, dynamic> map = {};
-    opening.forEach((key, value) {
-      map[key] = {
-        'closed': value.closed,
-        'open': value.from == null ? null : _formatTimeOfDay(value.from),
-        'close': value.to == null ? null : _formatTimeOfDay(value.to),
-      };
-    });
-    return map;
-  }
-
-  // ---------------- image picking/upload ----------------
-
-  Future<_PickedImage?> _pickImageBytes() async {
-    if (_isMobile) {
-      final picker = ImagePicker();
-      final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
-      if (picked == null) return null;
-      final bytes = await picked.readAsBytes();
-      final name = picked.name.isNotEmpty ? picked.name : 'image.jpg';
-      return _PickedImage(bytes: bytes, name: name);
-    }
-
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      withData: true,
-      allowMultiple: false,
-    );
-    if (result == null || result.files.isEmpty) return null;
-
-    final file = result.files.first;
-    final bytes = file.bytes;
-    if (bytes == null) return null;
-    final name = (file.name.isNotEmpty) ? file.name : 'image.jpg';
-    return _PickedImage(bytes: bytes, name: name);
-  }
-
-  Future<String?> _uploadHighlightImageAndGetUrl() async {
-    final picked = await _pickImageBytes();
-    if (picked == null) return null;
-
-    final fileName =
-        'barInfos/${widget.barId}/highlight_${DateTime.now().millisecondsSinceEpoch}_${picked.name}';
-
-    final ref = FirebaseStorage.instance.ref().child(fileName);
-    await ref.putData(picked.bytes, SettableMetadata(contentType: 'image/jpeg'));
-    return await ref.getDownloadURL();
-  }
-
-  // ---------------- EDIT SHEET ----------------
-
-  Future<void> _openEditBarDetails() async {
-    _dismissKeyboard();
-
-    final b = widget.barData;
-
-    final barName = (b['barName'] ?? '').toString();
-    final address = (b['address'] ?? '').toString();
-    final city = (b['city'] ?? '').toString();
-    final country = (b['country'] ?? '').toString();
-
-    final descCtrl = TextEditingController(text: (b['description'] ?? '').toString());
-
-    final rawOpening = _safeMap(b['openingHours']);
-    final opening = _openingFromBar(rawOpening);
-
-    final existingHighlights = _safeHighlights(b['barHighlights']);
-    final highlights = <_BarHighlight>[];
-    if (existingHighlights.isNotEmpty) {
-      for (final h in existingHighlights) {
-        highlights.add(
-          _BarHighlight(
-            textCtrl: TextEditingController(text: (h['text'] ?? '').toString()),
-            imageUrl: (h['imageUrl'] ?? '').toString().trim(),
-          ),
-        );
-      }
-    } else {
-      highlights.add(_BarHighlight(textCtrl: TextEditingController()));
-    }
-
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: _bgTop,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (sheetCtx) {
-        return StatefulBuilder(
-          builder: (sheetCtx, setLocal) {
-            bool saving = false;
-            bool sheetClosed = false;
-
-            void dismissInSheet() => FocusManager.instance.primaryFocus?.unfocus();
-
-            Future<void> pickTime(String dayKey, bool isFrom) async {
-              final day = opening[dayKey];
-              if (day == null || day.closed) return;
-
-              final initial = isFrom
-                  ? (day.from ?? const TimeOfDay(hour: 18, minute: 0))
-                  : (day.to ?? const TimeOfDay(hour: 23, minute: 0));
-
-              final result = await showTimePicker(context: sheetCtx, initialTime: initial);
-              if (result == null) return;
-
-              if (!sheetCtx.mounted) return;
-              setLocal(() {
-                if (isFrom) {
-                  day.from = result;
-                } else {
-                  day.to = result;
-                }
-              });
-            }
-
-            void toggleClosed(String dayKey) {
-              final day = opening[dayKey];
-              if (day == null) return;
-              if (!sheetCtx.mounted) return;
-              setLocal(() {
-                day.closed = !day.closed;
-                if (day.closed) {
-                  day.from = null;
-                  day.to = null;
-                }
-              });
-            }
-
-            void addHighlight() {
-              if (!sheetCtx.mounted) return;
-              setLocal(() => highlights.add(_BarHighlight(textCtrl: TextEditingController())));
-            }
-
-            void removeHighlight(int index) {
-              if (highlights.length == 1) {
-                highlights[0].textCtrl.clear();
-                highlights[0].imageUrl = '';
-              } else {
-                highlights[index].textCtrl.dispose();
-                highlights.removeAt(index);
-              }
-              if (!sheetCtx.mounted) return;
-              setLocal(() {});
-            }
-
-            Future<void> pickHighlightImage(int index) async {
-              if (saving) return;
-              try {
-                final url = await _uploadHighlightImageAndGetUrl();
-                if (url == null) return;
-                if (!sheetCtx.mounted) return;
-                setLocal(() => highlights[index].imageUrl = url);
-              } catch (e) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    backgroundColor: AppColors.accent,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    content: Text('Fehler beim Bild-Upload: $e', style: const TextStyle(color: AppColors.text)),
-                  ),
-                );
-              }
-            }
-
-            Widget openingRow(_DayMeta meta) {
-              final day = opening[meta.key]!;
-              final closed = day.closed;
-
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 5),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 84,
-                      child: Row(
-                        children: [
-                          Text(meta.emoji, style: const TextStyle(fontSize: 16)),
-                          const SizedBox(width: 6),
-                          Text(
-                            meta.short,
-                            style: const TextStyle(
-                              color: _text,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    if (closed)
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-                          decoration: BoxDecoration(
-                            color: _accentSoft,
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: _accentLine, width: 1),
-                          ),
-                          child: const Text(
-                            "Geschlossen",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: _text,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
-                      )
-                    else
-                      Expanded(
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: saving ? null : () => pickTime(meta.key, true),
-                                style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: AppColors.accentBorder),
-                                  backgroundColor: _panel2,
-                                  foregroundColor: _text,
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                ),
-                                child: Text(
-                                  "von ${_formatTimeOfDay(day.from)}",
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: saving ? null : () => pickTime(meta.key, false),
-                                style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: AppColors.accentBorder),
-                                  backgroundColor: _panel2,
-                                  foregroundColor: _text,
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                ),
-                                child: Text(
-                                  "bis ${_formatTimeOfDay(day.to)}",
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    const SizedBox(width: 8),
-                    InkWell(
-                      onTap: saving ? null : () => toggleClosed(meta.key),
-                      borderRadius: BorderRadius.circular(999),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: closed ? _accentSoft : Colors.transparent,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: closed ? _accentLine : AppColors.accentBorder, width: 1),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              closed ? Icons.check_circle : Icons.radio_button_unchecked,
-                              size: 16,
-                              color: closed ? _accent : Colors.white54,
-                            ),
-                            const SizedBox(width: 6),
-                            const Text(
-                              "zu",
-                              style: TextStyle(color: _muted, fontSize: 12, fontWeight: FontWeight.w800),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            Future<void> saveAll() async {
-              if (saving) return;
-              if (!sheetCtx.mounted) return;
-
-              setLocal(() => saving = true);
-
-              try {
-                final highlightsPayload = <Map<String, dynamic>>[];
-                for (final h in highlights) {
-                  final t = h.textCtrl.text.trim();
-                  final u = (h.imageUrl ?? '').trim();
-                  if (t.isEmpty && u.isEmpty) continue;
-                  highlightsPayload.add({'text': t, 'imageUrl': u});
-                }
-
-                final openingPayload = _buildOpeningHoursPayload(opening);
-
-                await _updateBar({
-                  'description': descCtrl.text.trim(),
-                  'openingHours': openingPayload,
-                  'barHighlights': highlightsPayload,
-                  'updatedAt': FieldValue.serverTimestamp(),
-                });
-
-                if (!mounted) return;
-                if (!sheetCtx.mounted) return;
-
-                sheetClosed = true;
-                Navigator.of(sheetCtx).pop();
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    backgroundColor: AppColors.success,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    content: const Text('Gespeichert ✅', style: TextStyle(color: AppColors.text, fontWeight: FontWeight.w800)),
-                  ),
-                );
-              } on FirebaseException catch (e) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    backgroundColor: AppColors.accent,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    content: Text('Firebase: ${e.code} ${e.message ?? ''}',
-                        style: const TextStyle(color: AppColors.text)),
-                  ),
-                );
-              } catch (e) {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    backgroundColor: AppColors.accent,
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    content: Text('Fehler beim Speichern: $e', style: const TextStyle(color: AppColors.text)),
-                  ),
-                );
-              } finally {
-                if (!sheetClosed && sheetCtx.mounted) setLocal(() => saving = false);
-              }
-            }
-
-            return GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: dismissInSheet,
-              child: SafeArea(
-                child: Container(
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [_bgTop, _bgBottom],
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                    ),
-                  ),
-                  child: Padding(
-                    padding: EdgeInsets.only(
-                      left: 16,
-                      right: 16,
-                      top: 12,
-                      bottom: 16 + MediaQuery.of(sheetCtx).viewInsets.bottom,
-                    ),
-                    child: SizedBox(
-                      height: MediaQuery.of(sheetCtx).size.height * 0.92,
-                      child: Column(
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: _accentSoft,
-                                  borderRadius: BorderRadius.circular(999),
-                                  border: Border.all(color: _accentLine, width: 1),
-                                ),
-                                child: const Text(
-                                  "Bar bearbeiten ✏️",
-                                  style: TextStyle(
-                                    color: _text,
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                              ),
-                              const Spacer(),
-                              IconButton(
-                                onPressed: saving ? null : () => Navigator.of(sheetCtx).pop(),
-                                icon: const Icon(Icons.close, color: _muted),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Expanded(
-                            child: SingleChildScrollView(
-                              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  _infoReadOnlyCard(
-                                    title: 'Fixe Daten',
-                                    lines: [
-                                      if (barName.trim().isNotEmpty) 'Name: $barName',
-                                      if (address.trim().isNotEmpty) 'Adresse: $address',
-                                      if (city.trim().isNotEmpty || country.trim().isNotEmpty)
-                                        'Ort: ${[city, country].where((e) => e.trim().isNotEmpty).join(', ')}',
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-
-                                  _panelCard(
-                                    title: 'Beschreibung',
-                                    child: TextField(
-                                      controller: descCtrl,
-                                      maxLines: 4,
-                                      style: const TextStyle(color: _text),
-                                      decoration: InputDecoration(
-                                        filled: true,
-                                        fillColor: _panel2,
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                        enabledBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: const BorderSide(color: AppColors.accentBorder, width: 1),
-                                        ),
-                                        focusedBorder: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                          borderSide: const BorderSide(color: _accentLine, width: 1.2),
-                                        ),
-                                        hintText: 'Beschreibe deine Bar ...',
-                                        hintStyle: const TextStyle(color: _muted),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
-
-                                  _panelCard(
-                                    title: 'Öffnungszeiten',
-                                    subtitle: 'Zeiten wählen oder Tag schließen.',
-                                    child: Column(children: _days.map(openingRow).toList()),
-                                  ),
-                                  const SizedBox(height: 12),
-
-                                  _panelCard(
-                                    title: 'Highlights',
-                                    trailing: OutlinedButton.icon(
-                                      onPressed: saving ? null : addHighlight,
-                                      icon: const Icon(Icons.add, color: _accent),
-                                      label: const Text('Hinzufügen',
-                                          style: TextStyle(color: _accent, fontWeight: FontWeight.w900)),
-                                      style: OutlinedButton.styleFrom(
-                                        side: const BorderSide(color: _accentLine),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                      ),
-                                    ),
-                                    child: Column(
-                                      children: List.generate(highlights.length, (i) {
-                                        final h = highlights[i];
-                                        final url = (h.imageUrl ?? '').trim();
-
-                                        return Container(
-                                          margin: const EdgeInsets.only(bottom: 12),
-                                          padding: const EdgeInsets.all(12),
-                                          decoration: BoxDecoration(
-                                            color: _panel2,
-                                            borderRadius: BorderRadius.circular(16),
-                                            border: Border.all(color: AppColors.accentBorder, width: 1),
-                                          ),
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  Text(
-                                                    'Highlight ${i + 1}',
-                                                    style: const TextStyle(
-                                                      color: _muted,
-                                                      fontSize: 12,
-                                                      fontWeight: FontWeight.w900,
-                                                    ),
-                                                  ),
-                                                  const Spacer(),
-                                                  IconButton(
-                                                    onPressed: saving ? null : () => removeHighlight(i),
-                                                    icon: const Icon(Icons.delete_outline, color: _accent),
-                                                  ),
-                                                ],
-                                              ),
-                                              InkWell(
-                                                onTap: saving ? null : () => pickHighlightImage(i),
-                                                borderRadius: BorderRadius.circular(12),
-                                                child: Container(
-                                                  height: 150,
-                                                  decoration: BoxDecoration(
-                                                    color: _panel,
-                                                    borderRadius: BorderRadius.circular(12),
-                                                    border: Border.all(color: AppColors.accentBorder, width: 1),
-                                                  ),
-                                                  child: url.isNotEmpty
-                                                      ? ClipRRect(
-                                                    borderRadius: BorderRadius.circular(12),
-                                                    child: Image.network(
-                                                      url,
-                                                      fit: BoxFit.cover,
-                                                      width: double.infinity,
-                                                    ),
-                                                  )
-                                                      : const Column(
-                                                    mainAxisAlignment: MainAxisAlignment.center,
-                                                    children: [
-                                                      Icon(Icons.add_a_photo, color: _muted),
-                                                      SizedBox(height: 8),
-                                                      Text(
-                                                        'Bild auswählen',
-                                                        style: TextStyle(color: _muted, fontWeight: FontWeight.w800),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(height: 10),
-                                              Container(
-                                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                                decoration: BoxDecoration(
-                                                  color: _panel,
-                                                  borderRadius: BorderRadius.circular(12),
-                                                  border: Border.all(color: AppColors.accentBorder, width: 1),
-                                                ),
-                                                child: TextField(
-                                                  controller: h.textCtrl,
-                                                  maxLines: 3,
-                                                  style: const TextStyle(color: _text),
-                                                  decoration: const InputDecoration(
-                                                    border: InputBorder.none,
-                                                    hintText: 'Kurztext zum Highlight ...',
-                                                    hintStyle: TextStyle(color: _muted),
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      }),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton(
-                              onPressed: saving ? null : saveAll,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _accent,
-                                disabledBackgroundColor: Colors.white12,
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                              ),
-                              child: saving
-                                  ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                              )
-                                  : const Text('Speichern', style: TextStyle(fontWeight: FontWeight.w900)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-
-    // dispose
-    descCtrl.dispose();
-    for (final h in highlights) {
-      h.textCtrl.dispose();
-    }
-  }
+  // ---------------- (image picking/upload + quick-edit sheet entfernt) ----------------
+  // Der frühere Quick-Edit-Flow (AppBar-Stift → Bottom-Sheet) ist
+  // entfernt. Bearbeitet wird ausschließlich über `BarSettingsScreen`,
+  // erreichbar über den prominenten Button direkt unter Name/Adresse.
 
   // ---------------- UI helper cards ----------------
 
@@ -861,34 +250,6 @@ class _MyBarBodyState extends State<_MyBarBody> {
           ],
           const SizedBox(height: 12),
           child,
-        ],
-      ),
-    );
-  }
-
-  static Widget _infoReadOnlyCard({required String title, required List<String> lines}) {
-    final clean = lines.where((e) => e.trim().isNotEmpty).toList();
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: _panel,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.accentBorder, width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(title, style: const TextStyle(color: _text, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 10),
-          if (clean.isEmpty)
-            const Text('Keine Daten.', style: TextStyle(color: _muted, fontWeight: FontWeight.w700))
-          else
-            ...clean.map(
-                  (t) => Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Text(t, style: const TextStyle(color: _muted, fontWeight: FontWeight.w700)),
-              ),
-            ),
         ],
       ),
     );
@@ -975,13 +336,10 @@ class _MyBarBodyState extends State<_MyBarBody> {
               ),
             ),
           ),
-          actions: [
-            IconButton(
-              tooltip: 'Bar bearbeiten',
-              onPressed: _openEditBarDetails,
-              icon: const Icon(Icons.edit, color: _muted),
-            ),
-          ],
+          // Hinweis: der frühere AppBar-Stift (Quick-Edit via Bottom-Sheet)
+          // wurde entfernt — Bearbeitung läuft jetzt ausschließlich über
+          // den prominenten Button direkt unter Name/Adresse, damit klar
+          // ist, wo Bearbeiten passiert.
         ),
         body: Stack(
           children: [
@@ -1051,6 +409,42 @@ class _MyBarBodyState extends State<_MyBarBody> {
 
                 const SizedBox(height: 16),
 
+                // ── PRIMÄRER EDIT-BUTTON ───────────────────────────────
+                // Bewusst direkt unter Name + Adresse: sofort sichtbar,
+                // konsistent erreichbar (egal ob Events oder Bar-Infos
+                // gerade angezeigt werden) und nicht „mitten drin".
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              BarSettingsScreen(barId: widget.barId),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.edit, color: Colors.white),
+                    label: const Text(
+                      'Bar-Infos bearbeiten',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _accent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      elevation: 0,
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
                 if (hasAnyEvents) ...[
                   Center(child: _segmented(showEvent: showEvent)),
                   const SizedBox(height: 14),
@@ -1115,31 +509,10 @@ class _MyBarBodyState extends State<_MyBarBody> {
                   ),
                   const SizedBox(height: 12),
 
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                BarSettingsScreen(barId: widget.barId),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.edit, color: _accent),
-                      label: const Text(
-                        'Bar-Infos bearbeiten',
-                        style: TextStyle(fontWeight: FontWeight.w900, color: _accent),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: _accentLine, width: 1),
-                        backgroundColor: _panel,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
+                  // (Der frühere „Bar-Infos bearbeiten"-Button stand hier
+                  //  zwischen Öffnungszeiten und Highlights — visuell
+                  //  „mittendrin". Er wurde nach oben verschoben, direkt
+                  //  unter Name/Adresse.)
 
                   if (highlights.isNotEmpty)
                     _panelCard(
@@ -1400,13 +773,6 @@ class _EventItem {
   _EventItem({required this.id, required this.data});
 }
 
-class _BarHighlight {
-  final TextEditingController textCtrl;
-  String? imageUrl;
-
-  _BarHighlight({required this.textCtrl, this.imageUrl});
-}
-
 class _OpeningHoursDay {
   bool closed;
   TimeOfDay? from;
@@ -1421,10 +787,4 @@ class _DayMeta {
   final String emoji;
 
   const _DayMeta({required this.key, required this.short, required this.emoji});
-}
-
-class _PickedImage {
-  final Uint8List bytes;
-  final String name;
-  _PickedImage({required this.bytes, required this.name});
 }

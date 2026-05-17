@@ -1,11 +1,18 @@
 // lib/Screens/create_account_screen.dart
-import 'dart:convert';
-import 'package:crypto/crypto.dart';
+//
+// SECURITY_HARDENING (Pre-Launch Audit C2, Session 2026-05-16):
+// User-Signup läuft serverseitig über AuthService.signupUser →
+// signupCallable CF. Der Client erzeugt KEINEN Hash mehr und schreibt
+// KEINEN passwordHash direkt nach Firestore.
+//
+// Bar-Signup-Pfad delegiert weiterhin an BarSignupWizard, der intern
+// ebenfalls den CF-Pfad nutzt (siehe bar_signup_wizard.dart).
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../home/selection_screen.dart';
 import 'bar_signup_wizard.dart';
@@ -14,6 +21,7 @@ import 'nutzungsbedinungen.dart';
 import '../home/home_shell.dart';
 import '../../Theme/app_theme.dart';
 import '../../l10n/lang.dart';
+import '../../Services/auth_service.dart';
 
 class CreateAccountScreen extends StatefulWidget {
   const CreateAccountScreen({Key? key}) : super(key: key);
@@ -61,11 +69,8 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   static const _accent = AppColors.accent;
   static const _secondary = AppColors.teal;
 
-  static String _hashPassword(String username, String password) {
-    final key = utf8.encode(username.toLowerCase());
-    final bytes = utf8.encode(password);
-    return Hmac(sha256, key).convert(bytes).toString();
-  }
+  // SECURITY_HARDENING: _hashPassword wurde entfernt — Hashing läuft
+  // server-seitig in functions/auth/signupCallable.js.
 
   bool get _usernameHasUppercase =>
       RegExp(r'[A-Z]').hasMatch(_usernameController.text);
@@ -560,6 +565,18 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     await _proceed();
   }
 
+  void _showError(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
   Future<void> _proceed() async {
     final username = _usernameController.text.trim();
     final password = _passwordController.text.trim();
@@ -567,34 +584,9 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
     setState(() => _isSaving = true);
 
     try {
-      final collectionName = _isBar ? "bars" : "users";
-      final query = await FirebaseFirestore.instance
-          .collection(collectionName)
-          .where("username", isEqualTo: username)
-          .limit(1)
-          .get();
-
-      if (query.docs.isNotEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(Lang.t('reg_err_username_taken')),
-            backgroundColor: AppColors.accent,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        );
-        setState(() {
-          _isSaving = false;
-          _usernameTaken = true;
-          _usernameChecked = true;
-        });
-        return;
-      }
-
+      // Bar-Pfad: nur die Vor-Validierung hier, der eigentliche
+      // signupCallable-Call passiert im BarSignupWizard.
       if (_isBar) {
-        // Bar-Anfragen laufen jetzt ueber den 3-Schritt-Wizard. Die Werte,
-        // die der User hier schon eingetippt hat, werden vorausgefuellt.
         if (!mounted) return;
         setState(() => _isSaving = false);
         await Navigator.of(context).push(
@@ -609,63 +601,63 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
           ),
         );
         return;
-      } else {
-        final prefs = await SharedPreferences.getInstance();
-
-        final vorname = _vornameController.text.trim();
-        final nachname = _nachnameController.text.trim();
-        final birthDate = DateTime(_selectedYear, _selectedMonth, _selectedDay);
-        final age = _calculateAge(birthDate);
-
-        if (age < 12) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(Lang.t('reg_err_age')),
-              backgroundColor: AppColors.accent,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-          );
-          setState(() => _isSaving = false);
-          return;
-        }
-
-        final docId = "$vorname $nachname".trim();
-
-        final passwordHash = _hashPassword(username, password);
-
-        await FirebaseFirestore.instance.collection("users").doc(docId).set({
-          "createdAt": FieldValue.serverTimestamp(),
-          "vorname": vorname,
-          "nachname": nachname,
-          "fullName": docId,
-          "username": username,
-          "username_lower": username.toLowerCase(),
-          "passwordHash": passwordHash,
-          "age": age,
-          "geburtsdatum": {
-            "tag": _selectedDay,
-            "monat": _selectedMonth,
-            "jahr": _selectedYear,
-          },
-          "phoneNumber": null,
-          "phoneVerified": false,
-          "authVersion": 2,
-        });
-
-        await prefs.setString("vorname", vorname);
-        await prefs.setString("nachname", nachname);
-        await prefs.setString("username", username);
-        await prefs.setBool("isBarAccount", false); // ✅ wichtig
-        await prefs.setBool("isLoggedIn", true);
-        await prefs.setString("currentUsername", username);
-        await prefs.setInt("authVersion", 1);
-        await prefs.setBool("phoneVerified", false);
-        await prefs.remove("phoneNumber");
-
-        await _checkTermsAndSelection();
       }
+
+      // ── User-Pfad: AuthService.signupUser ────────────────
+      final vorname = _vornameController.text.trim();
+      final nachname = _nachnameController.text.trim();
+      final birthDate = DateTime(_selectedYear, _selectedMonth, _selectedDay);
+      final age = _calculateAge(birthDate);
+
+      if (age < 12) {
+        _showError(Lang.t('reg_err_age'));
+        setState(() => _isSaving = false);
+        return;
+      }
+
+      // SECURITY_HARDENING: Hash + Username-Collision + Profile-Write
+      // passieren komplett server-seitig. Client schickt nur Plaintext-
+      // Felder (Plaintext-Passwort über HTTPS, wird in CF zu Hash).
+      final result = await AuthService.signupUser(
+        username: username,
+        password: password,
+        vorname: vorname,
+        nachname: nachname,
+        tag: _selectedDay,
+        monat: _selectedMonth,
+        jahr: _selectedYear,
+      );
+
+      if (!result.isOk) {
+        if (result.error == SignupError.usernameTaken) {
+          setState(() {
+            _usernameTaken = true;
+            _usernameChecked = true;
+          });
+          _showError(result.message ?? Lang.t('reg_err_username_taken'));
+        } else if (result.error == SignupError.ageTooLow) {
+          _showError(Lang.t('reg_err_age'));
+        } else {
+          _showError(result.message ?? Lang.t('reg_err_save'));
+        }
+        return;
+      }
+
+      // Auto-Login ist im AuthService bereits passiert (signInWith
+      // CustomToken). Jetzt prefs spiegeln und in den Flow weiter.
+      final prefs = await SharedPreferences.getInstance();
+      final profile = result.profile!;
+      await prefs.setString("vorname", profile.vorname ?? vorname);
+      await prefs.setString("nachname", profile.nachname ?? nachname);
+      await prefs.setString("username", profile.username);
+      await prefs.setString("currentUsername", profile.username);
+      await prefs.setBool("isBarAccount", false);
+      await prefs.setBool("isLoggedIn", true);
+      await prefs.setInt("authVersion", profile.authVersion);
+      await prefs.setBool("phoneVerified", profile.phoneVerified);
+      await prefs.remove("phoneNumber");
+
+      await _checkTermsAndSelection();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

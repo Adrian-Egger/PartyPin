@@ -5,6 +5,16 @@ import '../../l10n/lang.dart';
 import '../home/home_shell.dart';
 import '../../Theme/app_theme.dart';
 import '../../Services/timestamp_ext.dart';
+import '../../Social/avatar_stack.dart';
+import '../../Social/city_mood.dart';
+import '../../Social/host_badge.dart';
+import '../../Social/host_stats.dart';
+import '../../Social/host_stats_service.dart';
+import '../../Social/map_social_layer.dart';
+import '../../Social/party_activity.dart';
+import '../../Social/tonight_hot_strip.dart';
+import '../../Social/trending_hosts_strip.dart';
+import '../profile/user_profile_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Status
@@ -39,11 +49,16 @@ class _Party {
   final DateTime? start;
   final String address;
   final String host;
+  /// Username des Hosts (Party.hostId). Wird für HostStats-Lookup gebraucht.
+  final String hostId;
   final String description;
   final int? guestLimit;
   final int? minAge;
   final double? price;
   final String type;
+  /// Snapshot der going-Aggregat-Felder aus dem Party-Doc. Wird beim
+  /// Laden aus derselben `doc.data()` befüllt — kein extra Read.
+  final PartyActivity activity;
 
   const _Party({
     required this.id,
@@ -52,11 +67,13 @@ class _Party {
     required this.start,
     required this.address,
     required this.host,
+    required this.hostId,
     required this.description,
     this.guestLimit,
     this.minAge,
     this.price,
     required this.type,
+    this.activity = PartyActivity.empty,
   });
 }
 
@@ -77,6 +94,12 @@ class _AccessPartiesScreenState extends State<AccessPartiesScreen> {
 
   final List<_Party> _requested = [];
   final List<_Party> _enrolled = [];
+
+  /// Phase 4: alle geladenen Party-Docs (nicht nur die mit User-Relation).
+  /// Wird genutzt um surging-Hosts heute für die TrendingHostsStrip-Boost-
+  /// Sortierung zu extrahieren — keine zusätzlichen Reads, gleiche Query
+  /// wie das vorhandene _load().
+  final List<Map<String, dynamic>> _allLoadedParties = [];
 
   @override
   void initState() {
@@ -140,24 +163,34 @@ class _AccessPartiesScreenState extends State<AccessPartiesScreen> {
         start: _startOf(d),
         address: (d['address'] ?? '').toString().trim(),
         host: (d['hostName'] ?? '').toString().trim(),
+        hostId: ((d['hostId'] ?? d['hostUid']) ?? '').toString().trim(),
         description: (d['description'] ?? '').toString().trim(),
         guestLimit: d['guestLimit'] is int ? d['guestLimit'] as int : null,
         minAge: d['minAge'] is int ? d['minAge'] as int : null,
         price: d['price'] is num ? (d['price'] as num).toDouble() : null,
         type: (d['type'] ?? '').toString(),
+        activity: PartyActivity.fromPartyData(d),
       );
 
   // ── load ───────────────────────────────────────────────────────────────────
   Future<void> _load() async {
     _requested.clear();
     _enrolled.clear();
+    _allLoadedParties.clear();
     final me = _me!;
     final fs = FirebaseFirestore.instance;
-    final snap = await fs.collection('Party').get();
+    // Harte Obergrenze. Ohne `limit()` skaliert die Read-Kosten dieses
+    // Screens linear mit der Gesamtzahl aller Partys im System — ein
+    // einzelner User-Open des Tabs kann sonst hunderte/tausende Reads
+    // pro Visit verursachen. 500 deckt realistische Mengen ab; wer
+    // mehr sehen will, soll explizit filtern.
+    final snap = await fs.collection('Party').limit(500).get();
 
     for (final doc in snap.docs) {
       final d = doc.data();
       if (_expired(d)) continue;
+      // Capture für City-Mood-Boost (Phase 4) — bevor user-relation-Filter.
+      _allLoadedParties.add(d);
       final closed = _isClosed(d);
       final host   = _isHost(d);
 
@@ -290,7 +323,56 @@ class _AccessPartiesScreenState extends State<AccessPartiesScreen> {
                         ),
                       ],
                       const SizedBox(height: 6),
-                      _badge(p.status),
+                      Row(
+                        children: [
+                          _badge(p.status),
+                          if (p.hostId.isNotEmpty) ...[
+                            const SizedBox(width: 6),
+                            // Host-Level Badge auf jeder Party-Karte. Auch
+                            // Rookies bekommen einen Badge ("New") — subtil
+                            // statt versteckt. So fühlt sich die App nicht
+                            // leer an, neue Hosts sind sofort sichtbar.
+                            StreamBuilder<HostStats>(
+                              stream: HostStatsService.watch(p.hostId),
+                              builder: (context, snap) {
+                                final stats = snap.data;
+                                if (stats == null) return const SizedBox.shrink();
+                                return HostBadge.small(level: stats.hostLevel);
+                              },
+                            ),
+                          ],
+                          // Social-Proof: Avatar-Stack rechts in der Row,
+                          // Spacer dazwischen damit's auseinander rückt.
+                          // Wird nur angezeigt wenn ≥1 going.
+                          if (p.activity.goingCount > 0) ...[
+                            const Spacer(),
+                            AvatarStack(activity: p.activity, size: 22),
+                          ],
+                        ],
+                      ),
+                      // Atmosphären-Pill — Phase 3. Nur wenn ein
+                      // sinnvoller Hinweis existiert (in X Min / füllt
+                      // sich / läuft). Sonst: kein Leerraum.
+                      //
+                      // Momentum-Aussagen sind möglich weil _Party.activity
+                      // bereits goingDelta60m + updatedAt aus dem Doc trägt
+                      // (siehe _build()).
+                      Builder(builder: (_) {
+                        final flags = computeMapSocialFlagsFromActivity(
+                          activity: p.activity,
+                          myFriends: const <String>{},
+                          startTime: p.start,
+                        );
+                        final label = atmosphericLabel(
+                          flags: flags,
+                          startTime: p.start,
+                        );
+                        if (label == null) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: _AtmosphericPill(text: label),
+                        );
+                      }),
                     ],
                   ),
                 ),
@@ -410,6 +492,49 @@ class _AccessPartiesScreenState extends State<AccessPartiesScreen> {
                       child: ListView(
                         padding: const EdgeInsets.only(top: 8, bottom: 32),
                         children: [
+                          // „Heute Abend" — was läuft heute in Linz, sortiert
+                          // nach goingCount. Reuses bestehende Bottom-Sheet-
+                          // Logik via HomeShell(initialOpenPartyId).
+                          TonightHotStrip(
+                            maxItems: 5,
+                            onOpenParty: (partyId) {
+                              Navigator.of(context).pushReplacement(
+                                MaterialPageRoute(
+                                  builder: (_) => HomeShell(
+                                    initialIndex: 2,
+                                    initialOpenPartyId: partyId,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          // Trending-Hosts darunter: lokale Szene-Signale.
+                          // Compact: nur Top-5, versteckt sich wenn leer
+                          // (Discovery-Surface, kein „Sei der erste"-Slot).
+                          //
+                          // Phase 4: Boost-Set aus aktiver City-Mood — Hosts
+                          // mit surging Party heute werden vor reinen
+                          // Lifetime-Trending-Hosts einsortiert.
+                          Builder(builder: (_) {
+                            final mood = computeCityMood(
+                              parties: _allLoadedParties,
+                              myFriends: const <String>{},
+                            );
+                            return TrendingHostsStrip(
+                              maxItems: 5,
+                              hideWhenEmpty: true,
+                              boostUsernames: mood.surgingHostnames,
+                              onTapHost: (username) {
+                                Navigator.of(context).push(MaterialPageRoute(
+                                  builder: (_) => UserProfileScreen(
+                                    username: username,
+                                    myUsername: _me,
+                                  ),
+                                ));
+                              },
+                            );
+                          }),
+                          const SizedBox(height: 8),
                           _section('Offene Anfragen', Icons.hourglass_top_rounded, _requested, 'Keine offenen Anfragen.'),
                           const SizedBox(height: 24),
                           // ── Divider ──────────────────────────────────────
@@ -649,4 +774,34 @@ class _PartyDetailSheet extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// Sehr kleine atmosphärische Status-Pille für Party-Cards. Bewusst
+/// dezent: dünner Border, gedämpfte Farbe, kein Icon-Spam. Soll als
+/// peripheres Signal wirken — nicht als Call-to-Action.
+class _AtmosphericPill extends StatelessWidget {
+  const _AtmosphericPill({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.accent.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.accent.withOpacity(0.35), width: 0.8),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: AppColors.accent,
+          fontSize: 10.5,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.1,
+          height: 1.0,
+        ),
+      ),
+    );
+  }
 }

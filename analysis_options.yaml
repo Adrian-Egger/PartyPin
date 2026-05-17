@@ -11,10 +11,12 @@ include: package:flutter_lints/flutter.yaml
 
 analyzer:
   exclude:
-    # Vendored Plugin: Web-Implementierung nutzt `dart:js_util`, das wir
-    # für Android/iOS nicht analysieren müssen (conditional import sorgt
-    # dafür, dass der Web-Pfad nur für Web-Target kompiliert wird).
-    - vendor/qr_code_scanner/lib/src/web/flutter_qr_web.dart
+    # FEATURE_DISABLED_TICKETING — archivierter Ticketing-Code (Stripe,
+    # qr_flutter, qr_code_scanner) referenziert Packages, die mit dem
+    # Ticketing-Removal aus pubspec.yaml entfernt wurden. Die Dateien
+    # sind absichtlich erhalten (Re-Aktivierungs-Pfad), sollen aber den
+    # Analyzer nicht stören. see archived/ticketing/README.md
+    - archived/**
     # Backend ist ein Node.js-Server (eigenes package.json) — gehört
     # nicht in den Flutter-Analyzer.
     - Backend/**

@@ -1,13 +1,20 @@
 // lib/Services/deep_link_handler.dart
-// Verarbeitet partypin:// Deep-Links — derzeit für Stripe-Onboarding-Returns.
+//
+// Zentraler Handler für `partypin://`-Deep-Links.
+//
+// FEATURE_DISABLED_TICKETING — der frühere Stripe-Onboarding-Return-
+// Branch (Hosts `stripe-return` / `stripe-refresh`) ist mit dem
+// Ticketing-Removal entfernt worden. Siehe archived/ticketing/README.md.
+//
+// Die Datei bleibt bestehen, weil PartyPin in Zukunft weitere Deep-Links
+// braucht — z. B. Party-Share, Invite-Links, Discovery-Links, QR-Join.
+// Neue Hosts werden in `_handle()` als weitere case-Zweige ergänzt.
 
 import 'dart:async';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-
-import 'stripe_service.dart';
 
 /// Globaler ScaffoldMessenger-Key, damit wir Snackbars von außerhalb
 /// des Widget-Trees zeigen können (Deep-Link triggert ja keinen build).
@@ -19,7 +26,7 @@ class DeepLinkHandler {
   static StreamSubscription<Uri>? _sub;
   static bool _started = false;
 
-  /// In main() nach Stripe-Init aufrufen. Idempotent.
+  /// In main() nach App-Setup aufrufen. Idempotent.
   static Future<void> start() async {
     if (_started) return;
     _started = true;
@@ -50,54 +57,16 @@ class DeepLinkHandler {
 
     if (uri.scheme != 'partypin') return;
 
+    // Aktuell keine Hosts implementiert. Künftig hier z. B.:
+    //   case 'party':         → öffne PartyDetail für uri.pathSegments
+    //   case 'invite':        → Friend-Request-Flow
+    //   case 'discovery':     → Map-Region-Deep-Link
+    //   case 'join':          → QR-Join für Closed-Party
     switch (uri.host) {
-      case 'stripe-return':
-        await _onStripeReturn();
-        break;
-      case 'stripe-refresh':
-        _showSnack(
-          'Bitte tippe erneut auf „Onboarding fortsetzen".',
-          color: Colors.orange,
-        );
-        break;
       default:
-        // andere Hosts ignorieren
+        // Unbekannten Host nicht crashen, nur loggen.
+        debugPrint('DeepLink: unbekannter Host "${uri.host}" — ignoriert.');
         break;
     }
-  }
-
-  static Future<void> _onStripeReturn() async {
-    _showSnack('Stripe-Status wird geprüft…');
-    try {
-      final res = await StripeService.refreshHostStatus();
-      final status = res['status']?.toString() ?? 'unknown';
-      final chargesEnabled = res['chargesEnabled'] == true;
-
-      _showSnack(
-        chargesEnabled
-            ? 'Stripe verbunden — du kannst jetzt Tickets verkaufen ✅'
-            : status == 'pending_review'
-                ? 'Stripe prüft deine Daten — das kann ein paar Minuten dauern.'
-                : 'Onboarding noch nicht abgeschlossen.',
-        color: chargesEnabled ? Colors.green : Colors.orange,
-      );
-    } catch (e) {
-      _showSnack('Status-Update fehlgeschlagen: $e', color: Colors.red);
-    }
-  }
-
-  static void _showSnack(String msg, {Color? color}) {
-    final messenger = rootMessengerKey.currentState;
-    if (messenger == null) return;
-    messenger.removeCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: color,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        duration: const Duration(seconds: 4),
-      ),
-    );
   }
 }

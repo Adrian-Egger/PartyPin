@@ -49,7 +49,18 @@ function mapAuthError(e) {
 // ---------- Ban ----------
 
 exports.adminBanUser = onCall(
-  { region: REGION },
+  {
+    region: REGION,
+    // Admin-Calls sollen niemals in großer Menge laufen — pro Klick
+    // in der Admin-UI 1 Aufruf. Hartes Limit gegen Bug-Loops.
+    maxInstances: 3,
+    timeoutSeconds: 30, // updateUser + Firestore-set
+    memory: "256MiB",
+    concurrency: 10,
+    // App Check: Admin-UI muss App Check Token mitschicken.
+    // TODO(appcheck): nach Console-Setup auf `true` setzen
+    enforceAppCheck: false,
+  },
   async (request) => {
     assertAdmin(request);
     const uid = requireUid(request.data);
@@ -90,7 +101,18 @@ exports.adminBanUser = onCall(
 // ---------- Unban ----------
 
 exports.adminUnbanUser = onCall(
-  { region: REGION },
+  {
+    region: REGION,
+    // Admin-Calls sollen niemals in großer Menge laufen — pro Klick
+    // in der Admin-UI 1 Aufruf. Hartes Limit gegen Bug-Loops.
+    maxInstances: 3,
+    timeoutSeconds: 30, // updateUser + Firestore-set
+    memory: "256MiB",
+    concurrency: 10,
+    // App Check: Admin-UI muss App Check Token mitschicken.
+    // TODO(appcheck): nach Console-Setup auf `true` setzen
+    enforceAppCheck: false,
+  },
   async (request) => {
     assertAdmin(request);
     const uid = requireUid(request.data);
@@ -123,7 +145,18 @@ exports.adminUnbanUser = onCall(
 // ---------- Email verifizieren ----------
 
 exports.adminVerifyEmail = onCall(
-  { region: REGION },
+  {
+    region: REGION,
+    // Admin-Calls sollen niemals in großer Menge laufen — pro Klick
+    // in der Admin-UI 1 Aufruf. Hartes Limit gegen Bug-Loops.
+    maxInstances: 3,
+    timeoutSeconds: 30, // updateUser + Firestore-set
+    memory: "256MiB",
+    concurrency: 10,
+    // App Check: Admin-UI muss App Check Token mitschicken.
+    // TODO(appcheck): nach Console-Setup auf `true` setzen
+    enforceAppCheck: false,
+  },
   async (request) => {
     assertAdmin(request);
     const uid = requireUid(request.data);
@@ -155,7 +188,18 @@ exports.adminVerifyEmail = onCall(
 // ---------- Delete ----------
 
 exports.adminDeleteUser = onCall(
-  { region: REGION },
+  {
+    region: REGION,
+    // Admin-Calls sollen niemals in großer Menge laufen — pro Klick
+    // in der Admin-UI 1 Aufruf. Hartes Limit gegen Bug-Loops.
+    maxInstances: 3,
+    timeoutSeconds: 30, // updateUser + Firestore-set
+    memory: "256MiB",
+    concurrency: 10,
+    // App Check: Admin-UI muss App Check Token mitschicken.
+    // TODO(appcheck): nach Console-Setup auf `true` setzen
+    enforceAppCheck: false,
+  },
   async (request) => {
     assertAdmin(request);
     const uid = requireUid(request.data);
@@ -166,18 +210,18 @@ exports.adminDeleteUser = onCall(
     }
 
     try {
-      // 1) Firestore: Subcollections (Stripe) + User-Doc.
-      // Andere Querverweise (Parties, friendRequests, ratings,
-      // reports, tickets) bleiben bewusst stehen — sweep ist hier
-      // zu groß für eine synchrone Function. Falls gewünscht: später
-      // per onUserDeleted-Trigger nachziehen.
+      // 1) Firestore: User-Doc.
+      // FEATURE_DISABLED_TICKETING — frühere Stripe-Subcoll-Bereinigung
+      // (users/{uid}/stripe/*) wurde mit dem Ticketing-Removal entfernt;
+      // keine Stripe-SDK-Abhängigkeit mehr im Admin-Pfad.
+      // see archived/ticketing/README.md
+      //
+      // Andere Querverweise (Parties, friendRequests, ratings, reports,
+      // tickets) bleiben bewusst stehen — sweep ist hier zu groß für eine
+      // synchrone Function. Falls gewünscht: später per onUserDeleted-
+      // Trigger nachziehen.
       const userRef = db.collection("users").doc(uid);
-      const subStripe = await userRef.collection("stripe").get();
-
-      const batch = db.batch();
-      subStripe.docs.forEach((d) => batch.delete(d.ref));
-      batch.delete(userRef);
-      await batch.commit();
+      await userRef.delete();
 
       // 2) Firebase Auth: Identity entfernen, sodass der User
       // sich nicht erneut einloggen kann. Falls Auth-User

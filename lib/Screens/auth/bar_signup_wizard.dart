@@ -1,23 +1,31 @@
 // lib/Screens/auth/bar_signup_wizard.dart
 //
-// 3-Schritt-Wizard für Bar-Selbstregistrierung. Sammelt alle Daten und
-// schreibt sie direkt ins `bars`-Collection mit `status: "pending"`.
-// Kein separates `barAnfragen`-Schema mehr — der Admin muss beim Approve
-// nichts mehr neu eintippen, nur Status auf "approved" setzen.
+// 3-Schritt-Wizard für Bar-Selbstregistrierung.
 //
-// Die Cloud-Function-Whitelist ist in firestore.rules bereits offen,
-// pendings sind also clientseitig schreibbar.
+// SECURITY_HARDENING (Pre-Launch Audit C2, Session 2026-05-17):
+// Bar-Account-Erstellung läuft jetzt server-seitig über
+// AuthService.signupBar → signupCallable. Vorher schrieb der Client
+// `passwordHash` direkt nach /bars, was den Hash für jeden authed
+// Client lesbar machte.
+//
+// Zusätzlich gefixt: der Wizard nutzte vorher `SHA-256("user:pass")`
+// für Bar-Hashes, während der Login-Pfad `HMAC-SHA256(lower, pw)`
+// verwendete — d.h. via Wizard registrierte Bars konnten sich nie
+// einloggen (latenter Bug). signupCallable nutzt jetzt einheitlich
+// denselben HMAC-Hash wie loginCallable.
+//
+// Logo-Upload bleibt clientseitig (Firebase Storage), die URL wird
+// als Teil des Payloads an die CF übergeben.
 
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:crypto/crypto.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../Services/auth_service.dart';
 import '../../Theme/app_theme.dart';
 import 'login_screen.dart';
 
@@ -132,20 +140,31 @@ class _BarSignupWizardState extends State<BarSignupWizard> {
     }
   }
 
+  /// UX-Pre-Check: blockiert nicht den finalen Submit (das macht
+  /// signupCallable transaktional), zeigt aber bereits in Step 1 an
+  /// dass der Username vergeben ist — damit der Nutzer nicht 3 Steps
+  /// ausfüllt bevor er die schlechte Nachricht bekommt.
+  /// SECURITY_HARDENING: die finale Eindeutigkeitsprüfung passiert
+  /// IMMER server-seitig in signupCallable. Dieser Check ist nur UX.
   Future<bool> _isUsernameTaken(String username) async {
     final lower = username.toLowerCase();
     for (final col in ['users', 'bars']) {
-      final q = await FirebaseFirestore.instance
-          .collection(col)
-          .where('username_lower', isEqualTo: lower)
-          .limit(1)
-          .get();
-      if (q.docs.isNotEmpty) return true;
+      try {
+        final q = await FirebaseFirestore.instance
+            .collection(col)
+            .where('username_lower', isEqualTo: lower)
+            .limit(1)
+            .get();
+        if (q.docs.isNotEmpty) return true;
+      } catch (_) {}
     }
-    // Auch DocId-Variante checken (manche Bars liegen unter docId == username).
-    final byDoc =
-        await FirebaseFirestore.instance.collection('bars').doc(username).get();
-    if (byDoc.exists) return true;
+    try {
+      final byDoc = await FirebaseFirestore.instance
+          .collection('bars')
+          .doc(username)
+          .get();
+      if (byDoc.exists) return true;
+    } catch (_) {}
     return false;
   }
 
@@ -187,11 +206,11 @@ class _BarSignupWizardState extends State<BarSignupWizard> {
   }
 
   // ── Submit ────────────────────────────────────────────────────────────
-
-  String _hashPw(String username, String password) {
-    final bytes = utf8.encode('$username:$password');
-    return sha256.convert(bytes).toString();
-  }
+  //
+  // SECURITY_HARDENING: Bar-Erstellung läuft jetzt komplett über
+  // signupCallable. Client lädt nur das Logo nach Storage hoch und
+  // schickt die URL als Teil des Payloads. KEIN Direct-Write nach
+  // /bars, KEIN Client-Hashing, KEIN passwordHash sichtbar.
 
   Future<void> _submit() async {
     if (_submitting) return;
@@ -208,50 +227,49 @@ class _BarSignupWizardState extends State<BarSignupWizard> {
       final country = _countryCtrl.text.trim();
       final desc = _descCtrl.text.trim();
 
-      // DocID = username (passt zum Login-Lookup-Pfad in login_screen.dart).
-      final docRef =
-          FirebaseFirestore.instance.collection('bars').doc(username);
-      final exists = await docRef.get();
-      if (exists.exists) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-            _snack('Username inzwischen vergeben.', AppColors.accent));
-        setState(() {
-          _submitting = false;
-          _step = 0;
-        });
-        return;
-      }
-
+      // Logo: clientseitiger Upload nach Firebase Storage. URL wird
+      // dann an die CF gegeben. Wenn Upload fehlschlägt → null,
+      // Account wird trotzdem erstellt (Logo kann später nachgereicht
+      // werden).
       final logoUrl = await _uploadLogoIfPresent(username);
 
-      final data = <String, dynamic>{
-        'barId': username,
-        'barName': barName,
-        'barName_lower': barName.toLowerCase(),
-        'username': username,
-        'username_lower': username.toLowerCase(),
-        'email': email,
-        'phoneNumber': phone,
-        'address': address,
-        'city': city,
-        'city_lower': city.toLowerCase(),
-        'country': country,
-        'description': desc,
-        'passwordHash': _hashPw(username, password),
-        'status': 'pending',
-        'createdViaSelfRegistration': true,
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-        if (logoUrl != null) 'profileImageUrl': logoUrl,
-      };
+      final result = await AuthService.signupBar(
+        username: username,
+        password: password,
+        barName: barName,
+        email: email,
+        phoneNumber: phone,
+        address: address,
+        city: city,
+        country: country,
+        description: desc,
+        profileImageUrl: logoUrl,
+      );
 
-      await docRef.set(data);
+      if (!result.isOk) {
+        if (!mounted) return;
+        if (result.error == SignupError.usernameTaken) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              _snack('Username inzwischen vergeben.', AppColors.accent));
+          setState(() {
+            _submitting = false;
+            _step = 0;
+          });
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+            _snack(result.message ?? 'Anfrage fehlgeschlagen.', AppColors.accent));
+        setState(() => _submitting = false);
+        return;
+      }
 
       if (!mounted) return;
       await _showDoneDialog(barName);
 
       if (!mounted) return;
+      // Bar-Accounts sind pending → Auto-Login wäre sinnlos. Nutzer
+      // landet im LoginScreen und kann nach Admin-Freischaltung
+      // einloggen.
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginScreen()),
         (_) => false,

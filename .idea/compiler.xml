@@ -6,7 +6,9 @@
       <module name="android.google_maps_flutter_android" target="21" />
       <module name="android.image_picker_android" target="21" />
       <module name="android.mobile_scanner" target="21" />
+      <module name="android.qr_code_scanner" target="21" />
       <module name="android.shared_preferences_android" target="21" />
+      <module name="android.stripe_android" target="21" />
       <module name="android.url_launcher_android" target="21" />
     </bytecodeTargetLevel>
   </component>

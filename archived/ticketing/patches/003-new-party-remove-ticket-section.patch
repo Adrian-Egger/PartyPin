@@ -1,0 +1,429 @@
+--- archived/ticketing/patches/_originals/new_party.dart.orig	2026-05-14 13:10:49.512166200 +0200
++++ lib/Screens/party/new_party.dart	2026-05-14 13:18:08.012326400 +0200
+@@ -26,7 +26,8 @@
+ import '../../Theme/app_theme.dart';
+ import '../../Services/timestamp_ext.dart';
+ import '../../l10n/lang.dart';
+-import '../profile/stripe_onboarding_screen.dart';
++// FEATURE_DISABLED_TICKETING — StripeOnboardingScreen ist archiviert.
++// see archived/ticketing/README.md
+ 
+ class NewPartyScreen extends StatefulWidget {
+   final Map<String, dynamic>? existingData;
+@@ -78,19 +79,10 @@
+   bool _isLoading = false;
+   bool _triedSubmit = false;
+ 
+-  // Frontend hält bewusst KEINEN stripeAccountId-Snapshot. Die ID ist
+-  // einzig Wahrheit unter users/{hostUid}/stripe/account und wird vom
+-  // Tickets-Backend zur Payment-Zeit aufgelöst (dynamisches Routing).
+-  // Hier reicht der Boolean, ob Auszahlungen aktiv sind.
+-  bool _stripeChargesEnabled = false;
+-  bool _checkingStripe = true;
+-
+-  // Ticket-Felder
+-  bool _ticketsEnabled = false;
+-  final TextEditingController _ticketPriceController = TextEditingController();
+-  final TextEditingController _ticketsAvailableController = TextEditingController();
+-  final FocusNode _ticketPriceNode = FocusNode();
+-  final FocusNode _ticketsAvailableNode = FocusNode();
++  // FEATURE_DISABLED_TICKETING — Stripe-Status, Ticket-Felder, Ticket-
++  // Controller und Ticket-FocusNodes wurden mit dem Ticketing-Removal
++  // entfernt. _priceController (Eintrittspreis) bleibt erhalten — das
++  // ist NICHT der Ticketpreis. see archived/ticketing/README.md
+ 
+ 
+   String? _hostName;
+@@ -145,7 +137,8 @@
+   void initState() {
+     super.initState();
+     _loadHostData();
+-    _loadStripeStatus();
++    // FEATURE_DISABLED_TICKETING — _loadStripeStatus entfernt.
++    // see archived/ticketing/README.md
+     _preloadExisting();
+     _wireListeners();
+ 
+@@ -261,15 +254,9 @@
+     _priceController.text = data['price'] != null && data['price'] != 0 ? data['price'].toString() : '';
+     _isFreeEntry = (data['price'] ?? 0) == 0;
+ 
+-    _ticketsEnabled = data['ticketsEnabled'] == true;
+-    final priceCents = (data['ticketPriceCents'] as num?)?.toInt();
+-    if (priceCents != null && priceCents > 0) {
+-      _ticketPriceController.text = (priceCents / 100).toStringAsFixed(2);
+-    }
+-    final available = (data['ticketsAvailable'] as num?)?.toInt() ?? 0;
+-    if (available > 0) {
+-      _ticketsAvailableController.text = available.toString();
+-    }
++    // FEATURE_DISABLED_TICKETING — frühere Preload-Logik für ticketsEnabled,
++    // ticketPriceCents, ticketsAvailable wurde entfernt.
++    // see archived/ticketing/README.md
+ 
+     _addressController.text = (data['address'] ?? '').toString();
+ 
+@@ -347,42 +334,9 @@
+     });
+   }
+ 
+-  /// Liest den aktuellen Stripe-Connect-Status aus der User-Subcollection
+-  /// (users/{uid}/stripe/account). Wird beim Onboarding via
+-  /// `refreshStripeAccountStatus` Cloud Function aktualisiert.
+-  Future<void> _loadStripeStatus() async {
+-    final uid = FirebaseAuth.instance.currentUser?.uid;
+-    if (uid == null) {
+-      if (mounted) setState(() => _checkingStripe = false);
+-      return;
+-    }
+-
+-    try {
+-      final snap = await FirebaseFirestore.instance
+-          .collection('users')
+-          .doc(uid)
+-          .collection('stripe')
+-          .doc('account')
+-          .get();
+-      final data = snap.data() ?? {};
+-      if (!mounted) return;
+-      setState(() {
+-        _stripeChargesEnabled = data['stripeChargesEnabled'] == true;
+-        _checkingStripe = false;
+-      });
+-    } catch (_) {
+-      if (mounted) setState(() => _checkingStripe = false);
+-    }
+-  }
+-
+-  /// Navigiert zum Onboarding-Screen. Nach Rückkehr Status frisch laden.
+-  Future<void> _openOnboarding() async {
+-    await Navigator.push(
+-      context,
+-      MaterialPageRoute(builder: (_) => const StripeOnboardingScreen()),
+-    );
+-    await _loadStripeStatus();
+-  }
++  // FEATURE_DISABLED_TICKETING — _loadStripeStatus() und _openOnboarding()
++  // wurden mit dem Ticketing-Removal entfernt.
++  // see archived/ticketing/README.md
+ 
+ 
+   Future<bool> _ensureLegalConsentBeforeCreating() async {
+@@ -627,228 +581,12 @@
+     );
+   }
+ 
+-  void _showTicketsInfoDialog() {
+-    showDialog(
+-      context: context,
+-      builder: (ctx) => AlertDialog(
+-        backgroundColor: _panel,
+-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+-        title: Row(
+-          children: const [
+-            Icon(Icons.confirmation_number_outlined, color: _accent),
+-            SizedBox(width: 10),
+-            Text(
+-              'Ticket-Verkauf',
+-              style: TextStyle(
+-                color: _textPrimary,
+-                fontWeight: FontWeight.w800,
+-                fontSize: 18,
+-              ),
+-            ),
+-          ],
+-        ),
+-        content: const Text(
+-          'Verkaufe Tickets direkt über PartyPin. Gäste erhalten nach dem Kauf automatisch einen QR-Code per Mail als Eintrittskarte.',
+-          style: TextStyle(color: _textSecondary, height: 1.5, fontSize: 14),
+-        ),
+-        actions: [
+-          TextButton(
+-            onPressed: () => Navigator.of(ctx).pop(),
+-            child: const Text(
+-              'Verstanden',
+-              style: TextStyle(color: _accent, fontWeight: FontWeight.w700),
+-            ),
+-          ),
+-        ],
+-      ),
+-    );
+-  }
+-
+-  /// Versucht, leere Ticket-Felder aus dem Eintrittspreis und Gästelimit zu
+-  /// füllen, wenn der Toggle aktiviert wird.
+-  void _autofillTicketDefaults() {
+-    if (_ticketPriceController.text.trim().isEmpty && !_isFreeEntry) {
+-      final priceTxt =
+-          _priceController.text.trim().replaceAll(',', '.');
+-      final p = double.tryParse(priceTxt);
+-      if (p != null && p >= 0.5) {
+-        _ticketPriceController.text = priceTxt.replaceAll('.', ',');
+-      }
+-    }
+-    if (_ticketsAvailableController.text.trim().isEmpty &&
+-        !_isUnlimitedGuests) {
+-      final glTxt = _guestLimitController.text.trim();
+-      final gl = int.tryParse(glTxt);
+-      if (gl != null && gl > 0) {
+-        _ticketsAvailableController.text = gl.toString();
+-      }
+-    }
+-  }
+-
+-  Widget _ticketSection() {
+-    final guestLimitTxt = _guestLimitController.text.trim();
+-    final guestLimit = int.tryParse(guestLimitTxt) ?? 0;
+-    final hasGuestCap = !_isUnlimitedGuests && guestLimit > 0;
+-
+-    return _section(
+-      title: "Tickets",
+-      icon: Icons.confirmation_number_outlined,
+-      child: Column(
+-        crossAxisAlignment: CrossAxisAlignment.stretch,
+-        children: [
+-          // Eigene Toggle-Zeile mit Info-Button
+-          Container(
+-            decoration: BoxDecoration(
+-              color: _card,
+-              borderRadius: BorderRadius.circular(14),
+-              border: Border.all(color: AppColors.accentBorder),
+-            ),
+-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+-            child: Row(
+-              children: [
+-                const Icon(Icons.sell_rounded, color: _secondary),
+-                const SizedBox(width: 10),
+-                const Expanded(
+-                  child: Text(
+-                    "Ticket-Verkauf aktivieren 🎟️",
+-                    style: TextStyle(
+-                      color: _textPrimary,
+-                      fontWeight: FontWeight.w600,
+-                    ),
+-                  ),
+-                ),
+-                IconButton(
+-                  onPressed: _showTicketsInfoDialog,
+-                  icon: const Icon(Icons.info_outline_rounded),
+-                  color: _secondary,
+-                  tooltip: "Was ist Ticket-Verkauf?",
+-                  splashRadius: 22,
+-                ),
+-                Switch(
+-                  value: _ticketsEnabled,
+-                  onChanged: (v) {
+-                    _unfocus();
+-                    HapticFeedback.selectionClick();
+-                    setState(() {
+-                      _ticketsEnabled = v;
+-                      if (v) _autofillTicketDefaults();
+-                    });
+-                  },
+-                  activeColor: _accent,
+-                ),
+-              ],
+-            ),
+-          ),
+-          if (_ticketsEnabled) ...[
+-            const SizedBox(height: 12),
+-            if (_checkingStripe)
+-              const Padding(
+-                padding: EdgeInsets.symmetric(vertical: 12),
+-                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+-              )
+-            else if (!_stripeChargesEnabled)
+-              Container(
+-                padding: const EdgeInsets.all(12),
+-                decoration: BoxDecoration(
+-                  color: _accent.withAlpha(20),
+-                  borderRadius: BorderRadius.circular(10),
+-                  border: Border.all(color: _accent.withAlpha(80)),
+-                ),
+-                child: Column(
+-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+-                  children: [
+-                    Row(
+-                      children: const [
+-                        Icon(Icons.warning_amber_rounded, color: _accent, size: 18),
+-                        SizedBox(width: 8),
+-                        Expanded(
+-                          child: Text(
+-                            "Du musst zuerst Stripe verbinden, um Tickets zu verkaufen.",
+-                            style: TextStyle(color: _textPrimary, fontSize: 13),
+-                          ),
+-                        ),
+-                      ],
+-                    ),
+-                    const SizedBox(height: 10),
+-                    ElevatedButton.icon(
+-                      onPressed: _openOnboarding,
+-                      style: ElevatedButton.styleFrom(
+-                        backgroundColor: _accent,
+-                        foregroundColor: Colors.white,
+-                        padding: const EdgeInsets.symmetric(vertical: 10),
+-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+-                      ),
+-                      icon: const Icon(Icons.payment_rounded, size: 16),
+-                      label: const Text("Stripe verbinden",
+-                          style: TextStyle(fontWeight: FontWeight.w800)),
+-                    ),
+-                  ],
+-                ),
+-              )
+-            else ...[
+-              TextFormField(
+-                controller: _ticketPriceController,
+-                focusNode: _ticketPriceNode,
+-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+-                inputFormatters: [
+-                  FilteringTextInputFormatter.allow(
+-                    RegExp(r'^\d*[,.]?\d{0,2}$'),
+-                  ),
+-                ],
+-                style: const TextStyle(color: _textPrimary),
+-                decoration: _dec(
+-                  "Preis pro Ticket",
+-                  hint: "€",
+-                  icon: Icons.euro,
+-                  errorText: (_ticketsEnabled && _triedSubmit && (() {
+-                    final v = double.tryParse(
+-                      _ticketPriceController.text.trim().replaceAll(',', '.'),
+-                    );
+-                    return v == null || v < 0.5;
+-                  })())
+-                      ? "Mindestens 0,50 €"
+-                      : null,
+-                ),
+-              ),
+-              const SizedBox(height: 10),
+-              TextFormField(
+-                controller: _ticketsAvailableController,
+-                focusNode: _ticketsAvailableNode,
+-                keyboardType: TextInputType.number,
+-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+-                style: const TextStyle(color: _textPrimary),
+-                onChanged: (_) {
+-                  // Trigger Rebuild für errorText
+-                  if (hasGuestCap) setState(() {});
+-                },
+-                decoration: _dec(
+-                  "Max. Tickets",
+-                  hint: hasGuestCap
+-                      ? "max. $guestLimit (= Gästelimit)"
+-                      : "leer = unbegrenzt",
+-                  icon: Icons.event_seat_rounded,
+-                  errorText: (() {
+-                    if (!hasGuestCap) return null;
+-                    final t = int.tryParse(
+-                        _ticketsAvailableController.text.trim());
+-                    if (t != null && t > guestLimit) {
+-                      return "Max. $guestLimit (= Gästelimit)";
+-                    }
+-                    return null;
+-                  })(),
+-                ),
+-              ),
+-              const SizedBox(height: 8),
+-              const Text(
+-                "Plattform-Gebühr 3 % · 97 % gehen direkt an dich",
+-                style: TextStyle(color: _textSecondary, fontSize: 11),
+-              ),
+-            ],
+-          ],
+-        ],
+-      ),
+-    );
+-  }
++  // FEATURE_DISABLED_TICKETING — _showTicketsInfoDialog, _autofillTicketDefaults
++  // und _ticketSection wurden mit dem Ticketing-Removal entfernt. Der gesamte
++  // UI-Block (Toggle, Stripe-Verbindungs-Card, Preis-/Anzahl-Felder, Plattform-
++  // Gebühren-Footer) lebt jetzt unter
++  // archived/ticketing/lib/Screens/party/.
++  // see archived/ticketing/README.md
+ 
+   Widget _typeChip({
+     required String value,
+@@ -1465,47 +1203,9 @@
+       return;
+     }
+ 
+-    // Tickets: Validierung + Aufbereitung
+-    int ticketPriceCents = 0;
+-    int ticketsAvailable = 0;
+-    if (_ticketsEnabled) {
+-      if (!_stripeChargesEnabled) {
+-        setState(() => _isLoading = false);
+-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+-          content: const Text("Bitte erst Stripe Onboarding abschließen, um Tickets zu verkaufen."),
+-          backgroundColor: AppColors.accent,
+-          behavior: SnackBarBehavior.floating,
+-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+-        ));
+-        return;
+-      }
+-      final priceEur = double.tryParse(
+-          _ticketPriceController.text.trim().replaceAll(',', '.')) ??
+-          0;
+-      ticketPriceCents = (priceEur * 100).round();
+-      if (ticketPriceCents < 50) {
+-        setState(() => _isLoading = false);
+-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+-          content: const Text("Ticketpreis muss mindestens 0,50 € sein."),
+-          backgroundColor: AppColors.accent,
+-          behavior: SnackBarBehavior.floating,
+-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+-        ));
+-        return;
+-      }
+-      ticketsAvailable = int.tryParse(_ticketsAvailableController.text.trim()) ?? 0;
+-
+-      // Hart-Cap: nie mehr Tickets als Gästelimit (außer Gäste sind unbegrenzt)
+-      if (!_isUnlimitedGuests) {
+-        final glTxt = _guestLimitController.text.trim();
+-        final gl = int.tryParse(glTxt);
+-        if (gl != null && gl > 0) {
+-          if (ticketsAvailable == 0 || ticketsAvailable > gl) {
+-            ticketsAvailable = gl;
+-          }
+-        }
+-      }
+-    }
++    // FEATURE_DISABLED_TICKETING — frühere Ticket-Validierung
++    // (Stripe-Charges-Check, Mindest-Ticketpreis, Hart-Cap auf Gästelimit)
++    // wurde entfernt. see archived/ticketing/README.md
+ 
+     final baseData = <String, dynamic>{
+       'name': name,
+@@ -1522,15 +1222,12 @@
+       'address': address,
+       'hostName': _hostName ?? 'unknown',
+       'hostId': username,
+-      // hostUid ist die einzige Stripe-Identität, die wir auf der Party
+-      // speichern. Das Tickets-Backend resolved daraus zur Payment-Zeit
+-      // users/{hostUid}/stripe/account.stripeAccountId — niemals ein
+-      // Snapshot, der veralten könnte.
++      // hostUid bleibt erhalten — wird für Rating, Approval und Closed-Party-
++      // Requests gebraucht. Frühere Stripe-Ticketing-Felder (ticketsEnabled,
++      // ticketPriceCents, ticketsAvailable, ticketsSold) werden nicht mehr
++      // geschrieben. Bestehende Doks behalten ihre alten Werte unverändert.
++      // see archived/ticketing/README.md
+       'hostUid': FirebaseAuth.instance.currentUser?.uid,
+-      'ticketsEnabled': _ticketsEnabled,
+-      'ticketPriceCents': ticketPriceCents,
+-      'ticketsAvailable': ticketsAvailable,
+-      'ticketsSold': widget.existingData?['ticketsSold'] ?? 0,
+       'isClosed': false,
+       'requests': widget.existingData?['requests'] ?? [],
+       'approved': widget.existingData?['approved'] ?? [],
+@@ -1859,8 +1556,8 @@
+                             ],
+                           ),
+                         ),
+-                        const SizedBox(height: 14),
+-                        _ticketSection(),
++                        // FEATURE_DISABLED_TICKETING — _ticketSection() entfernt.
++                        // see archived/ticketing/README.md
+                         const SizedBox(height: 14),
+                         _section(
+                           title: "Ort",

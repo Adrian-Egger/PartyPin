@@ -7,10 +7,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'selection_screen.dart';
 import '../../l10n/lang.dart';
 import '../profile/feedback_screen.dart';
-import '../profile/my_tickets_screen.dart';
+// FEATURE_DISABLED_TICKETING — my_tickets_screen + stripe_onboarding_screen
+// sind archiviert. see archived/ticketing/README.md
+import '../profile/host_status_screen.dart';
 import '../profile/notification_settings_screen.dart';
-import '../profile/stripe_onboarding_screen.dart';
 import '../admin/admin_screen.dart';
+import '../admin/admin_bars_pending_screen.dart';
 import '../party/access_parties_screen.dart';
 
 // WICHTIG: Party Map muss ueber HomeShell geoeffnet werden
@@ -1157,32 +1159,25 @@ class MenuScreen extends StatelessWidget {
                           },
                         ),
 
-                      // ── Tickets (nur fuer User-Accounts) ────────────────
-                      // Bars verwalten ihre Events ueber den eigenen Tab,
-                      // nicht ueber Tickets / Stripe-Onboarding.
+                      // FEATURE_DISABLED_TICKETING — Section „Tickets" (Meine
+                      // Tickets + Stripe Anmeldung) entfernt. Die zugehörigen
+                      // Screens liegen unter archived/ticketing/lib/Screens/.
+                      // see archived/ticketing/README.md
+
+                      // ── Hosting (User-Accounts) ─────────────────────────
+                      // Eigener Host-Status + Trending Hosts. Bars hosten
+                      // ihre Events über den eigenen Bar-Tab, nicht hier.
                       if (!isBar) ...[
-                        _sectionHeader('Tickets'),
+                        _sectionHeader('Hosting'),
                         _menuTile(
-                          icon: Icons.confirmation_number_rounded,
-                          title: 'Meine Tickets',
+                          icon: Icons.workspace_premium_rounded,
+                          title: 'Mein Host-Status',
+                          subtitle: 'Level · Reputation · Trending',
                           onTap: () {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => const MyTicketsScreen()),
-                            );
-                          },
-                        ),
-                        _menuTile(
-                          icon: Icons.account_balance_wallet_rounded,
-                          title: 'Stripe Anmeldung',
-                          subtitle: 'Hosts: Auszahlungen aktivieren',
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) =>
-                                      const StripeOnboardingScreen()),
+                                  builder: (_) => const HostStatusScreen()),
                             );
                           },
                         ),
@@ -1289,6 +1284,19 @@ class MenuScreen extends StatelessWidget {
                                     MaterialPageRoute(
                                         builder: (_) =>
                                             const AdminReportsScreen()),
+                                  );
+                                },
+                              ),
+                              _menuTile(
+                                icon: Icons.local_bar_rounded,
+                                title: 'Pending Bars',
+                                subtitle: 'Approve · Reject',
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) =>
+                                            const AdminBarsPendingScreen()),
                                   );
                                 },
                               ),

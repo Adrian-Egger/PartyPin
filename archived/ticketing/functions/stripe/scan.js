@@ -19,7 +19,15 @@ const FieldValue = admin.firestore.FieldValue;
  *     usedAt?: number, partyName?: string, status?: string }
  */
 exports.validateAndUseTicket = onCall(
-  { region: "europe-west1" },
+  {
+    region: "europe-west1",
+    maxInstances: 10,        // Scan-Bursts beim Einlass
+    timeoutSeconds: 15,
+    memory: "256MiB",
+    concurrency: 40,
+    // TODO(appcheck): nach Console-Setup auf `true` setzen
+    enforceAppCheck: false,
+  },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Not logged in.");

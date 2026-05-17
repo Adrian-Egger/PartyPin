@@ -144,9 +144,18 @@ function computeEventEnd(eventDate) {
  */
 exports.cleanupExpiredEvents = onSchedule(
     {
-        region: "us-central1",
+        // Konsistent mit allem anderen → DSGVO + bisheriger Stack-Region.
+        // Wenn dieser Schedule bisher in us-central1 lief, vor dem Deploy
+        // den alten Trigger in der Console löschen, sonst beide Regionen
+        // parallel.
+        region: "europe-west1",
         schedule: "every 60 minutes",
         timeZone: "Europe/Vienna",
+        // Cleanup darf sich NIE selbst überschneiden — sonst doppelte
+        // Deletes / Race Conditions auf Storage-Files.
+        maxInstances: 1,
+        timeoutSeconds: 540, // 9 Min: bei großen Backlogs nötig
+        memory: "512MiB",   // collectionGroup scan + viele batches
     },
     async () => {
         const db = admin.firestore();

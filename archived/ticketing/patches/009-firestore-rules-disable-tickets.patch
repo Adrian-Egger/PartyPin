@@ -1,0 +1,51 @@
+--- archived/ticketing/patches/_originals/firestore.rules.orig	2026-05-14 13:10:49.576177400 +0200
++++ firestore.rules	2026-05-14 13:11:47.972347700 +0200
+@@ -149,10 +149,12 @@
+       // löschen. (Wirklich nur über echte Auth zu lösen.)
+       allow delete: if isAuthed();
+ 
+-      // ── Stripe-Subcollection: PII (Connect-Account-Status, Onboarding-
+-      //    Links). Wird ausschließlich von Cloud Functions geschrieben
+-      //    (functions/stripe/utils.js → getOrCreateAccountDoc). Kein
+-      //    Client-Zugriff.
++      // DISABLED-TICKETING — Stripe-Subcollection ist mit dem Ticketing-
++      //   Removal stillgelegt. Regel bleibt absichtlich als geschlossener
++      //   Default stehen (kein Hard-Delete), damit bestehende Doks nicht
++      //   plötzlich client-schreibbar werden, falls ein Code-Pfad sie noch
++      //   anspricht. Kein Client-Zugriff.
++      //   see archived/ticketing/README.md
+       match /stripe/{docId} {
+         allow read, write: if false;
+       }
+@@ -193,7 +195,8 @@
+ 
+       allow delete: if isAuthed();
+ 
+-      // Stripe-Subcollection: nur CF.
++      // DISABLED-TICKETING — Stripe-Subcollection für Bars ist stillgelegt.
++      //   see archived/ticketing/README.md
+       match /stripe/{docId} {
+         allow read, write: if false;
+       }
+@@ -284,12 +287,16 @@
+       allow read, write: if isAuthed();
+     }
+ 
+-    // ── TICKETS ───────────────────────────────────────────
+-    // Geschrieben ausschließlich vom Stripe-Webhook (functions/stripe/
+-    // webhook.js) und scan.js. Client darf nur lesen.
++    // ── TICKETS (DISABLED-TICKETING) ──────────────────────
++    // Die Ticketing-Funktionalität wurde aus PartyPin entfernt
++    // (archived/ticketing/README.md). Bestehende /tickets-Doks bleiben
++    // unangetastet in Firestore — sie werden weder migriert noch gelöscht.
++    // Die Rule ist auf vollständig geschlossen gesetzt: keine Reads vom
++    // Client, keine Writes. Bei einer eventuellen Reaktivierung kann der
++    // alte Stand (read: if isAuthed(); write: if false) wiederhergestellt
++    // werden.
+     match /tickets/{ticketId} {
+-      allow read: if isAuthed();
+-      allow write: if false;
++      allow read, write: if false;
+     }
+ 
+     // ── REPORTS & MELDUNGEN (append-only) ─────────────────

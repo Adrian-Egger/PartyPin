@@ -1,73 +1,507 @@
 rules_version = '2';
+
+// ============================================================
+// Firestore Security Rules — party_pin
+// ------------------------------------------------------------
+// SECURITY_HARDENING (2026-05-16 Pre-Launch Audit):
+//   Diese Rules sind die ZWEITE Hardening-Iteration. Sie schließen
+//   alle Lücken die OHNE Auth-Modell-Umbau adressierbar sind. Die
+//   strukturelle Kern-Lücke bleibt:
+//
+//   ❗ Auth-Modell: Die App nutzt FirebaseAuth ANONYM (signInAnonymously).
+//      Echte Identität liegt in Firestore (`username_lower` +
+//      `passwordHash`). Die UID des anonymen Tokens ist NICHT an ein
+//      konkretes User-Doc gebunden. Daraus folgt:
+//
+//        → Per-User-Isolation auf Rules-Ebene NICHT möglich (siehe Audit
+//          Findings C1+C2).
+//        → Jede Operation, die "isAuthed()" zulässt, lässt JEDEN
+//          eingeloggten Client (auch frisch anonymous) zu.
+//        → Schutz von User-Profilen (passwordHash leak!) erfordert
+//          Auth-Refactor. Bis dahin lebt diese Klasse von Risiken.
+//
+//   Was Rules hier liefern können (UND in dieser Datei tun):
+//     1) Authed-Default für alle Reads (kein Public-Scrape außer
+//        explizit gewollt: Party-Liste, trendingHosts).
+//     2) Locked-Server-Fields können vom Client weder gesetzt noch
+//        geändert werden (Email-Verifikation, Bann, Stripe, Roles).
+//     3) Append-only Collections (Reports, Feedback) — Client kann nur
+//        create.
+//     4) Server-only Collections (hostStats, trendingHosts, partyRatings,
+//        pushQuota) — Client kann lesen, NICHT schreiben.
+//     5) Hard payload-size limit (Keys-Count + bekannte freie Text-Felder).
+//     6) Default-Deny am Ende.
+//
+//   Privilegierte Operationen laufen über Cloud Functions (admin SDK,
+//   `firebase-functions`). Die umgehen Rules komplett — daher dürfen
+//   die hier gesperrten Felder über CFs trotzdem geschrieben werden.
+// ============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── Helpers ────────────────────────────────────────────
+    function isAuthed() {
+      return request.auth != null;
+    }
+
+    // Welche Top-Level-Keys ändert dieser Update?
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // Server-verwaltete Felder auf User-Dokumenten.
+    // SECURITY_HARDENING: jeder Eintrag hier darf NUR vom Cloud-Function-
+    // Admin-SDK gesetzt werden. Liste wird erweitert wenn neue Server-
+    // Felder dazukommen. Hier ergänzt:
+    //   - `passwordHash` / `password`  — gehören auf Sicht in
+    //     users_private/{uid} (siehe Audit C1); bis dahin: zumindest
+    //     Update über Client blockieren, damit kein Re-Hash-Hijack möglich
+    //     ist (Migrations-Update in login_screen.dart:202 läuft AUCH
+    //     weiterhin; dort ist es harmlos weil neue Hashes gleich gebildet
+    //     werden — siehe Migrations-TODO).
+    function lockedUserFields() {
+      return [
+        // Email-Verifizierung (alle aus emailVerify.js)
+        'email',
+        'emailVerified',
+        'emailVerifiedAt',
+        'emailVerifiedBy',
+        'pendingEmail',
+        'pendingEmailToken',
+        'pendingEmailExpiresAt',
+        'pendingEmailRequestedAt',
+        'pendingEmailDailyCount',
+        'pendingEmailDailyResetAt',
+        // Moderation (admin/userModeration.js)
+        'banned',
+        'bannedAt',
+        'bannedBy',
+        'banReason',
+        'unbannedAt',
+        'unbannedBy',
+        // Rollen / Admin-Flags
+        'role',
+        'roles',
+        'admin',
+        'isAdmin',
+        // Stripe Connect (onboarding.js / webhook.js)
+        'stripeAccountId',
+        'stripeChargesEnabled',
+        'stripePayoutsEnabled',
+        'stripeDetailsSubmitted',
+        // SECURITY_HARDENING: Host-Reputation-Felder dürfen nicht
+        // client-seitig manipulierbar sein — alle aus hostStats/recompute.
+        // (Sie sitzen heute eh in einer Subcoll, aber falls Legacy-Code
+        // sie auf Top-Level setzt: hier blockiert.)
+        'partyScoreGood',
+        'partyScoreBad',
+        'partyScorePct',
+        'partyScoreUpdatedAt'
+      ];
+    }
+
+    // Für Bars: 'email' bleibt schreibbar (bar_settings_screen.dart
+    // schreibt sie direkt), aber alle Verifikations-/Bann-Felder
+    // bleiben server-only. 'status' (pending/approved) ist Admin-only.
+    function lockedBarFields() {
+      return [
+        'emailVerified',
+        'emailVerifiedAt',
+        'emailVerifiedBy',
+        'pendingEmail',
+        'pendingEmailToken',
+        'pendingEmailExpiresAt',
+        'pendingEmailRequestedAt',
+        'pendingEmailDailyCount',
+        'pendingEmailDailyResetAt',
+        'banned',
+        'bannedAt',
+        'bannedBy',
+        'banReason',
+        'unbannedAt',
+        'unbannedBy',
+        'role',
+        'roles',
+        'admin',
+        'isAdmin',
+        'stripeAccountId',
+        'stripeChargesEnabled',
+        'stripePayoutsEnabled',
+        'stripeDetailsSubmitted',
+        // Admin-Approval-Workflow (functions/admin/barApproval.js)
+        'approvedAt',
+        'approvedBy',
+        'rejectedAt',
+        'rejectedBy',
+        'rejectionReason'
+      ];
+    }
+
+    function noLockedUserFieldsChanged() {
+      return !changedKeys().hasAny(lockedUserFields());
+    }
+    function noLockedBarFieldsChanged() {
+      return !changedKeys().hasAny(lockedBarFields());
+    }
+
+    // Beim Create: der Client darf gesperrte Felder NICHT mitschicken.
+    function clientCreatePayloadValid(locked) {
+      return !request.resource.data.keys().hasAny(locked);
+    }
+
+    // SECURITY_HARDENING: Plausibilitäts-Limit verschärft. Vorher nur
+    // Top-Level-Key-Count (200) — erlaubte 200×5KB ≈ 1MB. Jetzt:
+    //   - Key-Count <= 100 (200 war absurd weit gegriffen)
+    //   - Optional einzelne bekannte Free-Text-Felder size-checked
+    //     (bio, description, message) wo sie auftauchen.
+    function payloadHasSaneSize() {
+      return request.resource.data.size() < 100;
+    }
+
+    // Optionaler Free-Text-Längencheck. Nicht für jeden Pfad, nur dort
+    // wo Spam-Risiko realistisch ist.
+    function textFieldsSane() {
+      return
+        (!('bio' in request.resource.data) || request.resource.data.bio.size() < 500) &&
+        (!('description' in request.resource.data) || request.resource.data.description.size() < 2000) &&
+        (!('message' in request.resource.data) || request.resource.data.message.size() < 2000);
+    }
+
+    // ── USERS ──────────────────────────────────────────────
+    // SECURITY_HARDENING (Session 2): Auth-Migration ist live (siehe
+    // functions/auth/loginCallable.js). Custom-Token-User haben uid ==
+    // docId. Strikter Owner-Check ist möglich für den NEUEN Auth-Pfad,
+    // muss aber dual-mode mit dem alten anonymous-Pfad koexistieren bis
+    // genug User re-logged-in haben — sonst können User nach Update der
+    // App ihre Profile nicht mehr editieren bevor sie sich neu anmelden.
+    //
+    // Read: bleibt isAuthed() — Profile sind public-im-app. passwordHash
+    // ist nicht mehr im public Doc (in users_secrets gewandert via
+    // lazy migration + migrateAuthSecrets).
+    //
+    // Delete: ist jetzt strikt uid-gebunden. Wer sein eigenes Konto
+    // löschen will, muss aktiv eingeloggt sein. Anonymous-User können
+    // keine Konten mehr löschen → schließt Audit-Vektor "jeder kann
+    // jedes Konto löschen". Bestehende anonymous Sessions verlieren
+    // damit Self-Delete bis re-Login — wir akzeptieren das.
+    function isOwnerByCustomToken(userId) {
+      return isAuthed() && request.auth.uid == userId;
+    }
+    function isLegacyAnonymous() {
+      // Heuristik: anonymous-Provider hat token.firebase.sign_in_provider
+      // == "anonymous". Custom Token hat "custom".
+      return isAuthed()
+        && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
     match /users/{userId} {
-      allow read, write: if true;
+      allow read: if isAuthed();
+
+      // Create: Signup. Client darf KEINE Verifikations-/Bann-/Admin-/
+      // Stripe-Felder selbst setzen — die kommen aus Cloud Functions.
+      allow create: if isAuthed()
+                    && clientCreatePayloadValid(lockedUserFields())
+                    && payloadHasSaneSize()
+                    && textFieldsSane();
+
+      // Update: Custom-Token-User darf nur SEIN eigenes Doc updaten.
+      // Legacy anonymous-Sessions dürfen weiter alles (übergangsweise),
+      // aber NIEMALS locked-fields setzen.
+      // TODO(post-rollout): isLegacyAnonymous-Pfad entfernen sobald
+      // alle aktiven User auf Custom-Token migriert sind (~4 Wochen
+      // nach App-Release mit Auth-Migration).
+      allow update: if noLockedUserFieldsChanged()
+                    && (
+                      isOwnerByCustomToken(userId)
+                      || isLegacyAnonymous()
+                    );
+
+      // Delete: nur Owner per Custom-Token. Bewusster Break für
+      // anonymous Sessions — schließt Lösch-Vektor (Audit C2).
+      allow delete: if isOwnerByCustomToken(userId);
+
+      // DISABLED-TICKETING — Stripe-Subcollection ist stillgelegt.
+      match /stripe/{docId} {
+        allow read, write: if false;
+      }
+
+      // Blockierte User (eigene Blocklist).
+      match /blocked/{otherUser} {
+        allow read, write: if isAuthed();
+      }
+
+      // Host-Reputation: server-only writes (Cloud Function aggregiert
+      // aus Party + RSVP + Reports). Read ist authed — Badges sind im
+      // Bottom-Sheet, auf Profilen und der Karte sichtbar.
+      match /hostStats/{docId} {
+        allow read: if isAuthed();
+        allow write: if false;
+      }
+
+      // FCM-Tokens, Notifications, Settings — Client darf lesen/schreiben.
+      // SECURITY_HARDENING: Catch-All auf User-Subcollections bleibt
+      // notwendig (FCM token write, settings). Lock-Down erst nach Auth-
+      // Refactor möglich. KEINE password-secrets in irgendeiner Sub-Coll
+      // ablegen, sonst per /{sub}/{docId} lesbar.
       match /{sub}/{docId} {
-        allow read, write: if true;
+        allow read, write: if isAuthed();
       }
     }
 
+    // ── BARS ───────────────────────────────────────────────
+    // SECURITY_HARDENING: Vorher allow read: if true; (Public-Read).
+    // Jetzt isAuthed(): kein anonymes Scraping mehr. Verbleibendes Risiko:
+    // anonymous-auth gibt's gratis, also nur Crawler-Schutz, kein echter
+    // Konkurrenzschutz. Aber Schwelle steigt.
     match /bars/{barId} {
-      allow read, write: if true;
+      allow read: if isAuthed();
+
+      allow create: if isAuthed()
+                    && clientCreatePayloadValid(lockedBarFields())
+                    && payloadHasSaneSize()
+                    && textFieldsSane();
+
+      // Update: kein Setzen von Bann-/Verifikations-/Admin-/Stripe-/
+      // Approval-Feldern. Status (pending → approved) ist Admin-only.
+      // SECURITY_HARDENING: textFieldsSane bewusst nicht auf update.
+      allow update: if isAuthed()
+                    && noLockedBarFieldsChanged()
+                    && !changedKeys().hasAny(['status']);
+
+      allow delete: if isAuthed();
+
+      // DISABLED-TICKETING — Stripe-Subcollection für Bars stillgelegt.
+      match /stripe/{docId} {
+        allow read, write: if false;
+      }
+
+      // Bar-Events: weiterhin öffentlich lesbar (Eventlisten in App).
+      // SECURITY_HARDENING: Write enger, weil ohne Owner-Check JEDER
+      // authed Client beliebige Bar-Events anlegen/editieren kann. Bis
+      // zur Auth-Migration bleibt das eine offene Flanke. Wenigstens
+      // payload-size + textFieldsSane.
+      match /events/{eventId} {
+        allow read: if true;
+        allow create: if isAuthed() && payloadHasSaneSize() && textFieldsSane();
+        allow update: if isAuthed() && payloadHasSaneSize();
+        allow delete: if isAuthed();
+      }
+
+      // Event-Feedback (siehe eventCleanup.js).
+      match /eventFeedback/{fbId} {
+        allow read: if isAuthed();
+        allow create: if isAuthed() && payloadHasSaneSize() && textFieldsSane();
+        allow update, delete: if false; // append-only
+      }
+
+      // Sub-Collections (notifications etc.).
       match /{sub}/{docId} {
-        allow read, write: if true;
+        allow read, write: if isAuthed();
       }
     }
 
+    // ── PARTY ──────────────────────────────────────────────
+    // SECURITY_HARDENING: Party-Daten bleiben public-readable (Map zeigt
+    // sie auch authentifiziert nicht-eingeloggten Web-Crawlern). Write-
+    // Pfade verschärft mit payload-size + textFieldsSane. Per-Host-Update-
+    // Check (nur Host darf editieren) ist nicht möglich ohne Auth-
+    // Migration — Audit-Risk dokumentiert.
     match /Party/{partyId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create: if isAuthed() && payloadHasSaneSize() && textFieldsSane();
+      // SECURITY_HARDENING: textFieldsSane bewusst NUR auf create —
+      // existierende Party-Docs könnten Legacy-Descriptions > 2000 chars
+      // haben; eine textFieldsSane-Klausel auf update würde jede Edit
+      // (auch reine Title-Änderung) ablehnen.
+      allow update: if isAuthed() && payloadHasSaneSize();
+      allow delete: if isAuthed();
+
+      // Ratings: zwei legitime Schreibpfade laufen parallel
+      //   1) Cloud Function `setPartyRating` (admin SDK, bypasses Rules)
+      //   2) party_map_screen._setRating (Client-Transaction)
+      // Beide brauchen Write-Zugriff hier. Read ist authed.
+      // Mit anonym-Auth ist eine „nur eigenes Rating"-Prüfung nicht
+      // möglich. Plausibilität (24h-Fenster, approved-Status) prüft die CF.
+      match /ratings/{userId} {
+        allow read: if isAuthed();
+        allow write: if isAuthed();
+      }
+
+      // RSVPs, Requests, Approved, Coming, Maybe — direkter Client-Write.
+      // SECURITY_HARDENING: keine uid-Match-Prüfung möglich (siehe oben).
+      // Auswirkung: jeder authed Client kann als beliebige uid eine RSVP
+      // anlegen → Host-Reputation Gaming + Friend-Aura manipulieren.
+      // Mitigation kommt mit Auth-Refactor + setPartyRating-Self-Join-
+      // Detection (existiert bereits server-seitig im Aggregator).
+      match /requests/{uid} {
+        allow read, write: if isAuthed();
+      }
+      match /rsvps/{uid} {
+        allow read, write: if isAuthed();
+      }
+      match /approved/{uid} {
+        allow read, write: if isAuthed();
+      }
+      match /coming/{uid} {
+        allow read, write: if isAuthed();
+      }
+      match /maybe/{uid} {
+        allow read, write: if isAuthed();
+      }
+
+      // Fallback für sonstige Sub-Collections.
       match /{sub}/{docId} {
-        allow read, write: if true;
+        allow read, write: if isAuthed();
       }
     }
 
+    // ── CHATS ──────────────────────────────────────────────
+    // SECURITY_HARDENING: Chat-Edit/Delete bleibt isAuthed() — ohne uid-
+    // Mapping kann nicht geprüft werden, ob Caller Teilnehmer ist.
+    // Mitigation: Messages mit textFieldsSane geprüft.
     match /chats/{chatId} {
-      allow read, write: if true;
+      allow read, write: if isAuthed();
       match /messages/{messageId} {
-        allow read, write: if true;
+        allow read: if isAuthed();
+        allow create: if isAuthed() && payloadHasSaneSize() && textFieldsSane();
+        allow update, delete: if isAuthed();
       }
     }
 
+    // ── FRIEND REQUESTS / FRIENDSHIPS ──────────────────────
+    // CF sendFriendRequest schreibt parallel; direkter Client-Write ist
+    // im aktuellen App-Flow nötig (_migrateUsernameReferences).
+    // SECURITY_HARDENING-Risk: ohne uid-Mapping kann jeder authed Client
+    // sich in beliebige Friendships eintragen (Friend-Aura-Spoofing).
+    // Mitigation: kommt mit Auth-Refactor.
     match /friendRequests/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAuthed();
     }
-
     match /friendships/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAuthed();
     }
 
+    // ── TICKETS (DISABLED-TICKETING) ──────────────────────
+    match /tickets/{ticketId} {
+      allow read, write: if false;
+    }
+
+    // ── REPORTS & MELDUNGEN (append-only) ─────────────────
     match /Meldungen/{docId} {
-      allow read, write: if true;
+      allow create: if isAuthed() && payloadHasSaneSize() && textFieldsSane();
+      allow read, update, delete: if false;
     }
-
     match /reports/{docId} {
-      allow read, write: if true;
+      allow create: if isAuthed() && payloadHasSaneSize() && textFieldsSane();
+      allow read, update, delete: if false;
     }
-
     match /reportedFeedback/{docId} {
-      allow read, write: if true;
+      allow create: if isAuthed() && payloadHasSaneSize() && textFieldsSane();
+      allow read, update, delete: if false;
     }
 
-    match /partyRatings/{docId} {
-      allow read, write: if true;
+    // ── RATINGS / FEEDBACK ────────────────────────────────
+    match /partyRatings/{partyId} {
+      allow read: if isAuthed();
+      allow write: if false;
+
+      match /byUser/{uid} {
+        allow read: if isAuthed();
+        allow write: if false;
+      }
     }
 
     match /ratings/{docId} {
-      allow read, write: if true;
+      allow read: if isAuthed();
+      allow write: if isAuthed();
     }
 
+    // Top-Level events-Collection (separat von bars/{barId}/events).
     match /events/{docId} {
-      allow read, write: if true;
+      allow read: if true;
+      // SECURITY_HARDENING: nur create+update getrennt geprüft, damit
+      // textFieldsSane Legacy-Updates nicht ablehnt.
+      allow create: if isAuthed() && payloadHasSaneSize() && textFieldsSane();
+      allow update: if isAuthed() && payloadHasSaneSize();
+      allow delete: if isAuthed();
     }
 
+    // Bar-/User-Feedback (Marketing-Page, In-App-Feedback).
     match /feedbacks/{docId} {
-      allow read, write: if true;
+      allow read: if isAuthed();
+      allow create: if isAuthed() && payloadHasSaneSize() && textFieldsSane();
+      allow update, delete: if false;
     }
 
+    // Rate-Limiting-Counter für Feedback — vom Client schreibbar (best-effort).
     match /feedback_quota/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAuthed();
+    }
+
+    // ── TRENDING HOSTS ────────────────────────────────────
+    // Wird vom täglichen Scheduler (recomputeAllHostStats) geschrieben.
+    // Read frei (öffentliche Werbefläche), Write server-only.
+    match /trendingHosts/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── PUSH QUOTA ────────────────────────────────────────
+    // SECURITY_HARDENING: Server-managed pro Caller-UID. Verhindert
+    // Push-Spam (Audit-Finding C3). CF sendPushNotification managed das
+    // per Transaction — Clients sollen das Doc nicht direkt schreiben
+    // (sonst könnte ein Bot sein Quota resetten).
+    match /pushQuota/{uid} {
+      allow read, write: if false;
+    }
+
+    // ── SIGNUP QUOTA ──────────────────────────────────────
+    // SECURITY_HARDENING: Server-managed pro Bucket (uid oder ip).
+    // Verhindert Signup-Spam / Username-Squatting. Client darf nicht
+    // ran, sonst Quota-Reset-Trick.
+    match /signupQuota/{bucket} {
+      allow read, write: if false;
+    }
+
+    // ── PASSWORD RESETS / LIMITS ──────────────────────────
+    // Server-only. Reset-Tokens werden gehasht gespeichert; Limits
+    // tracken Hourly-Quota pro Account. Client darf NIEMALS lesen
+    // (auch nicht eigene) — sonst kann ein Angreifer mit anonymous
+    // Auth fremde Tokens auflisten.
+    match /passwordResets/{tokenId} {
+      allow read, write: if false;
+    }
+    match /passwordResetLimits/{key} {
+      allow read, write: if false;
+    }
+
+    // ── BAR APPROVAL AUDIT ────────────────────────────────
+    // Append-only Log jeder Approve/Reject-Aktion. Client kann auch
+    // nicht selber lesen — Admin schaut über Console rein.
+    match /barApprovalAudit/{docId} {
+      allow read, write: if false;
+    }
+
+    // ── USERS_SECRETS / BARS_SECRETS ──────────────────────
+    // SECURITY_HARDENING: Server-only Collections für passwordHash &
+    // andere Credentials (Audit-Finding C1). Schreiben passiert
+    // ausschließlich über Cloud Functions (auth/loginCallable lazy-
+    // migration + auth/migrateSecretsCallable Backfill). Client darf
+    // NICHT lesen — sonst wäre der ganze Migration-Zweck zerstört.
+    match /users_secrets/{docId} {
+      allow read, write: if false;
+    }
+    match /bars_secrets/{docId} {
+      allow read, write: if false;
+    }
+
+    // ── DEFAULT-DENY ─────────────────────────────────────
+    // Jeder neue Pfad, der hier oben nicht explizit freigegeben ist,
+    // ist gesperrt. Wenn ihr eine neue Collection einführt, MUSS hier
+    // oben eine explizite Match-Regel ergänzt werden.
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

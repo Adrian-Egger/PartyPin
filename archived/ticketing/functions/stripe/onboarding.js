@@ -30,7 +30,16 @@ const FieldValue = admin.firestore.FieldValue;
  *  - Liefert immer einen frischen Onboarding-Link.
  */
 exports.createStripeOnboardingLink = onCall(
-  { region: "europe-west1", secrets: [STRIPE_SECRET_KEY] },
+  {
+    region: "europe-west1",
+    secrets: [STRIPE_SECRET_KEY],
+    maxInstances: 5,           // Onboarding ist 1-pro-User-pro-Session
+    timeoutSeconds: 30,        // Stripe API roundtrip
+    memory: "256MiB",
+    concurrency: 20,
+    // TODO(appcheck): nach Console-Setup auf `true` setzen
+    enforceAppCheck: false,
+  },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Not logged in.");
     const uid = request.auth.uid;
@@ -124,7 +133,16 @@ exports.createStripeOnboardingLink = onCall(
  * cleanen + lesbarer Fehler.
  */
 exports.refreshStripeAccountStatus = onCall(
-  { region: "europe-west1", secrets: [STRIPE_SECRET_KEY] },
+  {
+    region: "europe-west1",
+    secrets: [STRIPE_SECRET_KEY],
+    maxInstances: 5,
+    timeoutSeconds: 30,
+    memory: "256MiB",
+    concurrency: 20,
+    // TODO(appcheck): nach Console-Setup auf `true` setzen
+    enforceAppCheck: false,
+  },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "Not logged in.");
     const uid = request.auth.uid;

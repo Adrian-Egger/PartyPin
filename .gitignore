@@ -13,3 +13,21 @@ android/app/build/
 *.iml
 *.log
 .DS_Store
+
+# ── Secrets / Credentials (NIE einchecken) ───────────────
+# Test-Payloads aus dem ehemaligen PayPal/Stripe-Flow
+body.json
+cid.txt
+*.cid
+# Allgemeine Credential-Files
+*.pem
+*.key
+secrets.json
+credentials.json
+service-account*.json
+.env
+.env.*
+# Firebase Service Account (NIEMALS einchecken)
+**/firebase-adminsdk-*.json
+# Editor / OS leftovers
+.idea/workspace.xml

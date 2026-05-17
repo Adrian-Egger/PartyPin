@@ -1,0 +1,32 @@
+--- archived/ticketing/patches/_originals/userModeration.js.orig	2026-05-14 13:05:24.099045300 +0200
++++ functions/admin/userModeration.js	2026-05-14 13:06:59.335364700 +0200
+@@ -210,18 +210,18 @@
+     }
+ 
+     try {
+-      // 1) Firestore: Subcollections (Stripe) + User-Doc.
+-      // Andere Querverweise (Parties, friendRequests, ratings,
+-      // reports, tickets) bleiben bewusst stehen — sweep ist hier
+-      // zu groß für eine synchrone Function. Falls gewünscht: später
+-      // per onUserDeleted-Trigger nachziehen.
++      // 1) Firestore: User-Doc.
++      // FEATURE_DISABLED_TICKETING — frühere Stripe-Subcoll-Bereinigung
++      // (users/{uid}/stripe/*) wurde mit dem Ticketing-Removal entfernt;
++      // keine Stripe-SDK-Abhängigkeit mehr im Admin-Pfad.
++      // see archived/ticketing/README.md
++      //
++      // Andere Querverweise (Parties, friendRequests, ratings, reports,
++      // tickets) bleiben bewusst stehen — sweep ist hier zu groß für eine
++      // synchrone Function. Falls gewünscht: später per onUserDeleted-
++      // Trigger nachziehen.
+       const userRef = db.collection("users").doc(uid);
+-      const subStripe = await userRef.collection("stripe").get();
+-
+-      const batch = db.batch();
+-      subStripe.docs.forEach((d) => batch.delete(d.ref));
+-      batch.delete(userRef);
+-      await batch.commit();
++      await userRef.delete();
+ 
+       // 2) Firebase Auth: Identity entfernen, sodass der User
+       // sich nicht erneut einloggen kann. Falls Auth-User

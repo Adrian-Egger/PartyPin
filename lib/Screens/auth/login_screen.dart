@@ -1,17 +1,25 @@
 // lib/Screens/login_screen.dart
-import 'dart:convert';
-import 'package:crypto/crypto.dart';
-import 'package:flutter/material.dart';
+//
+// SECURITY_HARDENING (Pre-Launch Audit C1, Session 2026-05-16):
+// Login läuft NICHT mehr client-seitig (passwordHash-Vergleich aus
+// Firestore-Read). Stattdessen:
+//   AuthService.login() → loginCallable CF → signInWithCustomToken
+//
+// Die alte _hashPassword + manuelle Firestore-Reads sind entfernt.
+// Die UX (Form, Toggle, Navigation) ist unverändert geblieben.
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../home/selection_screen.dart';
 import 'create_account_screen.dart';
 import 'nutzungsbedinungen.dart';
+import 'password_reset_request_screen.dart';
 import '../home/home_shell.dart';
-import 'package:party_pin/Upgrade/phone_upgrade_screen.dart';
 import '../../Theme/app_theme.dart';
 import '../../l10n/lang.dart';
+import '../../Services/auth_service.dart';
 import '../../Services/notification_service.dart';
 import '../../Services/platform_info.dart';
 
@@ -41,11 +49,11 @@ class _LoginScreenState extends State<LoginScreen> {
   static const _textSecondary = AppColors.muted;
   static const _accent = AppColors.accent;
 
-  static String _hashPassword(String username, String password) {
-    final key = utf8.encode(username.toLowerCase());
-    final bytes = utf8.encode(password);
-    return Hmac(sha256, key).convert(bytes).toString();
-  }
+  // SECURITY_HARDENING: _hashPassword wurde entfernt — Passwort-
+  // Verifikation läuft jetzt server-seitig in functions/auth/
+  // loginCallable.js. Falls für Signup-Migration ein Client-Hash
+  // gebraucht wird, lebt der weiter in create_account_screen.dart
+  // (separate Iteration für Signup-Refactor).
 
   bool get _isFormValid =>
       _usernameController.text.trim().isNotEmpty &&
@@ -110,277 +118,169 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  void _showError(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
   Future<void> _login() async {
     final usernameInput = _usernameController.text.trim();
     final passwordInput = _passwordController.text.trim();
 
     if (!_isFormValid) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(Lang.t('login_err_empty')),
-          backgroundColor: AppColors.accent,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-      );
+      _showError(Lang.t('login_err_empty'));
       return;
     }
 
     setState(() => _isLoading = true);
 
     try {
-      Map<String, dynamic>? userData;
-      String? userType; // "user" oder "bar"
-      String? barDocId;
-      DocumentReference<Map<String, dynamic>>? foundDocRef;
+      // SECURITY_HARDENING: server-seitige Verifikation. CF prüft Hash
+      // gegen users_secrets/{docId} (mit lazy migration aus users.
+      // passwordHash). Bei Erfolg: Custom Token + signInWithCustomToken.
+      final result = await AuthService.login(
+        username: usernameInput,
+        password: passwordInput,
+      );
 
-      // 1) Privatkonten in "users" suchen (Feld username)
-      final userQuery = await FirebaseFirestore.instance
-          .collection("users")
-          .where("username", isEqualTo: usernameInput)
-          .limit(1)
-          .get();
-
-      if (userQuery.docs.isNotEmpty) {
-        userData = userQuery.docs.first.data();
-        userType = "user";
-        foundDocRef = userQuery.docs.first.reference;
-      } else {
-        // 2) Unternehmens-Accounts in "bars" suchen
-        final barsCol = FirebaseFirestore.instance.collection("bars");
-
-        // Variante 1: DocID == username
-        final barDocById = await barsCol.doc(usernameInput).get();
-        if (barDocById.data() != null) {
-          userData = barDocById.data();
-          userType = "bar";
-          barDocId = barDocById.id;
-          foundDocRef = barDocById.reference;
-        } else {
-          // Variante 2: Feld username
-          final barQuery = await barsCol
-              .where("username", isEqualTo: usernameInput)
-              .limit(1)
-              .get();
-          if (barQuery.docs.isNotEmpty) {
-            final barDoc = barQuery.docs.first;
-            userData = barDoc.data();
-            userType = "bar";
-            barDocId = barDoc.id;
-            foundDocRef = barDoc.reference;
-          }
-        }
-      }
-
-      if (userData == null || userType == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(Lang.t('login_err_not_found')),
-            backgroundColor: AppColors.accent,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        );
+      if (!result.isOk) {
+        // Server-Mapping in AuthService liefert konsistente Messages.
+        final fallback = result.error == LoginError.invalidCredentials
+            ? Lang.t('login_err_wrong_pw')
+            : result.error == LoginError.network
+                ? 'Keine Verbindung zum Server.'
+                : Lang.t('login_err_generic');
+        _showError(result.message ?? fallback);
         return;
       }
 
-      // ── Passwort prüfen (Hash-Vergleich + Migrations-Fallback) ────────────
-      final inputHash = _hashPassword(usernameInput, passwordInput);
-      final storedHash = (userData['passwordHash'] ?? '').toString();
-      final storedPlain = (userData['password'] ?? '').toString();
+      final profile = result.profile!;
+      final userType = profile.userType; // 'user' | 'bar'
 
-      bool passwordOk = false;
-
-      if (storedHash.isNotEmpty && storedHash == inputHash) {
-        // Moderner Account: Hash stimmt
-        passwordOk = true;
-      } else if (storedPlain.isNotEmpty && storedPlain == passwordInput) {
-        // Alter Account (Klartext): stimmt → migrieren
-        passwordOk = true;
-        try {
-          await foundDocRef?.update({
-            'passwordHash': inputHash,
-            'password': FieldValue.delete(),
-          });
-        } catch (_) {}
-      }
-
-      if (!passwordOk) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(Lang.t('login_err_wrong_pw')),
-          backgroundColor: AppColors.accent,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ));
-        return;
-      }
-
-      // Bar-Account muss freigeschaltet sein. status: "pending" / "rejected"
-      // landet hier — Login wird abgewiesen mit verstaendlichem Hinweis.
-      if (userType == "bar") {
-        final status = (userData["status"] ?? "").toString();
-        if (status == "pending") {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: const Text(
-                'Dein Bar-Account wartet noch auf Freischaltung durch das Admin-Team.'),
-            backgroundColor: AppColors.accent,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10)),
-          ));
+      // Bar-Status-Check: pending/rejected verhindert App-Nutzung.
+      // Wir lassen den Custom-Token signed-in, weisen aber das
+      // Weiterleiten ab — User sieht klare Meldung und kommt nicht in
+      // die App. Beim nächsten Login-Versuch wird wieder geprüft.
+      if (userType == 'bar') {
+        final status = (profile.barStatus ?? '').toLowerCase();
+        if (status == 'pending') {
+          await AuthService.signOut(); // verhindere bestehende Session
+          _showError(
+            'Dein Bar-Account wartet noch auf Freischaltung durch das Admin-Team.',
+          );
           return;
         }
-        if (status == "rejected" || status == "declined") {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: const Text(
-                'Dein Bar-Account wurde abgelehnt. Bitte kontaktiere den Support.'),
-            backgroundColor: AppColors.accent,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10)),
-          ));
+        if (status == 'rejected' || status == 'declined') {
+          await AuthService.signOut();
+          _showError(
+            'Dein Bar-Account wurde abgelehnt. Bitte kontaktiere den Support.',
+          );
           return;
         }
       }
 
-      // Typ-Kontrolle: Auswahl muss zum Account-Typ passen
-      if (_loginAsCompany && userType != "bar") {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(Lang.t('login_err_not_company')),
-            backgroundColor: AppColors.accent,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        );
+      // Typ-Toggle-Check: ein User darf sich nicht als Unternehmen
+      // einloggen und umgekehrt. Auch hier: bei Mismatch signOut, damit
+      // keine inkonsistente Session zurückbleibt.
+      if (_loginAsCompany && userType != 'bar') {
+        await AuthService.signOut();
+        _showError(Lang.t('login_err_not_company'));
         return;
       }
-      if (!_loginAsCompany && userType != "user") {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(Lang.t('login_err_is_company')),
-            backgroundColor: AppColors.accent,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        );
+      if (!_loginAsCompany && userType != 'user') {
+        await AuthService.signOut();
+        _showError(Lang.t('login_err_is_company'));
         return;
       }
 
-      // Auth / Phone
-      final authVersion = (userData["authVersion"] ?? 1) as int;
-      final phoneNumber = userData["phoneNumber"] as String?;
-      final phoneVerified = userData["phoneVerified"] == true;
-
-      // Terms / Location aus Firestore
-      final firestoreTermsAccepted = userData["termsAccepted"] == true;
-      final firestoreLanguage = (userData["language"] ?? "") as String;
-      final firestoreCountry = (userData["country"] ?? "") as String;
-      final firestoreCity = (userData["city"] ?? "") as String;
-      final latRaw = userData["selectedLat"];
-      final lngRaw = userData["selectedLng"];
-      final double? firestoreLat = latRaw is num ? latRaw.toDouble() : null;
-      final double? firestoreLng = lngRaw is num ? lngRaw.toDouble() : null;
-
+      // ── Profil-Daten in prefs spiegeln (aus CF-Response, KEIN
+      //    weiterer Firestore-Read) ────────────────────────────
       final prefs = await SharedPreferences.getInstance();
+      final storedUsername =
+          profile.username.isNotEmpty ? profile.username : usernameInput;
 
-      // Gemeinsame Infos
-      final storedUsername = (userData["username"] ?? usernameInput).toString();
-      await prefs.setString("username", storedUsername);
-      await prefs.setString("currentUsername", storedUsername);
-      await prefs.setBool("isLoggedIn", true);
+      await prefs.setString('username', storedUsername);
+      await prefs.setString('currentUsername', storedUsername);
+      await prefs.setBool('isLoggedIn', true);
+      await prefs.setInt('authVersion', profile.authVersion);
+      await prefs.setBool('phoneVerified', profile.phoneVerified);
 
-      await prefs.setInt("authVersion", authVersion);
-      await prefs.setBool("phoneVerified", phoneVerified);
-
-      if (phoneNumber != null && phoneNumber.isNotEmpty) {
-        await prefs.setString("phoneNumber", phoneNumber);
+      if ((profile.phoneNumber ?? '').isNotEmpty) {
+        await prefs.setString('phoneNumber', profile.phoneNumber!);
       } else {
-        await prefs.remove("phoneNumber");
+        await prefs.remove('phoneNumber');
       }
 
-      // Terms spiegeln
-      await prefs.setBool("termsAccepted", firestoreTermsAccepted);
+      await prefs.setBool('termsAccepted', profile.termsAccepted);
 
-      // Location spiegeln (falls vorhanden)
-      final hasFirestoreLocation =
-          firestoreCity.isNotEmpty &&
-              firestoreCountry.isNotEmpty &&
-              firestoreLat != null &&
-              firestoreLng != null &&
-              firestoreLanguage.isNotEmpty;
+      final hasFirestoreLocation = (profile.city ?? '').isNotEmpty &&
+          (profile.country ?? '').isNotEmpty &&
+          profile.selectedLat != null &&
+          profile.selectedLng != null &&
+          (profile.language ?? '').isNotEmpty;
 
       if (hasFirestoreLocation) {
-        await prefs.setString("city", firestoreCity);
-        await prefs.setString("country", firestoreCountry);
-        await prefs.setString("language", firestoreLanguage);
-        await prefs.setDouble("selectedLat", firestoreLat);
-        await prefs.setDouble("selectedLng", firestoreLng);
+        await prefs.setString('city', profile.city!);
+        await prefs.setString('country', profile.country!);
+        await prefs.setString('language', profile.language!);
+        await prefs.setDouble('selectedLat', profile.selectedLat!);
+        await prefs.setDouble('selectedLng', profile.selectedLng!);
       } else {
-        await prefs.remove("city");
-        await prefs.remove("country");
-        await prefs.remove("language");
-        await prefs.remove("selectedLat");
-        await prefs.remove("selectedLng");
+        await prefs.remove('city');
+        await prefs.remove('country');
+        await prefs.remove('language');
+        await prefs.remove('selectedLat');
+        await prefs.remove('selectedLng');
       }
 
-      // Privat vs Unternehmen
-      if (userType == "user") {
-        await prefs.setBool("isBar", false); // legacy
-        await prefs.setBool("isBarAccount", false);
-        await prefs.remove("barId");
-
-        await prefs.setString("vorname", (userData["vorname"] ?? "").toString());
-        await prefs.setString("nachname", (userData["nachname"] ?? "").toString());
+      if (userType == 'user') {
+        await prefs.setBool('isBar', false);
+        await prefs.setBool('isBarAccount', false);
+        await prefs.remove('barId');
+        await prefs.setString('vorname', profile.vorname ?? '');
+        await prefs.setString('nachname', profile.nachname ?? '');
       } else {
-        await prefs.setBool("isBar", true); // legacy
-        await prefs.setBool("isBarAccount", true);
-
-        if (barDocId != null && barDocId.isNotEmpty) {
-          await prefs.setString("barId", barDocId);
+        await prefs.setBool('isBar', true);
+        await prefs.setBool('isBarAccount', true);
+        // bar uid == docId per loginCallable.
+        if ((result.uid ?? '').isNotEmpty) {
+          await prefs.setString('barId', result.uid!);
         } else {
-          await prefs.remove("barId");
+          await prefs.remove('barId');
         }
-
-        await prefs.setString("barName", (userData["barName"] ?? "").toString());
+        await prefs.setString('barName', profile.barName ?? '');
       }
 
-      // Optional Phone-Upgrade (derzeit auskommentiert im Original)
-      // final mustUpgradePhone = phoneNumber == null || phoneNumber.trim().isEmpty;
-      // if (mustUpgradePhone) {
-      //   if (!mounted) return;
-      //   Navigator.of(context).pushAndRemoveUntil(
-      //     MaterialPageRoute(builder: (_) => const PhoneUpgradeScreen()),
-      //     (route) => false,
-      //   );
-      //   return;
-      // }
-
-      // Save FCM token now that username is known
-      try { await NotificationService.saveCurrentToken(); } catch (_) {}
-
-      // lastActive + platform fürs Admin-Dashboard nachziehen.
-      // Telemetrie — Login-Flow fällt NICHT, wenn das hier scheitert.
+      // FCM-Token persistieren — nicht-fatal.
       try {
-        await foundDocRef?.update({
-          'lastActive': FieldValue.serverTimestamp(),
-          'platform': PlatformInfo.detectName(),
-        });
+        await NotificationService.saveCurrentToken();
+      } catch (_) {}
+
+      // Platform-Telemetrie (lastActive setzt der CF schon). Best-effort.
+      // Läuft jetzt unter dem Custom-Token-User — Rules erlauben es via
+      // isAuthed(). Wenn strikte Owner-Rules später aktiviert werden,
+      // greift uid == docId weiterhin.
+      try {
+        final col = userType == 'user' ? 'users' : 'bars';
+        final docId = userType == 'user' ? storedUsername : (result.uid ?? '');
+        if (docId.isNotEmpty) {
+          await FirebaseFirestore.instance.collection(col).doc(docId).set(
+            {'platform': PlatformInfo.detectName()},
+            SetOptions(merge: true),
+          );
+        }
       } catch (_) {}
 
       await _checkNavigation();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("${Lang.t('login_err_generic')}: $e"),
-          backgroundColor: AppColors.accent,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
-      );
+      _showError("${Lang.t('login_err_generic')}: $e");
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -630,6 +530,26 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: const TextStyle(
                             color: _textSecondary,
                             fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _isLoading
+                            ? null
+                            : () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const PasswordResetRequestScreen(),
+                                  ),
+                                );
+                              },
+                        child: const Text(
+                          'Passwort vergessen?',
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w500,
+                            decoration: TextDecoration.underline,
                           ),
                         ),
                       ),

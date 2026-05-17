@@ -1,0 +1,50 @@
+--- archived/ticketing/patches/_originals/profil_settings_screen.dart.orig	2026-05-14 13:05:24.114548000 +0200
++++ lib/Screens/profile/profil_settings_screen.dart	2026-05-14 13:07:12.943725200 +0200
+@@ -17,7 +17,10 @@
+ import '../auth/login_screen.dart';
+ import '../../Theme/app_theme.dart';
+ import '../../l10n/lang.dart';
+-import '../../Services/stripe_service.dart';
++// FEATURE_DISABLED_TICKETING — StripeService entfernt.
++// E-Mail-Verifizierung läuft jetzt über EmailVerifyService.
++// see archived/ticketing/README.md
++import '../../Services/email_verify_service.dart';
+ 
+ // Auswahl aus dem Avatar-BottomSheet. Wir geben das Ergebnis aus dem
+ // Sheet zurück (statt direkt eine Aktion auszulösen), damit die
+@@ -149,7 +152,7 @@
+       // hat. Bar-Accounts kommen z. B. ohne diesen aus dem Wizard.
+       final emailVerified = data['emailVerifiedAt'] != null;
+ 
+-      // Mail in Prefs spiegeln, damit der Ticket-Kauf sie ohne Roundtrip findet.
++      // Mail in Prefs spiegeln, damit andere Screens sie ohne Roundtrip lesen können.
+       if (email.isNotEmpty) {
+         await prefs.setString('userEmail', email);
+       }
+@@ -238,7 +241,7 @@
+       // Übergang von „nicht verifiziert" → „verifiziert" → Feedback geben.
+       final justVerified = !_emailVerified && newVerified;
+ 
+-      // Spiegel in SharedPreferences (für Ticket-Kauf-Resolver).
++      // Spiegel in SharedPreferences für schnellen Zugriff aus anderen Screens.
+       if (newEmail.isNotEmpty && newEmail != _email) {
+         final prefs = await SharedPreferences.getInstance();
+         await prefs.setString('userEmail', newEmail);
+@@ -873,7 +876,7 @@
+       // Anonymen Login sicherstellen (für Cloud Function Auth-Check).
+       await _ensureFirebaseUser(context);
+ 
+-      final result = await StripeService.requestEmailVerification(
++      final result = await EmailVerifyService.requestEmailVerification(
+         docId: _docId,
+         email: newEmail,
+         collection: _collection,
+@@ -1268,7 +1271,7 @@
+                         }),
+                       ),
+                       const Divider(height: 1, color: Color(0xFF2A2D35)),
+-                      // E-Mail row (für QR-Code-Versand bei Ticket-Käufen).
++                      // E-Mail row (Account-Kontakt-Adresse).
+                       // Status-Badge rechts:
+                       //   • verifiziert (email vorhanden, pending leer) → grünes ✓
+                       //   • pending vorhanden                            → oranges Sanduhr-Icon
