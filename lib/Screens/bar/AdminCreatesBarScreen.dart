@@ -11,9 +11,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:geocoding/geocoding.dart' as geocoding;
 import '../../Theme/app_theme.dart';
 import '../../Services/timestamp_ext.dart';
+import '../../Services/geocoding_services.dart';
 
 class AdminCreateBarScreen extends StatefulWidget {
   const AdminCreateBarScreen({Key? key}) : super(key: key);
@@ -800,9 +800,9 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
   }) async {
     final full = '$address, $city, $country';
     try {
-      final locations = await geocoding.locationFromAddress(full);
+      final loc = await GeocodingService.getLocationFromAddress(full);
 
-      if (locations.isEmpty) {
+      if (loc == null) {
         if (!mounted) return null;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -814,7 +814,6 @@ class _AdminCreateBarScreenState extends State<AdminCreateBarScreen> {
         return null;
       }
 
-      final loc = locations.first;
       return GeoPoint(loc.latitude, loc.longitude);
     } catch (e) {
       if (!mounted) return null;

@@ -11,8 +11,6 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'package:geocoding/geocoding.dart' as geo;
-
 // ✅ (Coming soon) Bilder-Funktionalität bleibt im Code, UI ist gesperrt.
 import 'package:image_picker/image_picker.dart';
 
@@ -711,7 +709,7 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
       });
 
       try {
-        final placemarks = await geo.placemarkFromCoordinates(
+        final placemarks = await GeocodingService.placemarkFromCoordinates(
             picked.latitude, picked.longitude);
 
         if (placemarks.isNotEmpty) {

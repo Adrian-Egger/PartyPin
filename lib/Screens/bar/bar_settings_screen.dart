@@ -18,10 +18,10 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:geocoding/geocoding.dart' as geo;
 import 'package:image_picker/image_picker.dart';
 
 import '../../Theme/app_theme.dart';
+import '../../Services/geocoding_services.dart';
 
 class BarSettingsScreen extends StatefulWidget {
   const BarSettingsScreen({super.key, required this.barId});
@@ -334,11 +334,11 @@ class _BarSettingsScreenState extends State<BarSettingsScreen> {
 
   Future<Map<String, double>?> _geocode(String query) async {
     try {
-      final results = await geo.locationFromAddress(query);
-      if (results.isEmpty) return null;
+      final loc = await GeocodingService.getLocationFromAddress(query);
+      if (loc == null) return null;
       return {
-        'lat': results.first.latitude,
-        'lng': results.first.longitude,
+        'lat': loc.latitude,
+        'lng': loc.longitude,
       };
     } catch (_) {
       return null;

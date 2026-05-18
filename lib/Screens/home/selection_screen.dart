@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:geocoding/geocoding.dart' as geo;
 
 import 'home_shell.dart';
 import '../party/map_picker_screen.dart';
@@ -240,7 +239,7 @@ class _SelectionScreenState extends State<SelectionScreen> {
 
     // Reverse-geocode to fill the text field
     try {
-      final placemarks = await geo.placemarkFromCoordinates(
+      final placemarks = await GeocodingService.placemarkFromCoordinates(
           picked.latitude, picked.longitude);
       if (placemarks.isNotEmpty && mounted) {
         final p = placemarks.first;
