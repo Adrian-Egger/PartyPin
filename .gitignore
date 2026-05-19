@@ -5,6 +5,9 @@ build/
 # iOS
 ios/Pods/
 ios/.symlinks/
+ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+ios/Runner.xcworkspace/xcshareddata/swiftpm/
+macos/Podfile.lock
 DerivedData/
 # Android
 android/.gradle/

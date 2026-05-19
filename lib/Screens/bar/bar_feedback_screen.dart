@@ -577,7 +577,7 @@ class _FeedbackContentState extends State<_FeedbackContent> {
                 color: AppColors.text, fontWeight: FontWeight.w800)),
         content: DropdownButtonFormField<String>(
           dropdownColor: AppColors.panel,
-          initialValue: reason,
+          value: reason,
           style: const TextStyle(color: AppColors.text),
           items: const [
             DropdownMenuItem(value: 'Belästigung', child: Text('Belästigung')),
