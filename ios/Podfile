@@ -25,6 +25,30 @@ post_install do |installer|
     end
   end
 
+  # Add Flutter.xcframework to project-level FRAMEWORK_SEARCH_PATHS so SPM plugins
+  # (url_launcher_ios, shared_preferences_foundation, etc.) can `import Flutter`
+  # before xcode_backend.sh builds the framework in the Run Script phase.
+  artifacts_dir = File.join(flutter_root, 'bin', 'cache', 'artifacts', 'engine')
+  runner_project = installer.aggregate_targets
+    .find { |t| t.name == 'Pods-Runner' }
+    &.user_project
+  if runner_project
+    runner_project.build_configurations.each do |config|
+      engine_dir = (config.name == 'Debug') ?
+        File.join(artifacts_dir, 'ios', 'Flutter.xcframework') :
+        File.join(artifacts_dir, 'ios-release', 'Flutter.xcframework')
+      next unless Dir.exist?(engine_dir)
+      slices = Dir.entries(engine_dir).reject { |e| e.start_with?('.') }
+      iphoneos  = slices.find { |s| s.start_with?('ios-arm64') && !s.include?('simulator') }
+      simulator = slices.find { |s| s.include?('simulator') }
+      config.build_settings['FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]'] =
+        "\"#{File.join(engine_dir, iphoneos)}\" $(inherited)" if iphoneos
+      config.build_settings['FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]'] =
+        "\"#{File.join(engine_dir, simulator)}\" $(inherited)" if simulator
+    end
+    runner_project.save
+  end
+
   %w[openssl_grpc BoringSSL-GRPC].each do |name|
     t = installer.pods_project.targets.find { |x| x.name == name }
     next unless t
