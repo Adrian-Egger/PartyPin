@@ -150,6 +150,13 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   final Map<String, String?> _openPartyStatus = {};
   final Map<String, bool> _openPartyIsHost = {};
 
+  // RENDER-FIRST: Partys die noch einen RSVP/Request-Status-Read brauchen.
+  // Werden NICHT seriell im Lade-Loop aufgelöst (das waren 40-80
+  // sequentielle Firestore-Round-Trips = 6-12s Main-Thread-Freeze/ANR auf
+  // echten Geräten), sondern in _enrichPartyStatuses() PARALLEL nachgeladen
+  // nachdem die Marker schon sichtbar sind.
+  final List<({String id, bool isClosed})> _pendingStatus = [];
+
   // City Mood — Phase 4. Wird in _refreshMap berechnet aus dem
   // bereits geladenen _partyCache (keine extra Reads).
   CityMood _cityMood = CityMood.empty;
@@ -172,6 +179,11 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   @override
   void dispose() {
     _searchCtrl.dispose();
+    // CRASH-FIX: GoogleMapController hält eine native Texture + Surface.
+    // Ohne dispose() bleibt sie nach dem Verlassen des Screens im Speicher
+    // → auf 2-3GB-Geräten OOM/nativer Crash nach mehrfachem Öffnen.
+    mapController?.dispose();
+    mapController = null;
     super.dispose();
   }
 
@@ -1038,7 +1050,10 @@ String _safeDocId(String input) => input
     _closedPartyStatus.clear();
     _openPartyStatus.clear();
     _openPartyIsHost.clear();
+    _pendingStatus.clear();
 
+    // PHASE 1: Marker synchron mit Platzhalter-Icons bauen (kein Status-
+    // await im Loop). Nur 2 Reads gesamt (Partys + Bars) statt 40-80.
     await _loadPartiesFromFirebase();
     await _loadBarsFromFirebase();
 
@@ -1049,7 +1064,113 @@ String _safeDocId(String input) => input
       myFriends: _myFriendsSet,
     );
 
+    // Karte ist JETZT sichtbar (Platzhalter-Icons grau/rot/lila).
     if (mounted) setState(() {});
+
+    // PHASE 2: echte RSVP/Request-Status PARALLEL nachladen und Icons
+    // updaten. Kein await hier — die Map blockiert nicht auf diese Reads.
+    unawaited(_enrichPartyStatuses());
+  }
+
+  /// PHASE 2 des render-first Ladens. Löst alle ausstehenden Status-Reads
+  /// PARALLEL (Future.wait) auf statt seriell im Lade-Loop, und updatet die
+  /// betroffenen Marker-Icons in EINEM setState. Verwandelt 40-80
+  /// sequentielle Round-Trips (~6-12s Freeze) in einen parallelen Batch
+  /// (~200ms, kein Main-Thread-Block). Jeder Read fängt seine Fehler selbst
+  /// ab → ein PERMISSION_DENIED killt nicht den ganzen Batch.
+  Future<void> _enrichPartyStatuses() async {
+    if (_pendingStatus.isEmpty) return;
+    final me = _currentUsername;
+    if (me == null) return;
+
+    final pending = List<({String id, bool isClosed})>.from(_pendingStatus);
+    _pendingStatus.clear();
+
+    final results = await Future.wait(pending.map((p) async {
+      try {
+        final status = p.isClosed
+            ? await _myRequestStatus(p.id, me)
+            : (await _myOpenRsvpStatus(p.id) ?? await _myOpenRequestStatus(p.id));
+        return (id: p.id, isClosed: p.isClosed, status: status);
+      } catch (_) {
+        return (id: p.id, isClosed: p.isClosed, status: null as String?);
+      }
+    }));
+
+    if (!mounted) return;
+
+    setState(() {
+      for (final r in results) {
+        if (r.isClosed) {
+          _closedPartyStatus[r.id] = r.status;
+          _applyClosedMarkerIcon(r.id, r.status);
+        } else {
+          _openPartyStatus[r.id] = _normOpenStatus(r.status);
+          _applyOpenMarkerIcon(r.id);
+        }
+      }
+    });
+  }
+
+  /// Tauscht das Icon eines geschlossenen Party-Markers IN-PLACE aus
+  /// (kein eigenes setState — wird im Batch-setState von
+  /// _enrichPartyStatuses aufgerufen). Social-Overlays bleiben unberührt.
+  void _applyClosedMarkerIcon(String partyId, String? status) {
+    final mid = 'lock_$partyId';
+    final existing = _markers.where((m) => m.markerId.value == mid).toList();
+    if (existing.isEmpty) return;
+    final old = existing.first;
+    final data = _partyCache[partyId];
+    final isHost = data != null && _isHostForPartyData(data);
+
+    final BitmapDescriptor icon;
+    if (isHost) {
+      icon = _lockIconBlue ?? BitmapDescriptor.defaultMarker;
+    } else if (status == 'approved') {
+      icon = _lockIconGreen ?? BitmapDescriptor.defaultMarker;
+    } else if (status == 'declined') {
+      icon = _lockIconRed ?? BitmapDescriptor.defaultMarker;
+    } else {
+      icon = _lockIconGrey ?? BitmapDescriptor.defaultMarker;
+    }
+
+    _markers.removeWhere((m) => m.markerId.value == mid);
+    _markers.add(Marker(
+      markerId: MarkerId(mid),
+      position: old.position,
+      icon: icon,
+      zIndex: old.zIndex,
+      onTap: () => _openPartySheet(_partyCache[partyId] ?? const {}, partyId),
+    ));
+  }
+
+  /// Tauscht das Icon eines offenen/friends Party-Markers IN-PLACE aus
+  /// (kein eigenes setState). Liest _openPartyStatus/_openPartyIsHost die
+  /// vorher gesetzt wurden.
+  void _applyOpenMarkerIcon(String partyId) {
+    final existing = _markers.where((m) => m.markerId.value == partyId).toList();
+    if (existing.isEmpty) return;
+    final old = existing.first;
+    final data = _partyCache[partyId];
+    final isFriendsOnly = data != null &&
+        (data['visibility'] ?? 'public').toString() == 'friends' &&
+        !_isClosedDoc(data);
+
+    final icon = isFriendsOnly
+        ? _iconForFriendsPartyMarker(partyId)
+        : _iconForOpenPartyMarker(partyId);
+
+    _markers.removeWhere((m) => m.markerId.value == partyId);
+    _markers.add(Marker(
+      markerId: MarkerId(partyId),
+      position: old.position,
+      icon: icon,
+      onTap: () => _openPartySheet(_partyCache[partyId] ?? const {}, partyId),
+      anchor: old.anchor,
+      zIndex: old.zIndex,
+      consumeTapEvents: old.consumeTapEvents,
+      infoWindow: old.infoWindow,
+    ));
   }
 
   Future<void> _loadPartiesFromFirebase() async {
@@ -1187,25 +1308,15 @@ String _safeDocId(String input) => input
             rng: rng,
           );
 
-          String? myStatus;
-          if (!_isBarAccount &&
+          // RENDER-FIRST: KEIN await hier. Status (grün/rot) wird in
+          // Phase 2 parallel nachgeladen. Platzhalter: Host=blau, sonst grau.
+          final bool needsStatus = !_isBarAccount &&
               _currentUsername != null &&
-              !isHostForThisParty) {
-            myStatus = await _myRequestStatus(doc.id, _currentUsername!);
-          }
+              !isHostForThisParty;
 
-          _closedPartyStatus[doc.id] = myStatus;
-
-          final BitmapDescriptor icon;
-          if (isHostForThisParty) {
-            icon = _lockIconBlue ?? BitmapDescriptor.defaultMarker;
-          } else if (myStatus == 'approved') {
-            icon = _lockIconGreen ?? BitmapDescriptor.defaultMarker;
-          } else if (myStatus == 'declined') {
-            icon = _lockIconRed ?? BitmapDescriptor.defaultMarker;
-          } else {
-            icon = _lockIconGrey ?? BitmapDescriptor.defaultMarker;
-          }
+          final BitmapDescriptor icon = isHostForThisParty
+              ? (_lockIconBlue ?? BitmapDescriptor.defaultMarker)
+              : (_lockIconGrey ?? BitmapDescriptor.defaultMarker);
 
           _markers.add(Marker(
             markerId: MarkerId('lock_${doc.id}'),
@@ -1222,21 +1333,23 @@ String _safeDocId(String input) => input
             flags: social,
             onTap: () => _openPartySheet(data, doc.id),
           );
+
+          if (needsStatus) {
+            _pendingStatus.add((id: doc.id, isClosed: true));
+          }
         }
         // =================================================
         // 🎉 OPEN PARTY
         // =================================================
         else {
-          String? myStatus;
-          if (!_isBarAccount &&
-              _currentUsername != null &&
-              !isHostForThisParty) {
-            myStatus = await _myOpenRsvpStatus(doc.id) ??
-                await _myOpenRequestStatus(doc.id);
-          }
-
-          _openPartyStatus[doc.id] = myStatus;
           _openPartyIsHost[doc.id] = isHostForThisParty;
+
+          // RENDER-FIRST: KEIN await. Status noch unbekannt → die
+          // Icon-Funktionen liefern Platzhalter (rot/lila). Echter Status
+          // kommt in Phase 2 (_enrichPartyStatuses) parallel nach.
+          final bool needsStatus = !_isBarAccount &&
+              _currentUsername != null &&
+              !isHostForThisParty;
 
           final icon = isFriendOnly
               ? _iconForFriendsPartyMarker(doc.id)
@@ -1257,6 +1370,10 @@ String _safeDocId(String input) => input
             flags: social,
             onTap: () => _openPartySheet(data, doc.id),
           );
+
+          if (needsStatus) {
+            _pendingStatus.add((id: doc.id, isClosed: false));
+          }
         }
       } catch (_) {
         continue;

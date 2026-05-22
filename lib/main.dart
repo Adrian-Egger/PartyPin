@@ -27,15 +27,12 @@ Future<void> main() async {
   // 1. Flutter binding
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 2. Phase 1: alles, was KEIN Firebase-Service braucht, parallel.
-  //    - Firebase.initializeApp        (schwerste Init-Operation)
-  //    - Lang.load                     (SharedPreferences read)
-  //    - Maps-Renderer (Android)       (Native Surface-Setup)
-  //    Statt sequenziell laufen sie gleichzeitig — typisch 200-500ms
-  //    Cold-Start-Ersparnis.
+  // 2. NUR LOKALE Init im kritischen Start-Pfad — KEIN Netzwerk.
+  //    Firebase.initializeApp ist lokal (liest google-services config),
+  //    Lang.load liest SharedPreferences, der Maps-Renderer ist nativer
+  //    Surface-Setup. Keine dieser Ops blockiert auf Netz → kein ANR.
   final mapsImpl = GoogleMapsFlutterPlatform.instance;
   final mapsFuture = (mapsImpl is GoogleMapsFlutterAndroid)
-      // Surface-Renderer, damit GoogleMap nicht den IME-Fokus stiehlt.
       ? mapsImpl.initializeWithRenderer(AndroidMapRenderer.latest)
       : Future<void>.value();
 
@@ -45,40 +42,32 @@ Future<void> main() async {
     mapsFuture,
   ]);
 
-  // 3. App Check — KRITISCHER SYNC-POINT.
-  //    Muss unmittelbar nach Firebase.initializeApp() laufen, bevor
-  //    irgendein Firebase-Service einen App-Check-Token anfordert.
-  //    Release: Play Integrity / Device Check. Debug: Debug-Provider
-  //    (Token muss in der Firebase Console hinterlegt sein).
-  await FirebaseAppCheck.instance.activate(
-    androidProvider: kReleaseMode ? AndroidProvider.playIntegrity : AndroidProvider.debug,
-    appleProvider: kReleaseMode ? AppleProvider.deviceCheck : AppleProvider.debug,
-  );
-  if (kDebugMode) {
+  // 3. App Check aktivieren — DEFENSIV. activate() ist lokal (registriert
+  //    nur den Provider); der Token-Fetch passiert lazy beim ersten
+  //    Firebase-Request. Ein Fehler hier darf den Start NIEMALS crashen —
+  //    sonst killt eine fehlgeschlagene Attestation die ganze App.
+  try {
+    await FirebaseAppCheck.instance.activate(
+      androidProvider:
+          kReleaseMode ? AndroidProvider.playIntegrity : AndroidProvider.debug,
+      appleProvider:
+          kReleaseMode ? AppleProvider.deviceCheck : AppleProvider.debug,
+    );
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('[appcheck] activated');
+    }
+  } catch (e) {
     // ignore: avoid_print
-    print("DEBUG APPCHECK ACTIVE");
+    if (kDebugMode) print('[appcheck] activate failed (non-fatal): $e');
   }
 
-  // 4. Phase 2: Anonyme Auth, wenn noch kein User da ist — vermeidet
-  //    einen unnoetigen Netzwerk-Roundtrip beim Warmstart.
-  //    FEATURE_DISABLED_TICKETING — StripeService.init() ist entfernt.
-  //    see archived/ticketing/README.md
-  if (FirebaseAuth.instance.currentUser == null) {
-    await FirebaseAuth.instance.signInAnonymously();
-  }
-
-  // Background-Handler: SYNCHRONOUS Registrierung, kein await.
+  // 4. Background-Handler: SYNCHRON registrieren, kein await, kein Netz.
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-  // 5. Fire-and-forget — NICHT im kritischen Start-Pfad warten.
-  //    NotificationService.init() oeffnet beim Erstinstall den OS-
-  //    Permission-Prompt, das wuerde sonst den Splashscreen blockieren
-  //    bis der User antwortet (Sekunden!). DeepLinkHandler verarbeitet
-  //    den Initial-Link auch noch nach UI-Mount korrekt.
-  unawaited(NotificationService.init().catchError((_) {}));
-  unawaited(DeepLinkHandler.start().catchError((_) {}));
-
-  // 6. UI starten — App ist sichtbar.
+  // 5. UI SOFORT starten — KEIN Netzwerk-await mehr davor.
+  //    signInAnonymously + Services laufen hinter dem ersten Frame im
+  //    _Bootstrap-Gate. Erster Frame in Millisekunden statt nach Sekunden.
   runApp(const MyApp());
 }
 
@@ -94,8 +83,64 @@ class MyApp extends StatelessWidget {
         title: 'PartyPin',
         theme: AppTheme.dark,
         scaffoldMessengerKey: rootMessengerKey,
-        home: const HomeShell(),
+        home: const _Bootstrap(),
       ),
+    );
+  }
+}
+
+/// Bootstrap-Gate: läuft NACH dem ersten Frame. Macht die Netzwerk-Arbeit
+/// (anonyme Auth) die früher main() blockiert hat, ohne den Start-Frame zu
+/// verzögern. Zeigt solange einen leichten Splash. Firestore-Reads im
+/// HomeShell starten erst wenn dieser Gate fertig ist → kein
+/// "PERMISSION_DENIED weil Auth noch nicht da".
+class _Bootstrap extends StatefulWidget {
+  const _Bootstrap();
+
+  @override
+  State<_Bootstrap> createState() => _BootstrapState();
+}
+
+class _BootstrapState extends State<_Bootstrap> {
+  late final Future<void> _ready = _init();
+
+  Future<void> _init() async {
+    // Anonyme Auth jetzt — UI ist schon sichtbar, blockt keinen Frame.
+    // Mit Timeout, damit ein hängendes Netz den Gate nicht ewig offen hält.
+    if (FirebaseAuth.instance.currentUser == null) {
+      try {
+        await FirebaseAuth.instance
+            .signInAnonymously()
+            .timeout(const Duration(seconds: 10));
+      } catch (e) {
+        // ignore: avoid_print
+        if (kDebugMode) print('[auth] anon sign-in failed (non-fatal): $e');
+        // Nicht crashen — die App startet trotzdem; Reads scheitern dann
+        // graceful (per-Operation try/catch) statt die App zu killen.
+      }
+    }
+
+    // Services NACH Auth, fire-and-forget. Kein Block auf OS-Permission-
+    // Prompt (NotificationService) oder Deep-Link-Parsing.
+    unawaited(NotificationService.init().catchError((_) {}));
+    unawaited(DeepLinkHandler.start().catchError((_) {}));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<void>(
+      future: _ready,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            backgroundColor: AppColors.bgTop,
+            body: Center(
+              child: CircularProgressIndicator(color: AppColors.accent),
+            ),
+          );
+        }
+        return const HomeShell();
+      },
     );
   }
 }
