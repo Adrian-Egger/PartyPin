@@ -12,8 +12,9 @@ import GoogleMaps
     // Google Maps SDK MUSS vor dem ersten GMSMapView-Mount initialisiert
     // werden — sonst fataler NSException-Crash beim Mounten des Map-Tabs
     // (HomeShell baut den Map-Screen über IndexedStack direkt nach Login).
-    // Gegenstück zu com.google.android.geo.API_KEY im AndroidManifest.
-    GMSServices.provideAPIKey("AIzaSyD87LYkHyCjLJbh5dH3Mc6yeiXF9zH_ly8")
+    // iOS-restricted Key aus Google Cloud Console (separat vom Android-
+    // Key in AndroidManifest.xml — beide laufen über Bundle-ID-Restriction).
+    GMSServices.provideAPIKey("AIzaSyBGcuGxbH6Gm0lGAGNmB97NSaw8D3DXRpc")
 
     GeneratedPluginRegistrant.register(with: self)
     // Required so iOS shows notification banners when the app is in the foreground
