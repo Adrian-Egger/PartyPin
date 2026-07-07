@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../Theme/app_theme.dart';
 import '../../l10n/lang.dart';
@@ -27,7 +27,7 @@ class _NotificationSettingsScreenState
   bool _notifNearbyParties = true;
   bool _notifNearbyBars = true;
   bool _loading = true;
-  String _username = '';
+  String _docId = '';
 
   @override
   void initState() {
@@ -36,22 +36,22 @@ class _NotificationSettingsScreenState
   }
 
   Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final username =
-        (prefs.getString('currentUsername') ?? prefs.getString('username') ?? '')
-            .trim();
-
+    // Eigenes User-Doc == authentifizierte UID. Die Firestore-Doc-ID ist der
+    // volle Name (== uid, siehe signupCallable), NICHT der Username — deshalb
+    // NIE doc(username) für das eigene Doc verwenden (sonst PERMISSION_DENIED
+    // bzw. Schreiben ins falsche/nicht-eigene Dokument).
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     if (!mounted) return;
-    setState(() => _username = username);
+    _docId = uid;
 
-    if (username.isEmpty) {
+    if (uid.isEmpty) {
       setState(() => _loading = false);
       return;
     }
 
     final doc = await FirebaseFirestore.instance
         .collection('users')
-        .doc(username)
+        .doc(uid)
         .get();
     final data = doc.data() ?? {};
 
@@ -66,8 +66,8 @@ class _NotificationSettingsScreenState
   }
 
   Future<void> _save() async {
-    if (_username.isEmpty) return;
-    await FirebaseFirestore.instance.collection('users').doc(_username).set({
+    if (_docId.isEmpty) return;
+    await FirebaseFirestore.instance.collection('users').doc(_docId).set({
       'notifChat':          _notifChat,
       'notifFriends':       _notifFriends,
       'notifNearbyParties': _notifNearbyParties,

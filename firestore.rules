@@ -45,6 +45,28 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Echte Admin-Prüfung über Firebase Custom Claims (server-seitig, nicht
+    // fälschbar). Der `admin`-Claim wird via Admin-SDK (setCustomUserClaims)
+    // auf dem Admin-Account gesetzt und fließt in jedes ID-Token. Dieselbe
+    // Quelle nutzen bereits die Admin-Cloud-Functions (assertAdmin →
+    // request.auth.token.admin === true, siehe functions/admin/*).
+    function isAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
+    }
+
+    // Ownership über den server-verifizierten, nicht-fälschbaren
+    // `username`-Custom-Claim (loginCallable/signupCallable →
+    // createCustomToken(docId, {username})). Gleiches Muster wie isAdmin().
+    // Greift NUR für eingeloggte Custom-Token-Nutzer; anonyme Sessions haben
+    // keinen username-Claim → false. Verwendbar überall, wo die Doc-ID bzw.
+    // ein Feld == username ist (Festln-Standard).
+    // HINWEIS: Der Claim wird erst beim (Re-)Login aktualisiert — nach einer
+    // Username-Änderung muss sich der Nutzer neu einloggen, bevor er wieder
+    // eigene Docs schreiben kann (bewusst akzeptierter Edge, wie bei Festln).
+    function isOwnUsername(name) {
+      return request.auth != null && request.auth.token.username == name;
+    }
+
     // Welche Top-Level-Keys ändert dieser Update?
     function changedKeys() {
       return request.resource.data.diff(resource.data).affectedKeys();
@@ -301,6 +323,59 @@ service cloud.firestore {
       }
     }
 
+    // ── FESTLN ─────────────────────────────────────────────
+    // Admin-kuratierte Events mit eigenem Karten-Symbol. Schreibrechte sind
+    // VOLLSTÄNDIG server-seitig auf echte Admins beschränkt (Custom Claim
+    // `admin`, siehe isAdmin()) — KEIN client-seitiges Gate als Sicherheits-
+    // mechanismus. Ein normaler (authentifizierter) Nutzer darf ausschließlich
+    // lesen. Zusätzlich zu isAdmin() bleiben Payload-Sanity-Checks aktiv als
+    // Defense-in-Depth gegen fehlerhafte/aufgeblähte Admin-Writes.
+    match /festln/{festlId} {
+      allow read: if isAuthed();
+
+      allow create: if isAdmin() && payloadHasSaneSize() && textFieldsSane();
+      // textFieldsSane bewusst nur auf create (Legacy-Beschreibungen könnten
+      // sonst reine Feld-Updates blockieren — gleiche Begründung wie Party).
+      allow update: if isAdmin() && payloadHasSaneSize();
+      allow delete: if isAdmin();
+
+      // Teilnehmer ("Ich komme"): jeder authentifizierte Nutzer darf NUR
+      // seine EIGENE Zusage anlegen/entfernen. doc-id == username.
+      //
+      // OWNERSHIP: über den server-verifizierten, nicht-fälschbaren
+      // `username`-Custom-Claim (loginCallable/signupCallable →
+      // createCustomToken(docId, {username})). Dieser Claim == doc-id ==
+      // username-Feld (exakte Schreibweise, siehe login_screen storedUsername).
+      // Anonyme Sessions (main.dart signInAnonymously) haben KEINEN
+      // username-Claim → token.username == attendeeId ist false → gesperrt.
+      // Gleiches Muster wie isAdmin() (token.admin).
+      //
+      // Bewusst VOR der {sub}-Catch-all-Regel; Rules sind additiv (OR), diese
+      // spezifische Regel hebt die admin-only Schreibsperre für attendees auf.
+      match /attendees/{attendeeId} {
+        allow read: if isAuthed();
+
+        // Create/Update: nur die eigene Zusage. username-Feld muss zur
+        // doc-id passen (kein Impersonation-Doc unter fremdem Feldwert).
+        allow create, update: if isAdmin()
+          || (isAuthed()
+              && request.auth.token.username == attendeeId
+              && request.resource.data.username == attendeeId
+              && payloadHasSaneSize());
+
+        // Delete: nur die eigene Zusage (oder Admin).
+        allow delete: if isAdmin()
+          || (isAuthed() && request.auth.token.username == attendeeId);
+      }
+
+      // Sub-Collections (z. B. spätere Notifications/Feedback): lesen für
+      // authentifizierte Nutzer, schreiben nur Admins.
+      match /{sub}/{docId} {
+        allow read: if isAuthed();
+        allow write: if isAdmin();
+      }
+    }
+
     // ── PARTY ──────────────────────────────────────────────
     // SECURITY_HARDENING: Party-Daten bleiben public-readable (Map zeigt
     // sie auch authentifiziert nicht-eingeloggten Web-Crawlern). Write-
@@ -320,33 +395,71 @@ service cloud.firestore {
       // Ratings: zwei legitime Schreibpfade laufen parallel
       //   1) Cloud Function `setPartyRating` (admin SDK, bypasses Rules)
       //   2) party_map_screen._setRating (Client-Transaction)
-      // Beide brauchen Write-Zugriff hier. Read ist authed.
-      // Mit anonym-Auth ist eine „nur eigenes Rating"-Prüfung nicht
-      // möglich. Plausibilität (24h-Fenster, approved-Status) prüft die CF.
+      // SECURITY_HARDENING (Festln-Standard, 2026-07-07): Der Client-Pfad
+      // schreibt AUSSCHLIESSLICH doc(username) mit data.username==username
+      // (party_map_screen._setRating, partyRatingRef = ...ratings.doc(username),
+      // payload {'username': username, ...}). Damit ist create/update auf die
+      // EIGENE doc-id härtbar → schließt Rating-Spoofing (fremde Bewertungen
+      // faken = Host-Reputation-Gaming, gleiche Klasse wie RSVP-Spoofing).
+      // Die CF setPartyRating (index.js) umgeht Rules ohnehin (admin SDK) und
+      // prüft Plausibilität (24h-Fenster, hostUid!=uid). isAdmin() als Override.
+      // DELETE bleibt isAuthed(): Party-/Rating-Cleanup läuft server- bzw.
+      // host-seitig (Parität zu rsvps/coming/maybe) — kein Spoofing-Vektor.
       match /ratings/{userId} {
         allow read: if isAuthed();
-        allow write: if isAuthed();
+        allow create, update: if isAdmin()
+          || (isOwnUsername(userId)
+              && request.resource.data.username == userId
+              && payloadHasSaneSize());
+        allow delete: if isAuthed();
       }
 
-      // RSVPs, Requests, Approved, Coming, Maybe — direkter Client-Write.
-      // SECURITY_HARDENING: keine uid-Match-Prüfung möglich (siehe oben).
-      // Auswirkung: jeder authed Client kann als beliebige uid eine RSVP
-      // anlegen → Host-Reputation Gaming + Friend-Aura manipulieren.
-      // Mitigation kommt mit Auth-Refactor + setPartyRating-Self-Join-
-      // Detection (existiert bereits server-seitig im Aggregator).
+      // RSVPs / Coming / Maybe — die eigene Teilnahme des Nutzers.
+      // SECURITY_HARDENING (Festln-Standard, 2026-07-03): create/update NUR
+      // für die eigene doc-id (== username) via username-Claim → schließt
+      // RSVP-Spoofing (fremde Teilnahme faken = Host-Reputation-/Friend-Aura-
+      // Gaming). doc-id == username == data.username (verifiziert:
+      // _setRsvpStatus schreibt ausschließlich doc(_currentUsername)).
+      // DELETE bleibt isAuthed(), weil der HOST fremde RSVP-Docs löscht
+      // (Kick / Party-Cleanup, party_bottom_sheet + party_map_screen) — das
+      // ist legitime Moderation, kein Spoofing.
+      match /rsvps/{uid} {
+        allow read: if isAuthed();
+        allow create, update: if isAdmin()
+          || (isOwnUsername(uid)
+              && request.resource.data.username == uid
+              && payloadHasSaneSize());
+        allow delete: if isAuthed();
+      }
+      match /coming/{uid} {
+        allow read: if isAuthed();
+        allow create, update: if isAdmin()
+          || (isOwnUsername(uid)
+              && request.resource.data.username == uid
+              && payloadHasSaneSize());
+        allow delete: if isAuthed();
+      }
+      match /maybe/{uid} {
+        allow read: if isAuthed();
+        allow create, update: if isAdmin()
+          || (isOwnUsername(uid)
+              && request.resource.data.username == uid
+              && payloadHasSaneSize());
+        allow delete: if isAuthed();
+      }
+
+      // Requests / Approved — Beitrittsanfragen für geschlossene Partys.
+      // NICHT auf reine Owner-Ownership härtbar: der HOST schreibt hier
+      // fremde Docs (approved/{requester}, requests/{requester}.status).
+      // Korrekte Absicherung (nur Host darf 'status'/'approved' setzen)
+      // erfordert Host-Verifikation via Party-Doc-get() + stabilen Host-
+      // Claim → Auth-/CF-Refactor. Bis dahin dokumentierte offene Flanke:
+      // ein Nutzer kann sich selbst 'approved' setzen (Access-Bypass für
+      // geschlossene Partys). Siehe Audit-Report.
       match /requests/{uid} {
         allow read, write: if isAuthed();
       }
-      match /rsvps/{uid} {
-        allow read, write: if isAuthed();
-      }
       match /approved/{uid} {
-        allow read, write: if isAuthed();
-      }
-      match /coming/{uid} {
-        allow read, write: if isAuthed();
-      }
-      match /maybe/{uid} {
         allow read, write: if isAuthed();
       }
 

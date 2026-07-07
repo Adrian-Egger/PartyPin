@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 // ✅ (Coming soon) Bilder-Funktionalität bleibt im Code, UI ist gesperrt.
 import 'package:image_picker/image_picker.dart';
@@ -71,7 +70,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   bool _isUnlimitedGuests = false;
   bool _isFreeEntry = false;
   bool _navigatedAway = false;
-  bool _detailsSubmitted = false;
 
 
   bool _isLoading = false;
@@ -104,13 +102,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
   static const _textSecondary = AppColors.muted;
   static const _accent = AppColors.accent;
   static const _secondary = AppColors.accent;
-
-  static const _accentSoft = Color(0x26FF3B30);
-  static const _accentLine = Color(0x66FF3B30);
-
-  // BottomNav Index (lokal nur fürs UI hier)
-  // 0=Feedback, 1=Map, 2=Freunde, 3=Neue Party
-  int _currentIndex = 3;
 
   // Legal Gate nur hier
   bool _legalGateHandled = false;
@@ -193,49 +184,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     } catch (_) {}
   }
 
-  Future<String?> _askForEmail() async {
-    final controller = TextEditingController();
-
-    return await showDialog<String>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: AppColors.panel,
-          title: const Text(
-            "Email eingeben",
-            style: TextStyle(color: AppColors.text),
-          ),
-          content: TextField(
-            controller: controller,
-            keyboardType: TextInputType.emailAddress,
-            style: const TextStyle(color: Colors.white),
-            decoration: const InputDecoration(
-              hintText: "deine@email.com",
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Abbrechen"),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final email = controller.text.trim();
-
-                if (email.isEmpty ||
-                    !RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
-                  return;
-                }
-
-                Navigator.pop(context, email);
-              },
-              child: const Text("Weiter"),
-            ),
-          ],
-        );
-      },
-    );
-  }
 
   void _preloadExisting() {
     if (widget.existingData == null) return;
@@ -1155,7 +1103,25 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     double? lng = _pickedLng;
 
     final prefs = await SharedPreferences.getInstance();
-    final username = (prefs.getString('username') ?? 'unknown_user').trim();
+    final username = (prefs.getString('username') ?? '').trim();
+
+    // GUARD: niemals mit ungültiger Identität schreiben. Ohne echte Auth-
+    // Session (currentUser == null) oder ohne gültigen Username würden sonst
+    // "unknown_user"-Partys entstehen bzw. der Write scheitert serverseitig
+    // mit PERMISSION_DENIED. Stattdessen sauber abbrechen und zum Login leiten.
+    final authUid = FirebaseAuth.instance.currentUser?.uid;
+    if (authUid == null || username.isEmpty || username == 'unknown_user') {
+      setState(() => _isLoading = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text(
+            "Bitte melde dich an, um eine Party zu erstellen."),
+        backgroundColor: AppColors.accent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ));
+      return;
+    }
 
     if (lat == null || lng == null) {
       GeocodedLocation? loc;
@@ -1288,29 +1254,6 @@ class _NewPartyScreenState extends State<NewPartyScreen> with SingleTickerProvid
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  /// ✅ BottomNav: NIEMALS PartyMapScreen direkt pushen → immer HomeShell
-  Future<void> _onBottomNavTapped(int index) async {
-    if (index == _currentIndex) return;
-    setState(() => _currentIndex = index);
-
-    if (index == 3) return; // bleibt auf Neu
-
-    // Lokale Indizes: 0 Feedback, 1 Map, 2 Freunde, 3 Neu
-    // HomeShell (User): 0 Feedback, 1 Freunde, 2 Map, 3 Neu, 4 Profil
-    final homeIndex = switch (index) {
-      0 => 0, // Feedback
-      1 => 2, // Map
-      2 => 1, // Freunde
-      _ => 2,
-    };
-
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => HomeShell(initialIndex: homeIndex)),
-          (route) => false,
-    );
   }
 
   @override

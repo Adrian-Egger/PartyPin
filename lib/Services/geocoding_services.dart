@@ -65,6 +65,10 @@ class GeocodingService {
   static const String _baseUrl =
       'https://maps.googleapis.com/maps/api/geocode/json';
 
+  // Netzwerk-Timeout für alle Geocoding-Requests. http.get hat KEIN
+  // Default-Timeout → ohne das könnte ein Request unendlich hängen.
+  static const Duration _httpTimeout = Duration(seconds: 12);
+
   // ---------------------------------------------------------------------------
   // Forward Geocoding
   // ---------------------------------------------------------------------------
@@ -133,7 +137,9 @@ class GeocodingService {
       final url = Uri.parse(
         '$_baseUrl?latlng=$latitude,$longitude&key=$_apiKey',
       );
-      final response = await http.get(url);
+      // Timeout: sonst hängt ein blockierter/langsamer Request unendlich
+      // (z. B. kein Netz) und der aufrufende Screen bleibt ewig im Ladezustand.
+      final response = await http.get(url).timeout(_httpTimeout);
       if (response.statusCode != 200) return const [];
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -165,7 +171,7 @@ class GeocodingService {
             '&components=country:${Uri.encodeComponent(countryCode.trim())}';
       }
 
-      final response = await http.get(Uri.parse(urlStr));
+      final response = await http.get(Uri.parse(urlStr)).timeout(_httpTimeout);
       if (response.statusCode != 200) return const [];
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;

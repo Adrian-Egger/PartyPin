@@ -20,6 +20,7 @@ import 'admin_bars_list_tab.dart';
 import 'admin_pending_bars_tab.dart';
 import 'admin_stats_tab.dart';
 import 'admin_users_tab.dart';
+import '../festl/admin_festln_list_tab.dart';
 
 class AdminScreen extends StatelessWidget {
   const AdminScreen({super.key});
@@ -27,7 +28,7 @@ class AdminScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         backgroundColor: AppColors.bgTop,
         appBar: AppBar(
@@ -45,6 +46,7 @@ class AdminScreen extends StatelessWidget {
             tabs: [
               Tab(icon: Icon(Icons.inbox_rounded), text: 'Anfragen'),
               Tab(icon: Icon(Icons.local_bar_rounded), text: 'Bars'),
+              Tab(icon: Icon(Icons.festival_rounded), text: 'Festln'),
               Tab(icon: Icon(Icons.analytics_rounded), text: 'Stats'),
               Tab(icon: Icon(Icons.group_rounded), text: 'User'),
             ],
@@ -54,6 +56,7 @@ class AdminScreen extends StatelessWidget {
           children: [
             AdminPendingBarsTab(),
             AdminBarsListTab(),
+            AdminFestlnListTab(),
             AdminStatsTab(),
             AdminUsersTab(),
           ],

@@ -269,7 +269,11 @@ class _LoginScreenState extends State<LoginScreen> {
       // greift uid == docId weiterhin.
       try {
         final col = userType == 'user' ? 'users' : 'bars';
-        final docId = userType == 'user' ? storedUsername : (result.uid ?? '');
+        // Doc-ID ist IMMER die Auth-UID (== docId aus loginCallable), NIE der
+        // Username. Für users war hier fälschlich storedUsername gesetzt →
+        // Write auf users/<username> (z. B. users/admin_pp) scheiterte an den
+        // Rules (isOwnerByCustomToken: auth.uid == userId).
+        final docId = result.uid ?? '';
         if (docId.isNotEmpty) {
           await FirebaseFirestore.instance.collection(col).doc(docId).set(
             {'platform': PlatformInfo.detectName()},

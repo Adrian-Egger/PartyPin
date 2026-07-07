@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -207,30 +208,20 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     _userKey = key;
   }
 
-  // ✅ users/{docId} sicher auflösen (Admin nutzt doc.id aus Search)
+  // ✅ Eigenes users/{docId} == authentifizierte UID (== Firestore-Doc-ID,
+  // siehe signup/loginCallable). Der Username ist NUR ein Feld — deshalb
+  // brauchen wir keine where('username')-Query mehr, currentUser.uid ist
+  // direkt die Doc-ID.
   Future<void> _resolveMyUserDocId() async {
-    // Wenn kein Username: fallback auf userKey
+    // Kein Username in prefs → anonyme/nicht-eingeloggte Session: userKey.
     if (_myUsername.isEmpty) {
       _myUserDocId = _userKey.isNotEmpty ? _userKey : "unknown";
       return;
     }
 
-    try {
-      final q = await FirebaseFirestore.instance
-          .collection('users')
-          .where('username', isEqualTo: _myUsername)
-          .limit(1)
-          .get();
-
-      if (q.docs.isNotEmpty) {
-        _myUserDocId = q.docs.first.id; // ✅ echte DocId
-      } else {
-        // Fallback (falls eure alte Struktur docId == username war)
-        _myUserDocId = _myUsername;
-      }
-    } catch (_) {
-      _myUserDocId = _myUsername;
-    }
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    // Fallback auf den Username nur, falls (unerwartet) keine UID vorliegt.
+    _myUserDocId = uid.isNotEmpty ? uid : _myUsername;
 
     if (_myUserDocId.isEmpty) _myUserDocId = "unknown";
   }

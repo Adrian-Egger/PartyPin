@@ -8,7 +8,6 @@ import '../../l10n/lang.dart';
 const _gradTop = AppColors.bgTop;
 const _gradBottom = AppColors.bgBottom;
 const _panel = Color(0xFF15171C);
-const _card = AppColors.panel;
 const _textPrimary = AppColors.text;
 const _textSecondary = AppColors.muted;
 const _accent = AppColors.accent;

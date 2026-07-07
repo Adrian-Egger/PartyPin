@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
@@ -21,6 +22,7 @@ import '../../Social/friends_model.dart';
 import '../../Social/map_social_layer.dart';
 import '../../Social/trending_hosts_strip.dart';
 import '../bar/bar_bottom_sheet.dart';
+import '../festl/festl_bottom_sheet.dart';
 import '../../Theme/app_theme.dart';
 import '../../Services/timestamp_ext.dart';
 import 'party_bottom_sheet.dart';
@@ -37,11 +39,7 @@ class PartyMapScreen extends StatefulWidget {
 class _PartyMapScreenState extends State<PartyMapScreen>
     with SingleTickerProviderStateMixin {
   // Farbschema
-  static const _bgTop = AppColors.bgTop;
-  static const _bgBottom = AppColors.bgBottom;
   static const _panel = AppColors.panel;
-  static const _text = AppColors.text;
-  static const _muted = AppColors.muted;
   static const _accent = AppColors.accent;
 
   // ✅ öffentliche POIs ausblenden
@@ -60,6 +58,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   static const int _hitBaseDiameter = 180;
   static const int _barBaseDiameter = 92;
 
+  // 🎡 Festl-Marker (etwas größer → Highlight, bewusst distinct von Party/Bar)
+  static const int _festlBaseDiameter = 104;
+  static const Color _festlColor = Color(0xFF8E24AA);
+  // Festln bleiben nach Ende noch etwas sichtbar, dann fallen sie raus.
+  static const int _festlHoursAfterEnd = 12;
+
   // ✅ Event-Zeitraum (Bars)
   static const int _barEventDaysBefore = 7;
   static const int _barEventHoursAfter = 24;
@@ -68,12 +72,44 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   CameraPosition? _startPos;
 
   final Set<Marker> _markers = {};
+
+  // PERF (Fix #2): O(1)-Index über markerId, parallel zum Set. `_markers` und
+  // `_markerById` werden AUSSCHLIESSLICH über _putMarker/_clearMarkers mutiert
+  // → sie können nie inkonsistent werden. Ersetzt die früheren O(N)-Scans
+  // (`_markers.where` / `removeWhere`), die im Status-Enrichment zu O(N²)
+  // wurden. Die einzige Stelle mit direkter Set-Mutation ist
+  // _rebuildMarkersWithNewIcons, wo BEIDE atomar aus derselben Quelle
+  // (newMarkers) neu befüllt werden.
+  final Map<String, Marker> _markerById = {};
+
+  /// Fügt einen Marker ein oder ersetzt den mit gleicher id — O(1).
+  /// `_markerById[id]` hält stets exakt dieselbe Objekt-Referenz wie im Set,
+  /// daher ist `_markers.remove(old)` ein O(1)-Hash-Lookup.
+  void _putMarker(Marker m) {
+    final id = m.markerId.value;
+    final old = _markerById[id];
+    if (old != null) _markers.remove(old);
+    _markers.add(m);
+    _markerById[id] = m;
+  }
+
+  /// Marker per id nachschlagen — O(1). null wenn nicht vorhanden.
+  Marker? _getMarker(String id) => _markerById[id];
+
+  /// Leert Set und Index gemeinsam.
+  void _clearMarkers() {
+    _markers.clear();
+    _markerById.clear();
+  }
   final Set<Circle> _circles = {};
   final Map<String, Map<String, dynamic>> _partyCache = {};
 
   // Bar-Marker-Icons cachen
   final Map<String, BitmapDescriptor> _barIconCache = {};
   final Map<String, BitmapDescriptor> _barIconEventRingCache = {};
+
+  // 🎡 Festl-Marker-Icon (einmal gerendert, zoom-invariant wie Bars)
+  BitmapDescriptor? _festlIcon;
 
   String _currentCity = "";
   double _currentLat = 48.2082;
@@ -84,7 +120,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   String? profileImageUrl;
 
   bool _isBarAccount = false;
-  String? _barId;
 
   BitmapDescriptor? _lockIconGrey;
   BitmapDescriptor? _lockIconGreen;
@@ -116,12 +151,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
 
   final Map<String, bool> _verifiedCache = {};
   bool _ratingPromptShown = false;
-  bool _legalWarnDismissed = false;
   bool _isReloading = false;
 
   // ----- Filter-State -----
   bool _showParties = true;
   bool _showBars = true;
+  bool _showFestln = true;
   int? _minAgeFilter;
   double? _maxEntryFilter;
   bool _onlyFree = false;
@@ -139,9 +174,15 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   Set<String> _myFriendsSet = {};
 
   // Zoom-State
-  double _currentZoom = 13;
   CameraPosition? _lastCameraPosition;
   bool _isUpdatingZoomIcons = false;
+
+  // PERF: Zoom-Icons werden pro perzeptuellem Größen-"Bucket" EINMAL erzeugt
+  // und gecacht. Verhindert, dass bei jedem kleinen Zoom-Schritt 13 Bitmaps
+  // neu PNG-encodiert werden (teuerste Einzeloperation beim Zoomen). Buckets
+  // in ~0.08-Skalenschritten (~6 diskrete Größen über den ganzen Zoombereich).
+  double _iconScaleBucket = -1;
+  final Map<double, Map<String, BitmapDescriptor>> _zoomIconCache = {};
 
   // Status-Cache für geschlossene Partys
   final Map<String, String?> _closedPartyStatus = {};
@@ -190,7 +231,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   Future<void> _init() async {
     await _loadSavedLocation();
     await _loadCurrentUser();
-    await _loadLegalWarnState();
+    await _loadFilterPrefs();
     await _prepareIcons();
     await _refreshMap();
 
@@ -222,14 +263,6 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     await _maybePromptForRating();
   }
 
-String _safeDocId(String input) => input
-      .trim()
-      .replaceAll('/', '_')
-      .replaceAll('#', '_')
-      .replaceAll('?', '_');
-
-  String _safeUserDocId(String input) => _safeDocId(input);
-
   // ✅ Closed-Partys: Marker weiter weg, aber im Kreis (Kreis bleibt am echten Ort)
   LatLng _offsetWithinRadiusMeters({
     required LatLng center,
@@ -259,7 +292,6 @@ String _safeDocId(String input) => input
         target: LatLng(_currentLat, _currentLng),
         zoom: 12,
       );
-      _currentZoom = 12;
     });
   }
 
@@ -277,17 +309,19 @@ String _safeDocId(String input) => input
     final fullName = ('$vorname $nachname').trim();
 
     final isBar = prefs.getBool('isBarAccount') ?? false;
-    final barId = prefs.getString('barId');
 
     // ✅ Profilbild laden
     String profileImg =
     (prefs.getString('profileImageUrl') ?? '').trim();
 
-    if (uname.isNotEmpty) {
+    // Eigenes Profil-Doc == authentifizierte UID (== Firestore-Doc-ID).
+    // NIE doc(username) — der Username ist nur ein Feld, nicht die Doc-ID.
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isNotEmpty) {
       try {
         final userDoc = await FirebaseFirestore.instance
             .collection('users')
-            .doc(uname)
+            .doc(uid)
             .get();
 
         final firestoreImg =
@@ -312,7 +346,6 @@ String _safeDocId(String input) => input
       _currentUsername = uname.isEmpty ? null : uname;
       _currentFullName = fullName.isEmpty ? null : fullName;
       _isBarAccount = isBar;
-      _barId = barId;
 
       // ✅ setzen
       profileImageUrl =
@@ -337,25 +370,68 @@ String _safeDocId(String input) => input
     }
   }
 
-  Future<void> _loadLegalWarnState() async {
+
+  // =========================
+  // ✅ FILTER-PERSISTENZ (SharedPreferences)
+  // =========================
+  // Standard beim ersten Öffnen: ALLES sichtbar (Partys, Bars, Festln),
+  // nichts gefiltert. Erst danach gespeicherte Werte anwenden. Fehlende
+  // Keys → Default = sichtbar/kein Limit.
+  static const String _kPrefShowParties = 'filter_showParties_v1';
+  static const String _kPrefShowBars = 'filter_showBars_v1';
+  static const String _kPrefShowFestln = 'filter_showFestln_v1';
+  static const String _kPrefOnlyFree = 'filter_onlyFree_v1';
+  static const String _kPrefOnlyOpen = 'filter_onlyOpen_v1';
+  static const String _kPrefOnlyClosed = 'filter_onlyClosed_v1';
+  static const String _kPrefMinAge = 'filter_minAge_v1';
+  static const String _kPrefMaxEntry = 'filter_maxEntry_v1';
+  static const String _kPrefRadius = 'filter_radiusKm_v1';
+
+  Future<void> _loadFilterPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    if (_isBarAccount) {
-      if (!mounted) return;
-      setState(() {
-        _legalWarnDismissed = true;
-      });
-      return;
+    _showParties = prefs.getBool(_kPrefShowParties) ?? true;
+    _showBars = prefs.getBool(_kPrefShowBars) ?? true;
+    _showFestln = prefs.getBool(_kPrefShowFestln) ?? true;
+    _onlyFree = prefs.getBool(_kPrefOnlyFree) ?? false;
+    _onlyOpenParties = prefs.getBool(_kPrefOnlyOpen) ?? false;
+    _onlyClosedParties = prefs.getBool(_kPrefOnlyClosed) ?? false;
+    // -1 als Sentinel für "nicht gesetzt" (kein Limit).
+    final minAge = prefs.getInt(_kPrefMinAge);
+    _minAgeFilter = (minAge == null || minAge < 0) ? null : minAge;
+    if (prefs.containsKey(_kPrefMaxEntry)) {
+      _maxEntryFilter = prefs.getDouble(_kPrefMaxEntry);
     }
-    if (!mounted) return;
-    setState(() {
-      _legalWarnDismissed = prefs.getBool('legalWarnDismissed_v1') ?? false;
-    });
+    if (prefs.containsKey(_kPrefRadius)) {
+      final r = prefs.getDouble(_kPrefRadius);
+      _radiusKm = (r != null && r < 0) ? null : r;
+    }
+    // Konsistenz: bei ausgeblendeten Partys keine Party-Sub-Filter aktiv.
+    if (!_showParties) {
+      _onlyOpenParties = false;
+      _onlyClosedParties = false;
+      _onlyFree = false;
+      _minAgeFilter = null;
+      _maxEntryFilter = null;
+    }
+    if (_onlyOpenParties && _onlyClosedParties) _onlyClosedParties = false;
   }
 
-  Future<void> _dismissLegalWarn() async {
+  Future<void> _saveFilterPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('legalWarnDismissed_v1', true);
-    if (mounted) setState(() => _legalWarnDismissed = true);
+    await prefs.setBool(_kPrefShowParties, _showParties);
+    await prefs.setBool(_kPrefShowBars, _showBars);
+    await prefs.setBool(_kPrefShowFestln, _showFestln);
+    await prefs.setBool(_kPrefOnlyFree, _onlyFree);
+    await prefs.setBool(_kPrefOnlyOpen, _onlyOpenParties);
+    await prefs.setBool(_kPrefOnlyClosed, _onlyClosedParties);
+    await prefs.setInt(_kPrefMinAge, _minAgeFilter ?? -1);
+    if (_maxEntryFilter != null) {
+      await prefs.setDouble(_kPrefMaxEntry, _maxEntryFilter!);
+    } else {
+      await prefs.remove(_kPrefMaxEntry);
+    }
+    // -1 als Sentinel für "kein Radius-Limit".
+    await prefs.setDouble(_kPrefRadius, _radiusKm ?? -1);
   }
 
   // =========================
@@ -826,24 +902,6 @@ String _safeDocId(String input) => input
     return t == 'closed' || b == true;
   }
 
-  Future<bool> _partyIsBlockedByReports(String partyId) async {
-    try {
-      final snap = await FirebaseFirestore.instance
-          .collection('Meldungen')
-          .where('type', isEqualTo: 'party')
-          .where('partyId', isEqualTo: partyId)
-          .where('status', isEqualTo: 'open')
-          .limit(3)
-          .get();
-
-      // >= 3 offene Meldungen → Party ausblenden
-      return snap.docs.length >= 3;
-    } catch (_) {
-      return false;
-    }
-  }
-
-
   LatLng? _parseLatLng(Map<String, dynamic> d) {
     try {
       if (d['lat'] != null && d['lng'] != null) {
@@ -993,9 +1051,8 @@ String _safeDocId(String input) => input
     // am User-eigenen RSVP-Status. Wenn du hier Marker-Cleanup machst,
     // achte darauf, social_* nicht aus Versehen zu killen.
     final mid = partyId;
-    final existing = _markers.where((m) => m.markerId.value == mid).toList();
-    if (existing.isEmpty) return;
-    final old = existing.first;
+    final old = _getMarker(mid);
+    if (old == null) return;
 
     _openPartyStatus[partyId] = _normOpenStatus(status);
     _openPartyIsHost[partyId] = isHost;
@@ -1010,8 +1067,7 @@ String _safeDocId(String input) => input
         : _iconForOpenPartyMarker(partyId);
 
     setState(() {
-      _markers.removeWhere((m) => m.markerId.value == mid);
-      _markers.add(Marker(
+      _putMarker(Marker(
         markerId: MarkerId(mid),
         position: old.position,
         icon: icon,
@@ -1045,7 +1101,7 @@ String _safeDocId(String input) => input
 
   Future<void> _refreshMapImpl() async {
     _partyCache.clear();
-    _markers.clear();
+    _clearMarkers();
     _circles.clear();
     _closedPartyStatus.clear();
     _openPartyStatus.clear();
@@ -1056,6 +1112,7 @@ String _safeDocId(String input) => input
     // await im Loop). Nur 2 Reads gesamt (Partys + Bars) statt 40-80.
     await _loadPartiesFromFirebase();
     await _loadBarsFromFirebase();
+    await _loadFestlnFromFirebase();
 
     // Phase 4: City-Mood aus den bereits geladenen Party-Docs ableiten.
     // Pure function, O(n) — keine zusätzlichen Reads.
@@ -1117,9 +1174,8 @@ String _safeDocId(String input) => input
   /// _enrichPartyStatuses aufgerufen). Social-Overlays bleiben unberührt.
   void _applyClosedMarkerIcon(String partyId, String? status) {
     final mid = 'lock_$partyId';
-    final existing = _markers.where((m) => m.markerId.value == mid).toList();
-    if (existing.isEmpty) return;
-    final old = existing.first;
+    final old = _getMarker(mid);
+    if (old == null) return;
     final data = _partyCache[partyId];
     final isHost = data != null && _isHostForPartyData(data);
 
@@ -1134,8 +1190,7 @@ String _safeDocId(String input) => input
       icon = _lockIconGrey ?? BitmapDescriptor.defaultMarker;
     }
 
-    _markers.removeWhere((m) => m.markerId.value == mid);
-    _markers.add(Marker(
+    _putMarker(Marker(
       markerId: MarkerId(mid),
       position: old.position,
       icon: icon,
@@ -1148,9 +1203,8 @@ String _safeDocId(String input) => input
   /// (kein eigenes setState). Liest _openPartyStatus/_openPartyIsHost die
   /// vorher gesetzt wurden.
   void _applyOpenMarkerIcon(String partyId) {
-    final existing = _markers.where((m) => m.markerId.value == partyId).toList();
-    if (existing.isEmpty) return;
-    final old = existing.first;
+    final old = _getMarker(partyId);
+    if (old == null) return;
     final data = _partyCache[partyId];
     final isFriendsOnly = data != null &&
         (data['visibility'] ?? 'public').toString() == 'friends' &&
@@ -1160,8 +1214,7 @@ String _safeDocId(String input) => input
         ? _iconForFriendsPartyMarker(partyId)
         : _iconForOpenPartyMarker(partyId);
 
-    _markers.removeWhere((m) => m.markerId.value == partyId);
-    _markers.add(Marker(
+    _putMarker(Marker(
       markerId: MarkerId(partyId),
       position: old.position,
       icon: icon,
@@ -1318,7 +1371,7 @@ String _safeDocId(String input) => input
               ? (_lockIconBlue ?? BitmapDescriptor.defaultMarker)
               : (_lockIconGrey ?? BitmapDescriptor.defaultMarker);
 
-          _markers.add(Marker(
+          _putMarker(Marker(
             markerId: MarkerId('lock_${doc.id}'),
             position: fakeCenter,
             icon: icon,
@@ -1355,7 +1408,7 @@ String _safeDocId(String input) => input
               ? _iconForFriendsPartyMarker(doc.id)
               : _iconForOpenPartyMarker(doc.id);
 
-          _markers.add(Marker(
+          _putMarker(Marker(
             markerId: MarkerId(doc.id),
             position: pos,
             icon: icon,
@@ -1466,7 +1519,7 @@ String _safeDocId(String input) => input
       final icon = useDouble ? _friendDotDoubleIcon! : _friendDotIcon;
       if (icon == null) return;
 
-      _markers.add(Marker(
+      _putMarker(Marker(
         markerId: MarkerId('social_dot_$markerId'),
         position: position,
         icon: icon,
@@ -1585,7 +1638,7 @@ String _safeDocId(String input) => input
             ? _barIconEventRingCache[job.iconKey]
             : _barIconCache[job.iconKey];
         if (icon == null) continue; // build fehlgeschlagen → still überspringen
-        _markers.add(
+        _putMarker(
           Marker(
             markerId: MarkerId('bar_${job.docId}'),
             position: job.pos,
@@ -1596,6 +1649,80 @@ String _safeDocId(String input) => input
         );
       }
     } catch (_) {}
+  }
+
+  // =========================
+  // 🎡 FESTLN (admin-kuratierte Events mit eigenem Symbol)
+  // =========================
+
+  /// Festl gilt als abgelaufen, wenn endTime (fallback startTime) plus
+  /// Nachlauf-Fenster vorbei ist.
+  bool _festlExpired(Map<String, dynamic> data, DateTime now) {
+    final raw = data['endTime'] ?? data['startTime'];
+    if (raw is! Timestamp) return false;
+    final ref = raw.toLocalDateTime();
+    return now.isAfter(ref.add(const Duration(hours: _festlHoursAfterEnd)));
+  }
+
+  Future<void> _loadFestlnFromFirebase() async {
+    if (!_showFestln) return;
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('festln')
+          .where('status', isEqualTo: 'approved')
+          .get();
+
+      final now = DateTime.now();
+
+      // Festl-Emoji-Marker einmal rendern (zoom-invariant, wie Bar-Marker).
+      _festlIcon ??= BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+        diameter: _festlBaseDiameter,
+        circleColor: _festlColor,
+        emoji: "🎡",
+        emojiColor: Colors.white,
+        emojiScale: .58,
+      ));
+
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+
+        if (_festlExpired(data, now)) continue;
+
+        final pos = _parseLatLng(data);
+        if (pos == null) continue;
+
+        if (_radiusKm != null) {
+          final distKm = _haversineKm(
+              _currentLat, _currentLng, pos.latitude, pos.longitude);
+          if (distKm > _radiusKm!) continue;
+        }
+
+        _putMarker(Marker(
+          markerId: MarkerId('festl_${doc.id}'),
+          position: pos,
+          icon: _festlIcon!,
+          infoWindow:
+              InfoWindow(title: (data['festlName'] ?? 'Festl').toString()),
+          onTap: () => _openFestlSheet(data, doc.id),
+        ));
+      }
+    } catch (_) {}
+  }
+
+  void _openFestlSheet(Map<String, dynamic> data, String festlId) async {
+    if (!mounted) return;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => FestlBottomSheet(
+        festlId: festlId,
+        festlData: data,
+        currentUsername: _currentUsername,
+        currentAvatarUrl: profileImageUrl,
+        friendUsernames: _myFriendsSet,
+      ),
+    );
   }
 
   // =========================
@@ -1644,7 +1771,12 @@ String _safeDocId(String input) => input
       return;
     }
 
-    final myDocId = _safeDocId(username);
+    // Eigenes User-Doc == authentifizierte UID (== Firestore-Doc-ID). NIE
+    // doc(username): der Zähler-Write unten aktualisiert das User-DOKUMENT,
+    // und die Rules erlauben das nur für auth.uid == docId — mit dem
+    // Username-Key schlägt die Transaktion mit PERMISSION_DENIED fehl.
+    final myDocId = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (myDocId.isEmpty) return;
     final userRef = FirebaseFirestore.instance.collection('users').doc(myDocId);
 
     final userRatingRef = userRef.collection('partyRatings').doc(partyId);
@@ -1885,7 +2017,11 @@ String _safeDocId(String input) => input
   }
 
   Future<bool> _userHasRated(String partyId, String username) async {
-    final myDocId = _safeDocId(username);
+    // Eigenes User-Doc == authentifizierte UID (== Firestore-Doc-ID).
+    // Muss denselben Key wie _setRating verwenden, sonst schlägt der
+    // "schon bewertet?"-Check fehl.
+    final myDocId = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (myDocId.isEmpty) return false;
     final snap = await FirebaseFirestore.instance
         .collection('users')
         .doc(myDocId)
@@ -2227,9 +2363,8 @@ String _safeDocId(String input) => input
     final lockId = 'lock_$partyId';
     final hitId = 'hit_$partyId';
 
-    final existing = _markers.where((m) => m.markerId.value == lockId).toList();
-    if (existing.isEmpty) return;
-    final old = existing.first;
+    final old = _getMarker(lockId);
+    if (old == null) return;
 
     BitmapDescriptor icon;
     if (status == 'approved') {
@@ -2241,8 +2376,7 @@ String _safeDocId(String input) => input
     }
 
     setState(() {
-      _markers.removeWhere((m) => m.markerId.value == lockId);
-      _markers.add(Marker(
+      _putMarker(Marker(
         markerId: MarkerId(lockId),
         position: old.position,
         icon: icon,
@@ -2252,9 +2386,9 @@ String _safeDocId(String input) => input
         onTap: () => _openPartySheet(_partyCache[partyId]!, partyId),
       ));
 
-      // hitbox sicherstellen
-      if (_markers.every((m) => m.markerId.value != hitId)) {
-        _markers.add(Marker(
+      // hitbox sicherstellen (O(1)-Index statt O(N)-every)
+      if (!_markerById.containsKey(hitId)) {
+        _putMarker(Marker(
           markerId: MarkerId(hitId),
           position: old.position,
           icon: _hitboxIcon ??
@@ -2277,125 +2411,103 @@ String _safeDocId(String input) => input
     return 0.6 + 0.4 * t;
   }
 
+  /// Perzeptueller Größen-Bucket für einen Zoom-Wert (~0.08-Skalenschritte).
+  double _bucketForZoom(double zoom) => (_zoomToScale(zoom) / 0.08).round() * 0.08;
+
   Future<void> _onCameraIdle() async {
-    if (_lastCameraPosition == null) return;
+    final pos = _lastCameraPosition;
+    if (pos == null) return;
 
-    final newZoom = _lastCameraPosition!.zoom;
-    if ((newZoom - _currentZoom).abs() < 0.5) return;
-
-    _currentZoom = newZoom;
-
+    // Nur neu rendern, wenn sich die SICHTBARE Markergröße ändert. Früher
+    // feuerte das bei jedem 0.5-Zoom-Schritt (Größenänderung ~1.4% =
+    // unsichtbar) und löste trotzdem 13 PNG-Encodes + Marker-Rebuild aus.
+    final bucket = _bucketForZoom(pos.zoom);
+    if (bucket == _iconScaleBucket) return;
     if (_isUpdatingZoomIcons) return;
-    _isUpdatingZoomIcons = true;
 
+    _isUpdatingZoomIcons = true;
+    _iconScaleBucket = bucket;
     try {
-      await _updateCustomMarkerSizesForZoom();
+      await _updateCustomMarkerSizesForZoom(bucket);
     } finally {
       _isUpdatingZoomIcons = false;
     }
   }
 
-  Future<void> _updateCustomMarkerSizesForZoom() async {
-    final scale = _zoomToScale(_currentZoom);
+  Future<void> _updateCustomMarkerSizesForZoom(double bucket) async {
+    // Cache-Hit: Icons für diese Größe schon erzeugt → nur zuweisen, KEIN
+    // erneutes PNG-Encoding (der teuerste Teil). Nur Marker-Rebuild.
+    final cached = _zoomIconCache[bucket];
+    if (cached != null) {
+      _assignZoomIcons(cached);
+      _rebuildMarkersWithNewIcons();
+      return;
+    }
 
+    final scale = bucket.clamp(0.55, 1.0);
     final lockDiameter = (_lockBaseDiameter * scale).round();
     final friendsDiameter = (_friendsBaseDiameter * scale).round();
     final hitDiameter = (_hitBaseDiameter * scale).round();
 
-    _lockIconBlue = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: lockDiameter,
-      circleColor: const Color(0xFF1976D2),
-      icon: Icons.lock_rounded,
-      iconColor: Colors.white,
-      iconScale: .60,
-    ));
-    _lockIconGrey = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: lockDiameter,
-      circleColor: const Color(0xFF424242),
-      icon: Icons.lock_rounded,
-      iconColor: Colors.white,
-      iconScale: .60,
-    ));
-    _lockIconGreen = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: lockDiameter,
-      circleColor: const Color(0xFF2E7D32),
-      icon: Icons.lock_rounded,
-      iconColor: Colors.white,
-      iconScale: .60,
-    ));
-    _lockIconRed = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: lockDiameter,
-      circleColor: const Color(0xFFD32F2F),
-      icon: Icons.lock_rounded,
-      iconColor: Colors.white,
-      iconScale: .60,
-    ));
+    Future<BitmapDescriptor> icon(Color c, IconData i, int d) async =>
+        BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
+          diameter: d,
+          circleColor: c,
+          icon: i,
+          iconColor: Colors.white,
+          iconScale: .60,
+        ));
+    Future<BitmapDescriptor> party(Color c) async =>
+        BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
+          diameter: lockDiameter,
+          circleColor: c,
+          emoji: "🎉",
+          emojiColor: Colors.white,
+          emojiScale: .62,
+        ));
 
-    _hitboxIcon = BitmapDescriptor.fromBytes(
-      await _drawTransparentCircle(diameter: hitDiameter),
-    );
+    const lock = Icons.lock_rounded;
+    const people = Icons.people_alt_rounded;
 
-    _friendsOnlyIcon = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: friendsDiameter,
-      circleColor: const Color(0xFF6A1B9A),
-      icon: Icons.people_alt_rounded,
-      iconColor: Colors.white,
-      iconScale: .60,
-    ));
+    final icons = <String, BitmapDescriptor>{
+      'lockBlue': await icon(const Color(0xFF1976D2), lock, lockDiameter),
+      'lockGrey': await icon(const Color(0xFF424242), lock, lockDiameter),
+      'lockGreen': await icon(const Color(0xFF2E7D32), lock, lockDiameter),
+      'lockRed': await icon(const Color(0xFFD32F2F), lock, lockDiameter),
+      'hitbox': BitmapDescriptor.fromBytes(
+          await _drawTransparentCircle(diameter: hitDiameter)),
+      'friendsOnly': await icon(const Color(0xFF6A1B9A), people, friendsDiameter),
+      'friendsBlue': await icon(const Color(0xFF1976D2), people, friendsDiameter),
+      'friendsGreen': await icon(const Color(0xFF2E7D32), people, friendsDiameter),
+      'friendsOrange':
+          await icon(const Color(0xFFF57C00), people, friendsDiameter),
+      'partyBlue': await party(const Color(0xFF1976D2)),
+      'partyGreen': await party(const Color(0xFF2E7D32)),
+      'partyOrange': await party(const Color(0xFFF57C00)),
+      'partyRed': await party(const Color(0xFFD32F2F)),
+    };
 
-    _friendsIconBlue = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: friendsDiameter,
-      circleColor: const Color(0xFF1976D2),
-      icon: Icons.people_alt_rounded,
-      iconColor: Colors.white,
-      iconScale: .60,
-    ));
-    _friendsIconGreen = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: friendsDiameter,
-      circleColor: const Color(0xFF2E7D32),
-      icon: Icons.people_alt_rounded,
-      iconColor: Colors.white,
-      iconScale: .60,
-    ));
-    _friendsIconOrange = BitmapDescriptor.fromBytes(await _drawCircleWithIcon(
-      diameter: friendsDiameter,
-      circleColor: const Color(0xFFF57C00),
-      icon: Icons.people_alt_rounded,
-      iconColor: Colors.white,
-      iconScale: .60,
-    ));
-    _friendsIconPurple = _friendsOnlyIcon;
-
-    _partyIconBlue = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
-      diameter: lockDiameter,
-      circleColor: const Color(0xFF1976D2),
-      emoji: "🎉",
-      emojiColor: Colors.white,
-      emojiScale: .62,
-    ));
-    _partyIconGreen = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
-      diameter: lockDiameter,
-      circleColor: const Color(0xFF2E7D32),
-      emoji: "🎉",
-      emojiColor: Colors.white,
-      emojiScale: .62,
-    ));
-    _partyIconOrange = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
-      diameter: lockDiameter,
-      circleColor: const Color(0xFFF57C00),
-      emoji: "🎉",
-      emojiColor: Colors.white,
-      emojiScale: .62,
-    ));
-    _partyIconRed = BitmapDescriptor.fromBytes(await _drawCircleWithEmoji(
-      diameter: lockDiameter,
-      circleColor: const Color(0xFFD32F2F),
-      emoji: "🎉",
-      emojiColor: Colors.white,
-      emojiScale: .62,
-    ));
-
+    _zoomIconCache[bucket] = icons;
+    _assignZoomIcons(icons);
     _rebuildMarkersWithNewIcons();
+  }
+
+  /// Weist die gecachten Zoom-Icons den Feldern zu (kein Encoding).
+  void _assignZoomIcons(Map<String, BitmapDescriptor> m) {
+    _lockIconBlue = m['lockBlue'];
+    _lockIconGrey = m['lockGrey'];
+    _lockIconGreen = m['lockGreen'];
+    _lockIconRed = m['lockRed'];
+    _hitboxIcon = m['hitbox'];
+    _friendsOnlyIcon = m['friendsOnly'];
+    _friendsIconBlue = m['friendsBlue'];
+    _friendsIconGreen = m['friendsGreen'];
+    _friendsIconOrange = m['friendsOrange'];
+    _friendsIconPurple = m['friendsOnly'];
+    _partyIconBlue = m['partyBlue'];
+    _partyIconGreen = m['partyGreen'];
+    _partyIconOrange = m['partyOrange'];
+    _partyIconRed = m['partyRed'];
   }
 
   void _rebuildMarkersWithNewIcons() {
@@ -2456,9 +2568,14 @@ String _safeDocId(String input) => input
     }
 
     setState(() {
+      // Beide Strukturen atomar aus derselben Quelle (newMarkers) neu
+      // befüllen → garantierte Konsistenz. newMarkers hat eindeutige ids.
       _markers
         ..clear()
         ..addAll(newMarkers);
+      _markerById
+        ..clear()
+        ..addEntries(newMarkers.map((m) => MapEntry(m.markerId.value, m)));
     });
   }
 
@@ -2491,6 +2608,7 @@ String _safeDocId(String input) => input
   Future<void> _openFilterSheet() async {
     bool showParties = _showParties;
     bool showBars = _showBars;
+    bool showFestln = _showFestln;
     bool onlyFree = _onlyFree;
     int? minAge = _minAgeFilter;
     double? maxEntry = _maxEntryFilter;
@@ -2528,6 +2646,7 @@ String _safeDocId(String input) => input
             if (fo && fc) fc = false;
             Navigator.of(ctx).pop(<String, dynamic>{
               'showParties': showParties, 'showBars': showBars,
+              'showFestln': showFestln,
               'onlyFree': ff, 'minAge': fa, 'maxEntry': fe,
               'onlyOpen': fo, 'onlyClosed': fc,
               'radiusKm': radius, 'reset': false,
@@ -2668,6 +2787,9 @@ String _safeDocId(String input) => input
                       _filterToggle("Bars anzeigen", showBars,
                           (v) => setSB(() => showBars = v)),
                       const SizedBox(height: 4),
+                      _filterToggle("Festln anzeigen", showFestln,
+                          (v) => setSB(() => showFestln = v)),
+                      const SizedBox(height: 4),
                       _filterToggle("Nur gratis Partys", onlyFree,
                           showParties ? (v) => setSB(() {
                             onlyFree = v;
@@ -2779,6 +2901,7 @@ String _safeDocId(String input) => input
       setState(() {
         _showParties = true;
         _showBars = true;
+        _showFestln = true;
         _onlyFree = false;
         _minAgeFilter = null;
         _maxEntryFilter = null;
@@ -2786,6 +2909,7 @@ String _safeDocId(String input) => input
         _onlyClosedParties = false;
         _radiusKm = 25.0;
       });
+      await _saveFilterPrefs();
       await _refreshMap();
       if (mounted) await _showCenterSuccess("Filter zurückgesetzt");
       return;
@@ -2794,6 +2918,7 @@ String _safeDocId(String input) => input
     setState(() {
       _showParties = result['showParties'] as bool? ?? _showParties;
       _showBars = result['showBars'] as bool? ?? _showBars;
+      _showFestln = result['showFestln'] as bool? ?? _showFestln;
       _onlyFree = result['onlyFree'] as bool? ?? _onlyFree;
       _minAgeFilter = result['minAge'] as int?;
       _maxEntryFilter = result['maxEntry'] as double?;
@@ -2811,6 +2936,7 @@ String _safeDocId(String input) => input
       if (_onlyOpenParties && _onlyClosedParties) _onlyClosedParties = false;
     });
 
+    await _saveFilterPrefs();
     await _refreshMap();
   }
 
@@ -2839,6 +2965,10 @@ String _safeDocId(String input) => input
               markers: _markers,
               circles: _circles,
               padding: EdgeInsets.only(top: topPad + 130, bottom: 80),
+              // Kein Gerätestandort: kein blauer Punkt, kein MyLocation-Button,
+              // keine Runtime-Permission. Karte nutzt nur die gewählte Stadt
+              // (selectedLat/Lng) als Startkamera.
+              myLocationEnabled: false,
               myLocationButtonEnabled: false,
               onMapCreated: (controller) async {
                 mapController = controller;
@@ -3038,38 +3168,6 @@ String _safeDocId(String input) => input
     );
   }
 
-  Widget _legalWarningBanner() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF3CD),
-        border: Border.all(color: const Color(0xFFFFEEBA)),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: const [
-          BoxShadow(color: Color(0x22000000), blurRadius: 8, offset: Offset(0, 3))
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.warning_amber_rounded, color: Color(0xFF856404)),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Text(
-              "WICHTIG: Das Erstellen von Fake-Partys ist rechtlich VERBOTEN. Nur echte, wahrheitsgemäße Angaben machen.",
-              style: TextStyle(color: Color(0xFF856404), fontWeight: FontWeight.w800),
-            ),
-          ),
-          IconButton(
-            tooltip: "Hinweis ausblenden",
-            onPressed: _dismissLegalWarn,
-            icon: const Icon(Icons.close, color: Color(0xFF856404)),
-          ),
-        ],
-      ),
-    );
-  }
 
   Future<void> _showCenterSuccess(String text) async {
     if (!mounted) return;

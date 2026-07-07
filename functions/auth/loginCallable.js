@@ -253,19 +253,61 @@ exports.loginCallable = onCall(
       }
     }
 
+    // ── Admin-Claim (server-seitig, nicht client-spoofbar) ──────────────
+    // Der `admin`-Custom-Claim ist die EINZIGE Quelle für Admin-Rechte in
+    // Firestore-Rules (isAdmin()) und Admin-Cloud-Functions (assertAdmin).
+    // Er wird HIER beim Login server-verifiziert vergeben:
+    //   • primär über das Feld users/{uid}.isAdmin === true. Dieses Feld ist
+    //     in den Rules server-only (lockedUserFields) → ein Client kann es
+    //     NICHT selbst setzen.
+    //   • Bootstrap für den bekannten Stamm-Admin (ADMIN_USERNAMES): beim
+    //     ersten Login wird isAdmin=true persistiert, damit er den Claim
+    //     bekommt, ohne dass jemand manuell in der Console rumsetzen muss.
+    //     Usernames sind eindeutig → niemand sonst kann "admin_pp" belegen.
+    const ADMIN_USERNAMES = ["admin_pp"];
+    const uname = (account.data.username || "").toString();
+    let isAdmin = account.data.isAdmin === true;
+    if (
+      !isAdmin &&
+      account.collection === "users" &&
+      ADMIN_USERNAMES.includes(uname)
+    ) {
+      isAdmin = true;
+      // isAdmin-Feld für Konsistenz persistieren (server-only Feld).
+      try {
+        await db
+          .collection(account.collection)
+          .doc(account.docId)
+          .set({ isAdmin: true }, { merge: true });
+      } catch (e) {
+        logger.warn("[login] isAdmin bootstrap write failed", {
+          docId: account.docId,
+          msg: e?.message,
+        });
+        // Nicht-fatal — der Claim wird trotzdem ins Token geschrieben.
+      }
+    }
+
     // Custom Token: UID = docId. Custom Claims enthalten userType +
     // username, damit die App das aus dem ID-Token lesen kann (kein
-    // extra Firestore-Read nach Login).
+    // extra Firestore-Read nach Login). Bei Admins zusätzlich `admin: true`.
     const uid = account.docId;
+    const claims = {
+      username: uname,
+      userType: account.userType,
+    };
+    if (isAdmin) claims.admin = true;
+
     let customToken;
     try {
-      customToken = await admin.auth().createCustomToken(uid, {
-        username: (account.data.username || "").toString(),
-        userType: account.userType,
-      });
+      customToken = await admin.auth().createCustomToken(uid, claims);
     } catch (e) {
       logger.error("[login] custom token failed", { uid, msg: e?.message });
       throw new HttpsError("internal", "Token konnte nicht erstellt werden.");
+    }
+
+    if (isAdmin) {
+      logger.info("[login] admin token issued", { uid, username: uname });
     }
 
     // Telemetrie: lastActive + login-Quelle. Best-effort, nicht-fatal.

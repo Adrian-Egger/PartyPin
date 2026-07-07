@@ -134,16 +134,6 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  Color _avatarColor(String name) {
-    const colors = [
-      Color(0xFF5C6BC0), Color(0xFF7B52AB), Color(0xFF00897B),
-      Color(0xFF1565C0), Color(0xFF6D4C41), Color(0xFF2E7D32),
-      Color(0xFF37474F), Color(0xFF6A1B9A),
-    ];
-    if (name.isEmpty) return AppColors.panelAlt;
-    return colors[name.codeUnitAt(0) % colors.length];
-  }
-
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override

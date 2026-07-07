@@ -1,8 +1,10 @@
 // lib/Screens/menu_screen.dart
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import 'selection_screen.dart';
 import '../../l10n/lang.dart';
@@ -45,18 +47,6 @@ Future<String> _currentUsername() async {
   return (prefs.getString('currentUsername') ?? '').trim();
 }
 
-Future<Map<String, dynamic>?> _getSavedLocation() async {
-  final prefs = await SharedPreferences.getInstance();
-  final city = prefs.getString('city');
-  final lat = prefs.getDouble('selectedLat');
-  final lng = prefs.getDouble('selectedLng');
-
-  if (city != null && lat != null && lng != null) {
-    return {'city': city, 'latitude': lat, 'longitude': lng};
-  }
-  return null;
-}
-
 // =======================
 // APPLE: BAN WATCHER (global UI eject)
 // =======================
@@ -77,10 +67,12 @@ class BanWatcher extends StatelessWidget {
         }
 
         final username = snap.data!.trim();
-        if (username.isEmpty) return child;
+        // Eigenes Profil-Doc == authentifizierte UID (== Firestore-Doc-ID).
+        final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+        if (username.isEmpty || uid.isEmpty) return child;
 
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance.collection('users').doc(username).snapshots(),
+          stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
           builder: (context, userSnap) {
             if (!userSnap.hasData) return child;
 
@@ -117,8 +109,10 @@ class _RequireTermsAcceptedState extends State<RequireTermsAccepted> {
   }
 
   Future<void> _check() async {
-    final username = await _currentUsername();
-    if (username.isEmpty) {
+    // Eigenes Profil-Doc == authentifizierte UID (== Firestore-Doc-ID). NIE
+    // doc(username) — sonst wird das falsche/nicht-eigene Dokument gelesen.
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isEmpty) {
       if (!mounted) return;
       setState(() {
         _checking = false;
@@ -127,7 +121,7 @@ class _RequireTermsAcceptedState extends State<RequireTermsAccepted> {
       return;
     }
 
-    final userDoc = await FirebaseFirestore.instance.collection('users').doc(username).get();
+    final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
     final data = userDoc.data() ?? {};
 
     if (data['banned'] == true) {
@@ -210,13 +204,15 @@ class _TermsGateScreenState extends State<TermsGateScreen> {
 
     setState(() => saving = true);
 
-    final username = await _currentUsername();
-    if (username.isEmpty) {
+    // Eigenes User-Doc == authentifizierte UID (== Firestore-Doc-ID). NIE
+    // doc(username) — der Username ist nur ein Feld, nicht die Doc-ID.
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isEmpty) {
       setState(() => saving = false);
       return;
     }
 
-    await FirebaseFirestore.instance.collection('users').doc(username).set({
+    await FirebaseFirestore.instance.collection('users').doc(uid).set({
       'termsAccepted': true,
       'termsAcceptedAt': FieldValue.serverTimestamp(),
       'termsVersion': kRequiredTermsVersion,
@@ -388,10 +384,32 @@ class AdminReportsScreen extends StatelessWidget {
   }
 
   Future<void> _banUser(String username) async {
-    await FirebaseFirestore.instance.collection('users').doc(username).set({
-      'banned': true,
-      'bannedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    final uname = username.trim();
+    if (uname.isEmpty) {
+      throw Exception('Kein Benutzername im Report.');
+    }
+
+    // Ziel-uid korrekt ermitteln (nicht raten): Die users-Doc-ID == Auth-UID,
+    // der `username` ist NUR ein Feld. Deshalb per Query auflösen — Usernames
+    // sind eindeutig, doc.id ist die gesuchte uid (== dieselbe uid, mit der
+    // admin_user_detail_screen bannt).
+    final q = await FirebaseFirestore.instance
+        .collection('users')
+        .where('username', isEqualTo: uname)
+        .limit(1)
+        .get();
+    if (q.docs.isEmpty) {
+      throw Exception('User "$uname" nicht gefunden.');
+    }
+    final uid = q.docs.first.id;
+
+    // Ban ausschließlich über die Cloud Function adminBanUser: sie deaktiviert
+    // den Firebase-Auth-Account, widerruft Refresh-Tokens und spiegelt
+    // `banned` server-seitig nach users/{uid}. KEIN direkter Firestore-Write
+    // mehr vom Client.
+    final fn = FirebaseFunctions.instanceFor(region: 'europe-west1')
+        .httpsCallable('adminBanUser');
+    await fn.call(<String, dynamic>{'uid': uid});
   }
 
   Future<void> _closeReport({
@@ -572,7 +590,22 @@ class AdminReportsScreen extends StatelessWidget {
                             onPressed: reported.isEmpty
                                 ? null
                                 : () async {
-                              await _banUser(reported);
+                              try {
+                                await _banUser(reported);
+                              } catch (e) {
+                                if (sheetCtx.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text("Ban fehlgeschlagen: $e"),
+                                      backgroundColor: _accent,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                  );
+                                }
+                                return;
+                              }
+                              // Report erst schließen, wenn der Ban erfolgreich war.
                               await _closeReport(reportId: reportId, action: "banned", moderatorUsername: kAdminUsername);
                               if (sheetCtx.mounted) {
                                 Navigator.pop(sheetCtx);
@@ -826,13 +859,19 @@ class MenuScreen extends StatelessWidget {
     final username = (prefs.getString('currentUsername') ?? '').trim();
     if (username.isEmpty) return false;
 
-    try {
-      final userSnap = await FirebaseFirestore.instance.collection('users').doc(username).get();
-      final isBarFlag = userSnap.data()?['isBarAccount'] == true;
-      if (isBarFlag) return true;
-    } catch (_) {}
+    // Eigenes Profil-Doc über UID lesen (Doc-ID == uid, NICHT username).
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isNotEmpty) {
+      try {
+        final userSnap =
+            await FirebaseFirestore.instance.collection('users').doc(uid).get();
+        final isBarFlag = userSnap.data()?['isBarAccount'] == true;
+        if (isBarFlag) return true;
+      } catch (_) {}
+    }
 
     try {
+      // Bars nutzen den username ALS Doc-ID (bars/{username}) — korrekt so.
       final barSnap = await FirebaseFirestore.instance.collection('bars').doc(username).get();
       if (barSnap.exists) return true;
     } catch (_) {}

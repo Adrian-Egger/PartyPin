@@ -642,16 +642,13 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       await batch.commit();
     }
 
-    // ── FCM-Token-Doc (users/{username} als Doc-ID) ──────────
-    final tokenSnap =
-        await db.collection('users').doc(oldName).get();
-    if (tokenSnap.exists) {
-      final batch = db.batch();
-      batch.set(db.collection('users').doc(newName),
-          tokenSnap.data() ?? {});
-      batch.delete(tokenSnap.reference);
-      await batch.commit();
-    }
+    // ── KEIN users-Doc-Move mehr ──────────────────────────────
+    // Die Firestore-Doc-ID des Profils ist die Auth-UID (== fullName aus
+    // signupCallable), NICHT der Username. Bei einer Umbenennung ändert sich
+    // nur das Feld `username` (bereits in _saveUsername via _col.doc(_docId)
+    // gesetzt) — die Doc-ID bleibt stabil. Das frühere Verschieben von
+    // users/{oldUsername} → users/{newUsername} basierte auf der falschen
+    // Annahme docId==username und legte im Zweifel nur ein Phantom-Doc an.
 
     // ── FriendRequests: to-Seite ──
     final toSnaps = await db

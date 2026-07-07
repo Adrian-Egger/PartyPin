@@ -27,7 +27,6 @@ class _TermsScreenState extends State<TermsScreen> {
   static const _textPrimary = AppColors.text;
   static const _textSecondary = AppColors.muted;
   static const _accent = AppColors.accent;
-  static const _secondary = AppColors.teal;
 
   Future<void> _acceptTerms() async {
     setState(() => _isSaving = true);
