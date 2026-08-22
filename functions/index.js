@@ -41,12 +41,19 @@ const FieldValue = admin.firestore.FieldValue;
 // ✅ Scheduler (v2)
 const eventsCleanup = require("./eventCleanup");
 const avatarCleanup = require("./avatarCleanup");
+const festllisteSync = require("./festlliste/sync");
 
 // SECURITY_HARDENING (Audit M2): `cleanupExpiredEvents` wurde vorher
 // zweimal exportiert (hier UND weiter unten). Die zweite Stelle ist
 // entfernt — Single source of truth.
 exports.cleanupExpiredEvents = eventsCleanup.cleanupExpiredEvents;
 exports.cleanupOrphanAvatars = avatarCleanup.cleanupOrphanAvatars;
+
+// FEATURE_FESTLLISTE_IMPORT: täglicher automatischer Import der
+// "Festl-Liste" (linkrex.eu/@festlliste, Oberösterreichs Festl-Übersicht)
+// in die `festln`-Collection. Siehe functions/festlliste/sync.js für
+// Details (Quelle, Rein/Raus-Logik, Konfiguration des PDF-Links).
+exports.syncFestlliste = festllisteSync.syncFestlliste;
 
 // FEATURE_DISABLED_TICKETING — Stripe/Ticket Callables sind archiviert.
 // Quelle: archived/ticketing/functions/stripe/{tickets,onboarding,webhook,scan}.js
