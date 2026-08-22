@@ -6,23 +6,37 @@
 // Liest die "Festl-Liste - Gesamtübersicht" PDF (Quelle: linkrex.eu/@
 // festlliste -> Dropbox-Link) und extrahiert strukturierte Event-Records.
 //
-// WARUM KOORDINATEN-BASIERT STATT REINEM TEXT-PARSING:
-// Die PDF ist eine Tabelle mit 6 Spalten (Datum, Veranstaltungsname,
-// Veranstaltungsort, Kategorie, Bezirk, Link). JEDE dieser Spalten kann
-// über mehrere Zeilen umbrechen (lange Namen, lange Ortsnamen, lange
-// Kategorien wie "Oktoberfest / Volksfest", lange Bezirksnamen, lange
-// URLs). Reiner linearer Text böte keine zuverlässige Grenze zwischen
-// z.B. einem umgebrochenen Namen und dem folgenden Ort.
+// VERSION 2 -- nach Diagnose gegen die ECHTE PDF (siehe Diagnose-Lauf
+// vom 22.08.2026) komplett überarbeitet. Zwei Annahmen aus Version 1
+// haben sich als falsch herausgestellt:
 //
-// Lösung: `pdfjs-dist` liefert pro Textfragment die exakte x/y-Position
-// auf der Seite. Wir lesen EINMALIG die Kopfzeile ("Datum",
-// "Veranstaltungsname", ...) auf Seite 1 und merken uns deren
-// x-Positionen als Spaltengrenzen. Jedes weitere Textfragment (auf allen
-// Seiten) wird anhand seiner x-Position der nächstgelegenen Spalte
-// zugeordnet — unabhängig davon, ob es in derselben visuellen Zeile wie
-// der Datums-Wert steht oder eine Umbruch-Fortsetzungszeile ist. Eine
-// neue Zeile OHNE Datum wird als Fortsetzung der vorherigen Spalten
-// gewertet und an die jeweilige Spalte angehängt.
+// 1) "Spalten-Header stehen über den Werten": FALSCH. In der echten PDF
+//    sitzen die Header-Labels ("Bezirk", "Link") teils deutlich RECHTS
+//    von den tatsächlichen Werten (z.B. Header "Bezirk" bei x=349.95,
+//    echte Werte ab x≈329). Reine x-Schwellenwerte relativ zum Header
+//    haben Link- und Bezirk-Werte in die falsche Nachbarspalte gemappt.
+// 2) "Umbruch-Fortsetzungszeilen stehen UNTER der Hauptzeile": FALSCH.
+//    Zellen sind vertikal zentriert -- eine umgebrochene Bezirks-Zelle
+//    kann mit ihrer ersten Zeile ÜBER der Datums-Hauptzeile stehen. Rein
+//    sequentielles "alles nach dem Datum gehört zum current Record" hat
+//    solche Fragmente dem VORHERIGEN Datensatz zugeschlagen.
+//
+// NEUER ANSATZ:
+// a) Felder werden primär am INHALT erkannt, nicht an der Spalten-
+//    Position: Datum hat ein festes Muster ("Sa,22.08."), Bezirk beginnt
+//    immer mit einem 2-3-stelligen Bundesland-Kürzel + " - " ("OÖ - ",
+//    "NÖ - "), Link beginnt immer mit "http", Kategorie kommt aus einer
+//    bekannten, kurzen Liste. NUR für Name/Ort (beides freier Text ohne
+//    erkennbares Muster) und für Fortsetzungs-Fragmente (die ihr
+//    Muster durch den Umbruch verloren haben, z.B. nur noch "Inn" statt
+//    "OÖ - Braunau am Inn") wird die x-Position als Fallback benutzt --
+//    mit Zonen-Grenzen, die aus der echten PDF kalibriert sind (siehe
+//    ZONE_BOUNDS unten).
+// b) Zeilen werden nicht mehr "der vorherigen Zeile" zugeschlagen,
+//    sondern JEDEM Datensatz wird die Zeile zugeordnet, deren
+//    Datums-Anker (Wochentag,TT.MM.) ihr am NÄCHSTEN ist (egal ob
+//    darüber oder darunter) -- das bildet die vertikale Zentrierung der
+//    Zellen korrekt ab.
 //
 // Diese Datei ist reine Parsing-Logik ohne Netzwerk-/Firestore-Zugriffe.
 
@@ -40,6 +54,62 @@ const HEADER_LABELS = {
 const ROW_Y_TOLERANCE = 2.5;
 
 const WEEKDAY_DATE_RE = /^[A-ZÄÖÜ][a-zäöüß]{1,2},(\d{2})\.(\d{2})\.$/;
+const BEZIRK_START_RE = /^[A-ZÄÖÜ]{2,3}\s*-\s*/;
+const LINK_START_RE = /^https?:\/\//i;
+const CANCEL_START_RE = /^❌/;
+
+// Bekannte Kategorie-Werte, GENAU wie sie als EIGENSTÄNDIGES Textfragment
+// vorkommen (Vergleich nach trim(), exakte Gleichheit -- kein "enthält",
+// damit z.B. der Name "Dämmerschoppen Feuerwehr Jeging" nicht
+// fälschlich als Kategorie erkannt wird). Fortsetzungszeilen einer
+// umgebrochenen Kategorie (z.B. "Volksfest" als 2. Zeile von
+// "Oktoberfest / Volksfest") brauchen HIER keinen Eintrag -- die fallen
+// automatisch über die x-Zone in "kategorie", weil sie in derselben
+// Spalte stehen.
+const KATEGORIE_EXACT = new Set([
+  "Festl", "FFestl", "Festival", "Maturaball", "Ballveranstaltung",
+  "Frühschoppen", "Dämmerschoppen", "Nachtclubevent", "Kirtag",
+  "Oktoberfest /", "Weinfest /", "-",
+]);
+
+// KALIBRIERTE x-ZONEN (aus dem echten Diagnose-Dump vom 22.08.2026,
+// Seite 1+2 der "FL 2026 - Gesamtübersicht.pdf"):
+//   Beobachtete Werte -- name: 62.7-103.2 | ort: 176.8-201.2 |
+//   kategorie: 258.3-281.3 | bezirk: 329.4-353.6 | link: ~395-455
+// Grenzen bewusst mit Sicherheitsabstand in die jeweilige Lücke gelegt.
+// NUR als Fallback benutzt, wenn Inhalts-Erkennung nicht greift (siehe
+// classifyItem). Falls die Quelle ihr Layout grundlegend ändert, fällt
+// das über die Warnings auf ("kein-name-oder-ort" etc.) -- dann muss
+// hier neu kalibriert werden (Diagnose-Skript erneut laufen lassen).
+const ZONE_NAME_ORT = 145;
+const ZONE_ORT_KATEGORIE = 230;
+const ZONE_KATEGORIE_BEZIRK = 310;
+const ZONE_BEZIRK_LINK = 380;
+
+// Layout-Rauschen (Fußzeile/Kopfzeile/Cookie-Banner etc.), das NICHT zu
+// irgendeinem Datensatz gehört. Muss VOR der Anker-Zuordnung entfernt
+// werden, sonst wird es dem jeweils letzten Datensatz einer Seite
+// zugeschlagen (der einzige Anker, der noch "darunter" liegt).
+const NOISE_LINE_PATTERNS = [
+  /^ÜS - Gesamtübersicht/i,
+  /^Festl-Liste$/i,
+  /^Seite \d+ von \d+$/i,
+  /^Page \d+ of \d+$/i,
+  /^Für weitere Infos/i,
+  /^Letzte Aktualisierung/i,
+  /^last Update$/i,
+  /^:$/,
+  /^We use cookies/i,
+  /^Customize cookies$/i,
+  /^Decline$/i,
+  /^Accept All$/i,
+];
+
+function isNoiseText(text) {
+  const t = text.trim();
+  if (!t) return false;
+  return NOISE_LINE_PATTERNS.some((re) => re.test(t));
+}
 
 function groupIntoRows(items) {
   const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
@@ -67,8 +137,6 @@ function findHeaderColumns(items) {
         if (labels.includes(norm)) found[key] = it.x;
       }
     }
-    // Mindestens 5 der 6 Spalten müssen erkannt sein (Link fehlt manchmal
-    // in älteren Layouts) -> als Kopfzeile akzeptieren.
     if (Object.keys(found).length >= 5) {
       return {headerY: row.y, columns: found};
     }
@@ -76,119 +144,157 @@ function findHeaderColumns(items) {
   return null;
 }
 
-function assignColumn(x, columnBounds) {
-  let best = columnBounds[0].key;
-  for (const c of columnBounds) {
-    if (x + 1 >= c.x) best = c.key;
-    else break;
-  }
-  return best;
+// Ordnet ein x < ZONE_NAME_ORT usw. der jeweiligen "Zwischenspalte" zu.
+// Wird NUR als Fallback benutzt (siehe classifyItem).
+function zoneForX(x) {
+  if (x < ZONE_NAME_ORT) return "name";
+  if (x < ZONE_ORT_KATEGORIE) return "ort";
+  if (x < ZONE_KATEGORIE_BEZIRK) return "kategorie";
+  if (x < ZONE_BEZIRK_LINK) return "bezirk";
+  return "link";
 }
 
-function buildRowCells(row, columnBounds) {
-  // WICHTIG: Items werden OHNE künstlich eingefügte Leerzeichen
-  // aneinandergehängt (nur sortiert nach x). PDF-Text-Extraktion liefert
-  // echte Leerzeichen meist als eigene Text-Fragmente ("text": " ") --
-  // die sind in `row.items` bereits enthalten. Würden wir stattdessen
-  // pauschal mit " " joinen, bekämen in mehrere Glyph-Runs aufgeteilte
-  // Wörter (z.B. durch Kerning/Umlaute) fälschlich ein Leerzeichen
-  // mitten im Wort.
-  const cells = {datum: [], name: [], ort: [], kategorie: [], bezirk: [], link: []};
-  for (const it of row.items) {
-    const col = assignColumn(it.x, columnBounds);
-    if (cells[col]) cells[col].push(it.text);
-  }
-  const out = {};
-  for (const k of Object.keys(cells)) {
-    out[k] = cells[k].join("").replace(/\s+/g, " ").trim();
-  }
-  return out;
+// Klassifiziert EIN Textfragment anhand seines INHALTS (primär) bzw.
+// seiner x-Position (Fallback für Fortsetzungszeilen und freien Text).
+// Gibt eines von "datum" | "cancel" | "link" | "bezirk" | "kategorie" |
+// "name" | "ort" zurück.
+function classifyItem(text, x) {
+  const t = text.trim();
+  if (WEEKDAY_DATE_RE.test(t)) return "datum";
+  if (CANCEL_START_RE.test(t)) return "cancel";
+  if (LINK_START_RE.test(t)) return "link";
+  if (BEZIRK_START_RE.test(t)) return "bezirk";
+  if (KATEGORIE_EXACT.has(t)) return "kategorie";
+  return zoneForX(x);
 }
 
-// Hängt `addition` an `base` an. Wenn `base` mit "-" endet (typischer
-// PDF-Silbentrennungs-Umbruch, z.B. "Wels-" + "Stadt"), OHNE Leerzeichen
-// verbinden, sonst mit Leerzeichen. Für `link` (URLs) NIE ein Leerzeichen
-// einfügen.
+// appendContinuation: hängt `addition` an `base` an. Silbentrennung
+// mitten im Wort (z.B. "Wels-" + "Stadt", KEIN Leerzeichen davor) wird
+// ohne Leerzeichen verbunden, alles andere MIT Leerzeichen. Für Link
+// (URLs) nie ein Leerzeichen einfügen.
 function appendContinuation(base, addition, {noSpace = false} = {}) {
   if (!addition) return base;
   if (!base) return addition;
-  // Silbentrennungs-Umbruch mitten im Wort (z.B. "Wels-" + "Stadt")
-  // erkennen wir daran, dass UNMITTELBAR vor dem "-" ein Buchstabe ohne
-  // Leerzeichen steht. "OÖ -" (Bezirks-Trennzeichen mit Leerzeichen davor)
-  // bekommt dagegen ganz normal ein Leerzeichen vor der Fortsetzung.
   const midWordHyphen = /\S-$/.test(base) && !/\s-$/.test(base);
   if (noSpace || midWordHyphen) return base + addition;
   return base + " " + addition;
 }
 
-function parsePageIntoRecords(items, columnBounds, headerY) {
-  const rows = groupIntoRows(items).filter((r) => r.y < headerY - 1);
-  const cellRows = rows.map((r) => buildRowCells(r, columnBounds));
+const FIELD_KEYS = ["name", "ort", "kategorie", "bezirk", "link", "cancelReason"];
 
-  const records = [];
-  let current = null;
-  for (const cell of cellRows) {
-    const isNewRecord = WEEKDAY_DATE_RE.test(cell.datum);
-    if (isNewRecord) {
-      if (current) records.push(current);
-      const m = cell.datum.match(WEEKDAY_DATE_RE);
-      current = {
-        day: parseInt(m[1], 10),
-        month: parseInt(m[2], 10),
-        name: cell.name,
-        ort: cell.ort,
-        kategorie: cell.kategorie,
-        bezirk: cell.bezirk,
-        link: cell.link,
-      };
-    } else if (current) {
-      current.name = appendContinuation(current.name, cell.name);
-      current.ort = appendContinuation(current.ort, cell.ort);
-      current.kategorie = appendContinuation(current.kategorie, cell.kategorie);
-      current.bezirk = appendContinuation(current.bezirk, cell.bezirk);
-      current.link = appendContinuation(current.link, cell.link, {noSpace: true});
+/**
+ * Baut aus einer geordneten Liste von {text,x,y}-Items (alle Items, die
+ * zu EINEM Datensatz gehören, bereits in Lesereihenfolge: y absteigend,
+ * innerhalb einer Zeile x aufsteigend) die Felder des Datensatzes.
+ */
+function buildRecordFromItems(items) {
+  const rec = {name: "", ort: "", kategorie: "", bezirk: "", link: "", cancelled: false, cancelReason: ""};
+  let lastField = null;
+  let lastY = null;
+
+  for (const it of items) {
+    if (WEEKDAY_DATE_RE.test(it.text.trim())) continue; // Datum selbst kein Feldinhalt
+
+    let field = classifyItem(it.text, it.x);
+    if (field === "cancel") {
+      rec.cancelled = true;
+      lastField = "cancelReason";
+      lastY = it.y;
+      continue;
     }
-    // Zeilen ohne aktiven Record (z.B. Fußzeilentext vor dem ersten
-    // Datensatz) werden stillschweigend ignoriert.
+    // Nach einer Absage-Markierung gehört ALLES Weitere in diesem
+    // Datensatz zum Ausfalltext, nicht mehr zu Link/Bezirk/etc.
+    if (rec.cancelled && lastField === "cancelReason" && field !== "datum") {
+      field = "cancelReason";
+    }
+
+    const opts = field === "link" ? {noSpace: true} : {};
+    const sameRowContinuation = lastField === field && lastY === it.y;
+    if (sameRowContinuation) {
+      rec[field] = rec[field] + it.text; // selbe Zeile: rohe Konkatenation (Leerzeichen ggf. schon als eigenes Fragment enthalten)
+    } else {
+      rec[field] = appendContinuation(rec[field], it.text, opts);
+    }
+    lastField = field;
+    lastY = it.y;
   }
-  if (current) records.push(current);
-  return records;
+
+  for (const k of FIELD_KEYS) {
+    if (typeof rec[k] === "string") rec[k] = rec[k].replace(/\s+/g, " ").trim();
+  }
+  // URLs enthalten nie echte Leerzeichen -- ein hier verbliebenes
+  // Leerzeichen stammt von einem Zeilenumbruch mitten in der URL (die
+  // PDF enthält manchmal ein Trenn-Leerzeichen als eigenes Fragment am
+  // Zeilenende, bevor die URL in der nächsten Zeile weitergeht).
+  rec.link = rec.link.replace(/\s+/g, "");
+  if (rec.cancelled && !rec.cancelReason) rec.cancelReason = "Abgesagt/Ausfall laut Quelle.";
+  return rec;
 }
 
-// Manche Zeilen sind Sonderfälle: statt eines Links steht "❌" +
-// Ausfalltext (Event abgesagt) in einer der Spalten (meist Bezirk oder
-// Link, je nach genauer PDF-Position des Emojis). Wir suchen deshalb in
-// ALLEN Textfeldern danach, statt uns auf eine feste Spalte zu verlassen.
-function extractCancellation(record) {
-  const fields = ["kategorie", "bezirk", "link"];
-  for (const f of fields) {
-    const val = record[f] || "";
-    const idx = val.indexOf("❌");
-    if (idx !== -1) {
-      const reason = val.slice(idx + 1).replace(/^❌\s*/, "").trim();
-      record[f] = val.slice(0, idx).trim();
-      return {cancelled: true, cancelReason: reason || "Abgesagt/Ausfall laut Quelle."};
+/**
+ * Gruppiert alle Zeilen einer Seite zu Datensätzen: jede Zeile wird dem
+ * Datums-Anker (Zeile mit einem WEEKDAY_DATE_RE-Treffer) zugeordnet, der
+ * ihr in y am NÄCHSTEN liegt -- unabhängig davon, ob sie optisch darüber
+ * oder darunter liegt (vertikal zentrierte Zellen-Umbrüche).
+ */
+function parsePageIntoRecords(items, headerY) {
+  const rows = groupIntoRows(items).filter((r) => r.y < headerY - 1);
+  if (rows.length === 0) return [];
+
+  const anchors = []; // {y, day, month}
+  for (const row of rows) {
+    for (const it of row.items) {
+      const m = it.text.trim().match(WEEKDAY_DATE_RE);
+      if (m) {
+        anchors.push({y: row.y, day: parseInt(m[1], 10), month: parseInt(m[2], 10)});
+        break;
+      }
     }
   }
-  return {cancelled: false, cancelReason: ""};
+  if (anchors.length === 0) return [];
+
+  function nearestAnchorIndex(y) {
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < anchors.length; i++) {
+      const d = Math.abs(anchors[i].y - y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  // Items je Anker sammeln (Reihenfolge bleibt y-absteigend erhalten,
+  // weil `rows` bereits so sortiert ist und wir sie in dieser
+  // Reihenfolge durchgehen).
+  const itemsPerAnchor = anchors.map(() => []);
+  for (const row of rows) {
+    const idx = nearestAnchorIndex(row.y);
+    for (const it of row.items) itemsPerAnchor[idx].push(it);
+  }
+
+  const records = [];
+  for (let i = 0; i < anchors.length; i++) {
+    const rec = buildRecordFromItems(itemsPerAnchor[i]);
+    records.push({day: anchors[i].day, month: anchors[i].month, ...rec});
+  }
+  return records;
 }
 
 /**
  * Extrahiert alle Records aus einem PDF-Buffer.
- * Gibt {records, warnings} zurück. `records` = rohe, noch nicht
- * geocodete/normalisierte Datensätze mit {day, month, name, ort,
- * kategorie, bezirk, link, cancelled, cancelReason}.
+ * Gibt {records, warnings} zurück.
  */
 async function extractAllRecords(pdfBuffer) {
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(pdfBuffer),
-    // Keine externen Standard-Fonts nötig, wir lesen nur Text-Layout.
     useSystemFonts: true,
   });
   const doc = await loadingTask.promise;
 
-  let columnBounds = null;
   let headerY = null;
   const records = [];
   const warnings = [];
@@ -196,37 +302,32 @@ async function extractAllRecords(pdfBuffer) {
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const content = await page.getTextContent();
-    // Nur wirklich leere ("") Fragmente verwerfen -- Fragmente, die NUR
-    // aus einem Leerzeichen bestehen, werden bewusst behalten (siehe
-    // buildRowCells).
     const items = content.items
         .map((it) => ({text: it.str, x: it.transform[4], y: it.transform[5]}))
-        .filter((it) => it.text.length > 0);
+        .filter((it) => it.text.length > 0)
+        .filter((it) => !isNoiseText(it.text));
 
-    if (!columnBounds) {
+    if (headerY === null) {
       const header = findHeaderColumns(items);
       if (!header) {
         warnings.push({page: p, reason: "kein-header-gefunden"});
         continue;
       }
-      columnBounds = Object.entries(header.columns)
-          .map(([key, x]) => ({key, x}))
-          .sort((a, b) => a.x - b.x);
       headerY = header.headerY;
+      console.log("[festlliste-parser] Header gefunden auf Seite", p, "bei y=", headerY, "Spalten (nur Info, nicht mehr für Zuordnung genutzt):", JSON.stringify(header.columns));
     }
 
-    const pageRecords = parsePageIntoRecords(items, columnBounds, headerY);
+    const pageRecords = parsePageIntoRecords(items, headerY);
     for (const rec of pageRecords) {
       if (!rec.name || !rec.kategorie) {
         warnings.push({page: p, reason: "unvollstaendiger-record", raw: rec});
         continue;
       }
-      const cancel = extractCancellation(rec);
-      records.push({...rec, ...cancel});
+      records.push(rec);
     }
   }
 
-  if (!columnBounds) {
+  if (headerY === null) {
     throw new Error(
         "Tabellen-Header (Datum/Veranstaltungsname/.../Bezirk) wurde auf " +
         "keiner Seite gefunden. Layout der Quelle hat sich vermutlich " +
@@ -237,4 +338,4 @@ async function extractAllRecords(pdfBuffer) {
   return {records, warnings};
 }
 
-module.exports = {extractAllRecords, groupIntoRows, findHeaderColumns};
+module.exports = {extractAllRecords, groupIntoRows, findHeaderColumns, classifyItem};
