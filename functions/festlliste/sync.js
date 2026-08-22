@@ -198,7 +198,22 @@ async function runFestllisteSync() {
     const sourceKey = `fl_${year}${String(rec.month).padStart(2, "0")}${String(rec.day).padStart(2, "0")}_${slugify(rec.name)}_${slugify(rec.ort)}`;
     currentKeys.add(sourceKey);
 
-    const geo = await geocoder.geocode(`${rec.ort}, ${bezirkName}, ${bundesland}, Österreich`);
+    // Mehrere Anfrage-Varianten probieren, von spezifisch zu grob --
+    // analog zu AdminCreateFestlScreen._geocode() in der App. Bezirke
+    // wie "Braunau am Inn" oder "Ried im Innkreis" enthalten Zusätze
+    // ("am Inn", "im Innkreis"), die Nominatim bei manchen Gemeinden aus
+    // dem Konzept bringen -- ohne den Bezirksnamen klappt die Anfrage
+    // dann meistens.
+    const geoAttempts = [
+      `${rec.ort}, ${bezirkName}, ${bundesland}, Österreich`,
+      `${rec.ort}, ${bundesland}, Österreich`,
+      `${rec.ort}, Österreich`,
+    ];
+    let geo = null;
+    for (const q of geoAttempts) {
+      geo = await geocoder.geocode(q);
+      if (geo) break;
+    }
     if (!geo) {
       geocodeFailed++;
       console.log("[festlliste-sync] Geocoding fehlgeschlagen für:", rec.ort, bezirkName);

@@ -227,6 +227,16 @@ function buildRecordFromItems(items) {
   // PDF enthält manchmal ein Trenn-Leerzeichen als eigenes Fragment am
   // Zeilenende, bevor die URL in der nächsten Zeile weitergeht).
   rec.link = rec.link.replace(/\s+/g, "");
+
+  // Bei einzelnen Records taucht das Kategorie-Wort in der PDF als ZWEI
+  // separate Textfragmente an (fast) derselben Stelle auf (z.B.
+  // "Frühschoppen Frühschoppen") -- vermutlich eine Artefakt-Ebene der
+  // Quelle. Exakte Verdopplung des kompletten Werts wird deshalb
+  // zusammengefasst; echte Zwei-Wort-Kategorien wie "Weinfest / Weinkost"
+  // sind davon nicht betroffen, weil sie keine Wiederholung DESSELBEN
+  // Teilstrings sind.
+  const dup = rec.kategorie.match(/^(.+?)\s+\1$/);
+  if (dup) rec.kategorie = dup[1];
   if (rec.cancelled && !rec.cancelReason) rec.cancelReason = "Abgesagt/Ausfall laut Quelle.";
   return rec;
 }
