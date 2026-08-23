@@ -129,6 +129,53 @@ function viennaLocalToUtc(year, month, day, hour) {
   return new Date(Date.UTC(year, month - 1, day, hour - offsetHours, 0, 0));
 }
 
+// Die Quelle liefert KEINEN Beschreibungstext (nur Datum/Name/Ort/
+// Kategorie/Bezirk/Link). `description` ist in der Detailansicht
+// (FestlBottomSheet) aber der einzige Inhaltsblock, muss also generiert
+// werden. Bewusst kurz und ohne Meta-Gerede: kein "automatisch
+// importiert", keine Quellenangabe -- die Herkunft steht ohnehin
+// intern in `sourceUrl`/`source`.
+function categoryLabel(kategorie) {
+  const k = (kategorie || "").trim();
+  // "Oktoberfest / Volksfest" und "Weinfest / Weinkost" sind
+  // Doppelbezeichnungen der Quelle -- im Fliesstext reicht die erste.
+  const first = k.split("/")[0].trim();
+  if (!first || first === "-") return "";
+  return first;
+}
+
+function buildDescription(rec, bezirkName) {
+  const kat = categoryLabel(rec.kategorie);
+  const ort = (rec.ort || "").trim();
+
+  let opener;
+  if (kat && ort) {
+    opener = `🎉 ${kat} in ${ort}`;
+  } else if (kat) {
+    opener = `🎉 ${kat}`;
+  } else if (ort) {
+    opener = `🎉 Fest in ${ort}`;
+  } else {
+    opener = "🎉 Fest";
+  }
+  // Bezirksname weglassen, wenn er dem Ort entspricht ("Maturaball in
+  // Braunau am Inn, Bezirk Braunau am Inn" liest sich doppelt).
+  const bez = (bezirkName || "").trim();
+  if (bez && bez.toLowerCase() !== ort.toLowerCase()) {
+    opener += `, Bezirk ${bez}`;
+  }
+  opener += ".";
+
+  // Nur ~10 % der Eintraege haben einen Link (die Quelle pflegt ihn
+  // erst, wenn der Termin naeher rueckt) -- ohne Link darf der Text
+  // nicht auf einen verweisen, den es nicht gibt.
+  const tail = rec.link ?
+    "Alle Infos zum Programm gibt's über den Link." :
+    "Programm und genaue Uhrzeit gibt der Veranstalter noch bekannt.";
+
+  return `${opener} ${tail}`;
+}
+
 async function fetchPdfBuffer(url) {
   const resp = await fetch(url, {
     headers: {"User-Agent": "Mozilla/5.0 (compatible; PartyPinFestllisteSync/1.0)"},
@@ -222,12 +269,7 @@ async function runFestllisteSync() {
     const docRef = db.collection(FESTLN_COLLECTION).doc(sourceKey);
     const existing = await docRef.get();
 
-    const description = [
-      "Automatisch importiert von der Festl-Liste (linkrex.eu/@festlliste).",
-      `Kategorie: ${rec.kategorie}.`,
-      `Bezirk: ${bezirkName} (${bundesland}).`,
-      "Programmdetails, genaue Uhrzeit und Aktualität bitte über den Link prüfen.",
-    ].join(" ");
+    const description = buildDescription(rec, bezirkName);
 
     const data = {
       festlName: rec.name,
