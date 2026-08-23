@@ -27,10 +27,67 @@ import '../../Theme/app_theme.dart';
 import '../../Services/timestamp_ext.dart';
 import 'party_bottom_sheet.dart';
 
+/// TIME_RANGE_FILTER: Zeitraum-Auswahl für Karte und Marker.
+///
+/// `windowFor()` liefert das Fenster [von, bis]; ein Event zählt als
+/// sichtbar, wenn es das Fenster überlappt (Start vor `bis`, Ende nach
+/// `von`) — nicht nur, wenn es exakt darin startet. Sonst würde ein
+/// mehrtägiges Festl, das gestern begonnen hat, bei "Heute" fehlen.
+enum TimeRangeFilter {
+  today('range_today', 'Heute'),
+  thisWeekend('range_weekend', 'Dieses Wochenende'),
+  next14Days('range_14d', 'Nächste 14 Tage'),
+  next2Months('range_2m', 'Nächste 2 Monate'),
+  all('range_all', 'Alle');
+
+  const TimeRangeFilter(this.prefValue, this.label);
+
+  /// Stabiler Wert für SharedPreferences — NICHT `name` verwenden,
+  /// sonst bricht die Persistenz beim Umbenennen einer Konstante.
+  final String prefValue;
+  final String label;
+
+  static TimeRangeFilter fromPref(String? v) {
+    for (final r in TimeRangeFilter.values) {
+      if (r.prefValue == v) return r;
+    }
+    return TimeRangeFilter.next14Days;
+  }
+
+  /// Zeitfenster ab [now]. `end == null` bedeutet "keine Obergrenze".
+  ({DateTime start, DateTime? end}) windowFor(DateTime now) {
+    final startOfToday = DateTime(now.year, now.month, now.day);
+    switch (this) {
+      case TimeRangeFilter.today:
+        return (start: startOfToday, end: startOfToday.add(const Duration(days: 1)));
+      case TimeRangeFilter.thisWeekend:
+        // Samstag 00:00 bis Montag 00:00. Ist heute schon Sa/So, gilt
+        // das laufende Wochenende, sonst das nächste.
+        final daysUntilSat = (DateTime.saturday - now.weekday + 7) % 7;
+        final satStart = now.weekday == DateTime.sunday
+            ? startOfToday.subtract(const Duration(days: 1))
+            : startOfToday.add(Duration(days: daysUntilSat));
+        return (start: satStart, end: satStart.add(const Duration(days: 2)));
+      case TimeRangeFilter.next14Days:
+        return (start: startOfToday, end: startOfToday.add(const Duration(days: 14)));
+      case TimeRangeFilter.next2Months:
+        return (start: startOfToday, end: startOfToday.add(const Duration(days: 60)));
+      case TimeRangeFilter.all:
+        return (start: startOfToday, end: null);
+    }
+  }
+}
+
 class PartyMapScreen extends StatefulWidget {
   final String? initialOpenPartyId;
 
-  const PartyMapScreen({super.key, this.initialOpenPartyId});
+  // ✅ Gleiches Prinzip wie initialOpenPartyId, aber für Festln (z. B. aus
+  // all_events_list_screen.dart).
+
+  const PartyMapScreen({
+    super.key,
+    this.initialOpenPartyId,
+  });
 
   @override
   State<PartyMapScreen> createState() => _PartyMapScreenState();
@@ -165,6 +222,12 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   // Party-Typ Filter
   bool _onlyClosedParties = false;
   bool _onlyOpenParties = false;
+
+  // TIME_RANGE_FILTER: Die Festlliste importiert Termine bis mehrere
+  // Monate voraus (ganzjährige PDF-Quelle). Ohne Zeitraum-Filter liegen
+  // Termine vom November mit auf der Karte, wenn man eigentlich nur
+  // wissen will, was demnächst los ist. Default bewusst nicht "alle".
+  TimeRangeFilter _timeRange = TimeRangeFilter.next14Days;
 
   // Suche
   final TextEditingController _searchCtrl = TextEditingController();
@@ -386,6 +449,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
   static const String _kPrefMinAge = 'filter_minAge_v1';
   static const String _kPrefMaxEntry = 'filter_maxEntry_v1';
   static const String _kPrefRadius = 'filter_radiusKm_v1';
+  static const String _kPrefTimeRange = 'filter_timeRange_v1';
 
   Future<void> _loadFilterPrefs() async {
     final prefs = await SharedPreferences.getInstance();
@@ -414,6 +478,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       _maxEntryFilter = null;
     }
     if (_onlyOpenParties && _onlyClosedParties) _onlyClosedParties = false;
+    _timeRange = TimeRangeFilter.fromPref(prefs.getString(_kPrefTimeRange));
   }
 
   Future<void> _saveFilterPrefs() async {
@@ -432,6 +497,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     }
     // -1 als Sentinel für "kein Radius-Limit".
     await prefs.setDouble(_kPrefRadius, _radiusKm ?? -1);
+    await prefs.setString(_kPrefTimeRange, _timeRange.prefValue);
   }
 
   // =========================
@@ -933,6 +999,24 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     return R * 2 * atan2(sqrt(a), sqrt(1 - a));
   }
 
+  /// TIME_RANGE_FILTER: true, wenn das Event das gewählte Zeitfenster
+  /// überlappt. Events ohne verwertbares Datum bleiben sichtbar — lieber
+  /// eines zu viel zeigen als eines zu verstecken, dessen Zeit wir nur
+  /// nicht lesen konnten.
+  bool _inTimeRange(Map<String, dynamic> d, DateTime now) {
+    if (_timeRange == TimeRangeFilter.all) return true;
+
+    final w = _timeRange.windowFor(now);
+    final start = _partyStart(d);
+    if (start == null) return true;
+
+    final rawEnd = d['endTime'];
+    final end = rawEnd is Timestamp ? rawEnd.toLocalDateTime() : start;
+
+    if (w.end != null && !start.isBefore(w.end!)) return false;
+    return !end.isBefore(w.start);
+  }
+
   DateTime? _partyStart(Map<String, dynamic> d) {
     // 1) startTime bevorzugt (matcht functions/index.js parsePartyStart)
     final st = d['startTime'];
@@ -1237,6 +1321,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         _partyCache[doc.id] = data;
 
         if (!_showParties) continue;
+
+        // TIME_RANGE_FILTER: gleicher Zeitraum wie für Festln, damit die
+        // Karte als Ganzes zum gewählten Zeitfenster passt.
+        if (!_inTimeRange(data, DateTime.now())) continue;
 
         // 🔒 Host-Erkennung (NUR EINMAL!)
         final bool isHostForThisParty = _isHostForPartyData(data);
@@ -1687,6 +1775,10 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         final data = doc.data();
 
         if (_festlExpired(data, now)) continue;
+
+        // TIME_RANGE_FILTER: hier am wichtigsten — die Festlliste bringt
+        // Termine bis mehrere Monate voraus mit.
+        if (!_inTimeRange(data, now)) continue;
 
         final pos = _parseLatLng(data);
         if (pos == null) continue;
@@ -2614,6 +2706,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
     double? maxEntry = _maxEntryFilter;
     bool onlyOpen = _onlyOpenParties;
     bool onlyClosed = _onlyClosedParties;
+    TimeRangeFilter timeRange = _timeRange;
     double? radius = _radiusKm;
 
     // Lokale Slider-Werte (falls gerade "Kein Limit" aktiv, trotzdem einen sinnvollen Wert merken)
@@ -2649,7 +2742,8 @@ class _PartyMapScreenState extends State<PartyMapScreen>
               'showFestln': showFestln,
               'onlyFree': ff, 'minAge': fa, 'maxEntry': fe,
               'onlyOpen': fo, 'onlyClosed': fc,
-              'radiusKm': radius, 'reset': false,
+              'radiusKm': radius, 'timeRange': timeRange.prefValue,
+              'reset': false,
             });
           }
 
@@ -2775,6 +2869,58 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // ── TIME_RANGE_FILTER ──────────────────────────
+                      // Bewusst Chips statt eines weiteren Sliders: die
+                      // Sheet hat schon drei Slider-Boxen, und die
+                      // Zeiträume sind diskrete Wahlmöglichkeiten.
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          "ZEITRAUM",
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: .6,
+                          ),
+                        ),
+                      ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final r in TimeRangeFilter.values)
+                            ChoiceChip(
+                              label: Text(r.label),
+                              selected: timeRange == r,
+                              onSelected: (_) => setSB(() => timeRange = r),
+                              showCheckmark: false,
+                              labelStyle: TextStyle(
+                                color: timeRange == r
+                                    ? Colors.white
+                                    : AppColors.muted,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                              backgroundColor: AppColors.panel,
+                              selectedColor: AppColors.accent,
+                              side: BorderSide(
+                                color: timeRange == r
+                                    ? AppColors.accent
+                                    : AppColors.accentBorder,
+                              ),
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                        ],
+                      ),
+
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 14),
+                        child: Divider(color: Colors.white12, height: 1),
+                      ),
+
                       _filterToggle("Partys anzeigen", showParties,
                           (v) => setSB(() { showParties = v; turnOff(); })),
                       const SizedBox(height: 4),
@@ -2908,6 +3054,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
         _onlyOpenParties = false;
         _onlyClosedParties = false;
         _radiusKm = 25.0;
+        _timeRange = TimeRangeFilter.next14Days;
       });
       await _saveFilterPrefs();
       await _refreshMap();
@@ -2925,6 +3072,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
       _onlyOpenParties = result['onlyOpen'] as bool? ?? _onlyOpenParties;
       _onlyClosedParties = result['onlyClosed'] as bool? ?? _onlyClosedParties;
       _radiusKm = result['radiusKm'] as double?;
+      _timeRange = TimeRangeFilter.fromPref(result['timeRange'] as String?);
 
       if (!_showParties) {
         _onlyOpenParties = false;
