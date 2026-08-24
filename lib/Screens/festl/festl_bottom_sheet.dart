@@ -555,9 +555,20 @@ class _FestlBottomSheetState extends State<FestlBottomSheet>
     final minAge = _d['minAge'];
     final ort = [address, city].where((e) => e.isNotEmpty).join(', ');
 
+    // Bei importierten Festln liefert die Quelle kein Alter -- der Wert
+    // ist dann aus der Kategorie geschätzt und MUSS als solcher
+    // erkennbar sein. Sonst verlässt sich jemand auf eine Zahl, die wir
+    // erfunden haben, und steht vor verschlossener Tür.
+    final ageEstimated = _d['minAgeEstimated'] == true;
+
     final compact = <Widget>[
       if (ort.isNotEmpty) _infoCard('📍', 'Ort', city.isNotEmpty ? city : ort),
-      if (minAge != null) _infoCard('🔞', 'Mindestalter', '$minAge+'),
+      if (minAge != null)
+        _infoCard(
+          '🔞',
+          ageEstimated ? 'Mindestalter (geschätzt)' : 'Mindestalter',
+          ageEstimated ? 'ca. $minAge+' : '$minAge+',
+        ),
     ];
 
     return Padding(
@@ -568,13 +579,22 @@ class _FestlBottomSheetState extends State<FestlBottomSheet>
           if (compact.isNotEmpty) ...[
             const SizedBox(height: 12),
             if (compact.length == 2)
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(child: compact[0]),
-                  const SizedBox(width: 12),
-                  Expanded(child: compact[1]),
-                ],
+              // IntrinsicHeight ist hier NICHT optional: die Row steht in
+              // einer scrollbaren Column, ihre Höhe ist also unbegrenzt.
+              // CrossAxisAlignment.stretch verlangt darin eine unendliche
+              // Höhe -- der Sheet blieb dadurch komplett leer. Getriggert
+              // wurde das erst, als importierte Festln ein Mindestalter
+              // bekamen und damit zum ersten Mal ZWEI Karten nebeneinander
+              // standen (vorher gab es immer nur die Ort-Karte).
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(child: compact[0]),
+                    const SizedBox(width: 12),
+                    Expanded(child: compact[1]),
+                  ],
+                ),
               )
             else
               compact.first,
