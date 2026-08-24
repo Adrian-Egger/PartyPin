@@ -91,7 +91,14 @@ const ZONE_BEZIRK_LINK = 380;
 // werden, sonst wird es dem jeweils letzten Datensatz einer Seite
 // zugeschlagen (der einzige Anker, der noch "darunter" liegt).
 const NOISE_LINE_PATTERNS = [
-  /^ÜS - Gesamtübersicht/i,
+  // "ÜS - " ist der generische Fusszeilen-Praefix der Quelle ueber alle
+  // Listen hinweg ("ÜS - Gesamtübersicht 2026", "ÜS - Andere
+  // Bundesländer"). Bewusst NICHT auf einen konkreten Listennamen
+  // festgenagelt: die zweite PDF hat eine andere Fusszeile, und deren
+  // Rest landete sonst im Bezirk des letzten Datensatzes der Seite.
+  // Ungefaehrlich, weil "ÜS" zu keinem der neun Bundeslaender-Kuerzel
+  // gehoert -- eine echte Bezirk-Zelle beginnt nie damit.
+  /^ÜS - /i,
   /^Festl-Liste$/i,
   /^Seite \d+ von \d+$/i,
   /^Page \d+ of \d+$/i,

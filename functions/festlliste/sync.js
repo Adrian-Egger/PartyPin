@@ -42,6 +42,23 @@ const FESTLLISTE_PDF_URL = defineString("FESTLLISTE_PDF_URL", {
   default: "https://www.dropbox.com/scl/fi/4c8l7bl9yhuhkmlhv1f4q/FL-2026-Gesamt-bersicht.pdf?rlkey=9bp4chnudoc59lpbgguooh8sv&dl=1",
 });
 
+// ZWEITE QUELLE: Die Hauptliste ist ausdrücklich "Oberösterreichs
+// Festl-Übersicht" -- alle 15 Bezirkslisten dort sind OÖ-Bezirke. Auf
+// derselben Seite gibt es eine separate, viel kleinere PDF "Andere
+// Bundesländer (Nur Festl und Festivals)". Die ist Stand August 2026
+// winzig (3 Einträge, alle NÖ) und waechst laut Hinweis in der PDF ab
+// 25.10.2026 nur um an OÖ angrenzende Gemeinden in NÖ/Stmk/Sbg. Auch
+// mit beiden Quellen deckt der Import also NICHT ganz Österreich ab --
+// das ist eine Eigenschaft der Quelle, keine des Codes.
+//
+// Spaltenstruktur ist identisch, nur enthält die Bezirk-Spalte hier
+// Bundesland- statt OÖ-Bezirks-Kürzel ("NÖ - St. Pölten"). Das passt
+// bereits zu parseBezirk()/BUNDESLAND_NAMES -- am Parser war nur die
+// Fusszeilen-Erkennung anzupassen (siehe extractRecords.js, "ÜS - ").
+const FESTLLISTE_OTHER_PDF_URL = defineString("FESTLLISTE_OTHER_PDF_URL", {
+  default: "https://www.dropbox.com/scl/fi/oh0h3cnb1b8q7t8mc2kge/FL-Bezirk-Andere-Bundesl-nder.pdf?rlkey=65i6sq8tmkppiojx16fj0u4ne&st=4bg5ptof&e=1&dl=1",
+});
+
 // Bundesland-Kürzel -> voller Name, wie sie in der Bezirk-Spalte der PDF
 // vorkommen (z.B. "OÖ - Braunau am Inn", "NÖ - St. Pölten").
 const BUNDESLAND_NAMES = {
@@ -205,15 +222,33 @@ async function runFestllisteSync() {
   const geocoder = createGeocoder(db);
   const now = new Date();
 
-  const pdfUrl = toDropboxDirectUrl(FESTLLISTE_PDF_URL.value());
-  console.log("[festlliste-sync] Lade PDF von", pdfUrl);
-  const pdfBuffer = await fetchPdfBuffer(pdfUrl);
+  // Beide Quellen laden. `sourceUrl` muss PRO Record mitgeführt werden --
+  // vorher war das eine globale Variable, mit zwei PDFs stünde sonst bei
+  // der Hälfte der Dokumente die falsche Herkunft.
+  const sources = [
+    {label: "Gesamtübersicht (OÖ)", url: toDropboxDirectUrl(FESTLLISTE_PDF_URL.value())},
+    {label: "Andere Bundesländer", url: toDropboxDirectUrl(FESTLLISTE_OTHER_PDF_URL.value())},
+  ];
 
-  const {records, warnings} = await extractAllRecords(pdfBuffer);
-  console.log(`[festlliste-sync] ${records.length} Records extrahiert, ${warnings.length} Warnungen.`);
-  if (warnings.length) {
-    console.log("[festlliste-sync] Warnungen (erste 20):", JSON.stringify(warnings.slice(0, 20)));
+  const records = [];
+  let parseWarnings = 0;
+
+  for (const src of sources) {
+    console.log(`[festlliste-sync] Lade PDF (${src.label}) von`, src.url);
+    const buffer = await fetchPdfBuffer(src.url);
+    const res = await extractAllRecords(buffer);
+    console.log(
+        `[festlliste-sync] ${src.label}: ${res.records.length} Records, ` +
+        `${res.warnings.length} Warnungen.`);
+    if (res.warnings.length) {
+      console.log(`[festlliste-sync] Warnungen ${src.label} (erste 20):`,
+          JSON.stringify(res.warnings.slice(0, 20)));
+    }
+    parseWarnings += res.warnings.length;
+    for (const r of res.records) records.push({...r, sourceUrl: src.url});
   }
+
+  console.log(`[festlliste-sync] ${records.length} Records aus ${sources.length} Quellen, ${parseWarnings} Warnungen gesamt.`);
 
   const currentKeys = new Set();
   let created = 0;
@@ -293,7 +328,7 @@ async function runFestllisteSync() {
       sourceCategory: rec.kategorie,
       sourceBundesland: bundesland,
       sourceBezirk: bezirkName,
-      sourceUrl: pdfUrl,
+      sourceUrl: rec.sourceUrl,
       importedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
     if (geo) {
@@ -322,7 +357,7 @@ async function runFestllisteSync() {
 
   const summary = {
     recordsExtracted: records.length,
-    parseWarnings: warnings.length,
+    parseWarnings,
     created,
     updated,
     deleted,
