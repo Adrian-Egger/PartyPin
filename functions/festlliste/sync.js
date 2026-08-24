@@ -93,6 +93,23 @@ const DEFAULT_START_HOUR = 14;
 // Konsistent mit functions/eventCleanup.js (dort: eventDate + 11h).
 const EVENT_DURATION_HOURS = 11;
 
+// GESCHAETZTES MINDESTALTER. Die Quelle liefert KEIN Alter -- diese
+// Werte sind aus der Kategorie abgeleitet, nicht aus der Realitaet.
+// Deshalb wird jeder so gesetzte Wert mit `minAgeEstimated: true`
+// markiert und in der App als Schaetzung ausgewiesen ("ca. 16+"), damit
+// niemand vor verschlossener Tuer steht, weil die App ihm eine
+// Sicherheit vorgegaukelt hat, die es nicht gibt.
+//
+// Bewusst KEIN Wert fuer Frühschoppen/Kirtag/Festl/Weinfest: das sind
+// Familienveranstaltungen ohne Altersgrenze -- dort waere jede Zahl
+// schlechter als gar keine Angabe.
+const CATEGORY_MIN_AGE = {
+  "Maturaball": 16,
+  "Ballveranstaltung": 16,
+  "Nachtclub-Event": 18,
+  "Nachtclubevent": 18,
+};
+
 function slugify(text) {
   return (text || "")
       .toLowerCase()
@@ -205,6 +222,128 @@ async function fetchPdfBuffer(url) {
   return Buffer.from(arrayBuffer);
 }
 
+// ---------------------------------------------------------------------------
+// Vorschaubild aus dem Event-Link (og:image)
+// ---------------------------------------------------------------------------
+// Die Quelle liefert keine Bilder. Das Einzige, woran ein Bild haengt, ist
+// der verlinkte Beitrag -- wir lesen daher dessen Link-Vorschaubild aus,
+// wie es Messenger und Chat-Apps beim Teilen eines Links auch tun.
+//
+// Erwartungshaltung: nur ~10 % der Eintraege haben ueberhaupt einen Link,
+// und Instagram/Facebook liefern Bots meist eine Login-Wand statt der
+// Seite. Realistisch bleiben ein paar Gemeinde-Seiten uebrig. Der Job
+// darf daran nie haengenbleiben, deshalb hartes Timeout + jeder Fehler
+// ist nicht-fatal.
+const OG_FETCH_TIMEOUT_MS = 8000;
+// Kurz genug, dass signierte Instagram-/Facebook-URLs frisch bleiben,
+// lang genug, dass ein zweiter Lauf am selben Tag nichts neu holt.
+const OG_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const OG_MAX_BYTES = 512 * 1024; // og:image steht im <head>, mehr braucht es nicht
+
+const OG_PATTERNS = [
+  /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+  /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
+  /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
+];
+
+function extractOgImage(html, pageUrl) {
+  for (const re of OG_PATTERNS) {
+    const m = html.match(re);
+    if (!m || !m[1]) continue;
+    const raw = m[1].trim()
+        .replace(/&amp;/g, "&")
+        .replace(/&#x2F;/gi, "/");
+    if (!raw) continue;
+    try {
+      // Relative Pfade gegen die Seite aufloesen (kommt bei
+      // Gemeinde-Seiten vor: content="/images/fest.jpg").
+      return new URL(raw, pageUrl).toString();
+    } catch (e) {
+      continue;
+    }
+  }
+  return null;
+}
+
+/// Liefert die og:image-URL zu [link] oder null. Ergebnisse (auch
+/// negative) werden dauerhaft in `_ogImageCache` abgelegt, damit der
+/// taegliche Lauf nicht jedes Mal dieselben Seiten abklappert.
+function createOgImageFetcher(db) {
+  const cacheCollection = db.collection("_ogImageCache");
+  const memCache = new Map();
+
+  async function fetchFor(link) {
+    if (!link) return null;
+    const key = slugify(link) || "unknown";
+    if (memCache.has(key)) return memCache.get(key);
+
+    const cached = await cacheCollection.doc(key).get();
+    if (cached.exists) {
+      const d = cached.data() || {};
+      const at = d.updatedAt instanceof Date ?
+        d.updatedAt : (d.updatedAt?.toDate?.() || null);
+      const ageMs = at ? (Date.now() - at.getTime()) : Infinity;
+      // KEIN dauerhafter Cache: Instagram und Facebook liefern signierte
+      // CDN-URLs (scontent.cdninstagram.com / lookaside.fbsbx.com), die
+      // nach wenigen Tagen ablaufen. Einmal gespeichert und nie wieder
+      // geholt hiesse: das Bild ist ab dann dauerhaft kaputt. Deshalb
+      // nur kurz cachen, damit ein manueller Zweitlauf am selben Tag
+      // schnell ist, und danach frisch holen.
+      if (ageMs < OG_CACHE_TTL_MS) {
+        const v = d.imageUrl || null;
+        memCache.set(key, v);
+        return v;
+      }
+    }
+
+    let imageUrl = null;
+    let note = "";
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), OG_FETCH_TIMEOUT_MS);
+      try {
+        const resp = await fetch(link, {
+          redirect: "follow",
+          signal: ctrl.signal,
+          headers: {
+            // Ohne realistischen UA liefern viele Seiten gar nichts.
+            "User-Agent": "Mozilla/5.0 (compatible; PartyPinBot/1.0; +https://partypin-5dc3f.web.app)",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "de-AT,de;q=0.9",
+          },
+        });
+        if (!resp.ok) {
+          note = `HTTP ${resp.status}`;
+        } else {
+          const ct = (resp.headers.get("content-type") || "").toLowerCase();
+          if (!ct.includes("html")) {
+            note = `kein HTML (${ct})`;
+          } else {
+            const html = (await resp.text()).slice(0, OG_MAX_BYTES);
+            imageUrl = extractOgImage(html, resp.url || link);
+            if (!imageUrl) note = "kein og:image";
+          }
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (e) {
+      note = (e && e.name === "AbortError") ? "Timeout" : `Fehler: ${e?.message || e}`;
+    }
+
+    await cacheCollection.doc(key).set({
+      link,
+      imageUrl,
+      note,
+      updatedAt: new Date(),
+    });
+    memCache.set(key, imageUrl);
+    return imageUrl;
+  }
+
+  return {fetchFor};
+}
+
 async function deleteFestlDocRecursively(docRef) {
   const collections = await docRef.listCollections();
   for (const col of collections) {
@@ -220,6 +359,7 @@ async function deleteFestlDocRecursively(docRef) {
 async function runFestllisteSync() {
   const db = admin.firestore();
   const geocoder = createGeocoder(db);
+  const ogImages = createOgImageFetcher(db);
   const now = new Date();
 
   // Beide Quellen laden. `sourceUrl` muss PRO Record mitgeführt werden --
@@ -254,6 +394,7 @@ async function runFestllisteSync() {
   let created = 0;
   let updated = 0;
   let geocodeFailed = 0;
+  let imagesFound = 0;
   let skippedCancelled = 0;
   let skippedPast = 0;
 
@@ -305,6 +446,25 @@ async function runFestllisteSync() {
     const existing = await docRef.get();
 
     const description = buildDescription(rec, bezirkName);
+    const prev = existing.exists ? (existing.data() || {}) : {};
+
+    // Mindestalter aus der Kategorie schaetzen -- aber NIE einen Wert
+    // ueberschreiben, den jemand von Hand gesetzt hat. Ohne diesen Schutz
+    // wuerde der naechtliche Sync (merge: true) jede manuelle Korrektur
+    // wieder platt machen. Manuell = Wert vorhanden und NICHT als
+    // Schaetzung markiert.
+    const manualMinAge = prev.minAge != null && prev.minAgeEstimated !== true;
+    const estimatedMinAge = CATEGORY_MIN_AGE[rec.kategorie] ?? null;
+
+    // Vorschaubild: nur wenn es einen Link gibt und noch kein Bild
+    // gesetzt ist. Ein manuell hochgeladenes Titelbild hat immer Vorrang.
+    const manualImage = (prev.profileImageUrl || "").trim().length > 0 &&
+      prev.profileImageEstimated !== true;
+    let ogImage = null;
+    if (rec.link && !manualImage) {
+      ogImage = await ogImages.fetchFor(rec.link);
+      if (ogImage) imagesFound++;
+    }
 
     const data = {
       festlName: rec.name,
@@ -319,7 +479,6 @@ async function runFestllisteSync() {
       createdByAdmin: false,
       startTime: admin.firestore.Timestamp.fromDate(startTime),
       endTime: admin.firestore.Timestamp.fromDate(endTime),
-      minAge: null,
       festlHighlights: [],
       city_lower: rec.ort.toLowerCase(),
       festlName_lower: rec.name.toLowerCase(),
@@ -335,6 +494,17 @@ async function runFestllisteSync() {
       data.location = new admin.firestore.GeoPoint(geo.lat, geo.lng);
       data.lat = geo.lat;
       data.lng = geo.lng;
+    }
+    if (!manualMinAge) {
+      data.minAge = estimatedMinAge;
+      data.minAgeEstimated = estimatedMinAge != null;
+    }
+    if (ogImage && !manualImage) {
+      data.profileImageUrl = ogImage;
+      // Markiert das Bild als automatisch geholt, damit ein spaeter
+      // manuell hochgeladenes Titelbild erkennbar bleibt und nicht vom
+      // naechsten Lauf ueberschrieben wird.
+      data.profileImageEstimated = true;
     }
     if (!existing.exists) data.createdAt = admin.firestore.FieldValue.serverTimestamp();
 
@@ -364,6 +534,7 @@ async function runFestllisteSync() {
     skippedCancelled,
     skippedPast,
     geocodeFailed,
+    imagesFound,
   };
   console.log("[festlliste-sync] Zusammenfassung:", JSON.stringify(summary));
   return summary;
