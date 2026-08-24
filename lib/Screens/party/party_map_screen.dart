@@ -34,18 +34,24 @@ import 'party_bottom_sheet.dart';
 /// `von`) — nicht nur, wenn es exakt darin startet. Sonst würde ein
 /// mehrtägiges Festl, das gestern begonnen hat, bei "Heute" fehlen.
 enum TimeRangeFilter {
-  today('range_today', 'Heute'),
-  thisWeekend('range_weekend', 'Dieses Wochenende'),
-  next14Days('range_14d', 'Nächste 14 Tage'),
-  next2Months('range_2m', 'Nächste 2 Monate'),
-  all('range_all', 'Alle');
+  today('range_today', 'Heute', 'Heute'),
+  thisWeekend('range_weekend', 'Dieses Wochenende', 'WE'),
+  next14Days('range_14d', 'Nächste 14 Tage', '14 T'),
+  next2Months('range_2m', 'Nächste 2 Monate', '2 Mon'),
+  all('range_all', 'Alle', 'Alle');
 
-  const TimeRangeFilter(this.prefValue, this.label);
+  const TimeRangeFilter(this.prefValue, this.label, this.shortLabel);
 
   /// Stabiler Wert für SharedPreferences — NICHT `name` verwenden,
   /// sonst bricht die Persistenz beim Umbenennen einer Konstante.
   final String prefValue;
+
+  /// Volle Bezeichnung für den Wert-Chip.
   final String label;
+
+  /// Kurzform für die Skalenbeschriftung unter dem Slider — dort ist
+  /// pro Rastpunkt nur ein Fünftel der Breite verfügbar.
+  final String shortLabel;
 
   static TimeRangeFilter fromPref(String? v) {
     for (final r in TimeRangeFilter.values) {
@@ -2839,6 +2845,121 @@ class _PartyMapScreenState extends State<PartyMapScreen>
             );
           }
 
+          // TIME_RANGE_FILTER: bewusst dieselbe Box-Optik wie sliderBox
+          // (Label links, Wert-Chip rechts, Slider darunter), damit der
+          // Filter nicht wie ein Fremdkörper zwischen den anderen wirkt.
+          // "Alle" ist hier das Gegenstück zu "Kein Limit": kein aktiver
+          // Filter → neutrale statt akzentuierter Umrandung.
+          Widget timeRangeBox() {
+            final values = TimeRangeFilter.values;
+            final idx = values.indexOf(timeRange).toDouble();
+            final active = timeRange != TimeRangeFilter.all;
+
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              decoration: BoxDecoration(
+                color: const Color(0xFF181818),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: active ? _accent.withOpacity(0.45) : Colors.white12,
+                  width: active ? 1.5 : 1,
+                ),
+              ),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    const Text("ZEITRAUM", style: TextStyle(
+                      color: Colors.white54,
+                      fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: .8,
+                    )),
+                    const Spacer(),
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: active
+                            ? _accent.withOpacity(0.15)
+                            : Colors.white.withOpacity(0.06),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: active ? _accent : Colors.white24,
+                          width: active ? 1.5 : 1,
+                        ),
+                      ),
+                      child: Text(
+                        timeRange.label,
+                        style: TextStyle(
+                          color: active ? _accent : Colors.white38,
+                          fontSize: 12, fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 2),
+                  SliderTheme(
+                    data: SliderTheme.of(ctx).copyWith(
+                      // Bei "Alle" (= kein Filter) bleibt die ganze
+                      // Leiste neutral. Sonst sähe der Regler am rechten
+                      // Anschlag komplett rot aus und läse sich wie
+                      // "maximal gefiltert" statt "keine Einschränkung".
+                      activeTrackColor: active ? _accent : Colors.white24,
+                      thumbColor: active ? _accent : Colors.white38,
+                      inactiveTrackColor: Colors.white12,
+                      overlayColor: _accent.withOpacity(0.15),
+                      trackHeight: 3,
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+                      tickMarkShape: const RoundSliderTickMarkShape(tickMarkRadius: 2),
+                      activeTickMarkColor:
+                          active ? _accent.withOpacity(0.7) : Colors.white24,
+                      inactiveTickMarkColor: Colors.white24,
+                    ),
+                    child: Slider(
+                      value: idx,
+                      min: 0,
+                      max: (values.length - 1).toDouble(),
+                      divisions: values.length - 1,
+                      onChanged: (v) =>
+                          setSB(() => timeRange = values[v.round()]),
+                    ),
+                  ),
+                  // Skalenbeschriftung: erste linksbündig, letzte
+                  // rechtsbündig, Rest zentriert — sonst laufen die
+                  // Randlabels über die Box-Kante hinaus.
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Row(
+                      children: [
+                        for (int i = 0; i < values.length; i++)
+                          Expanded(
+                            child: Text(
+                              values[i].shortLabel,
+                              textAlign: i == 0
+                                  ? TextAlign.start
+                                  : i == values.length - 1
+                                      ? TextAlign.end
+                                      : TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: timeRange == values[i]
+                                    ? FontWeight.w800
+                                    : FontWeight.w500,
+                                color: timeRange == values[i]
+                                    ? _accent
+                                    : Colors.white30,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2870,51 +2991,7 @@ class _PartyMapScreenState extends State<PartyMapScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // ── TIME_RANGE_FILTER ──────────────────────────
-                      // Bewusst Chips statt eines weiteren Sliders: die
-                      // Sheet hat schon drei Slider-Boxen, und die
-                      // Zeiträume sind diskrete Wahlmöglichkeiten.
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 8),
-                        child: Text(
-                          "ZEITRAUM",
-                          style: TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: .6,
-                          ),
-                        ),
-                      ),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (final r in TimeRangeFilter.values)
-                            ChoiceChip(
-                              label: Text(r.label),
-                              selected: timeRange == r,
-                              onSelected: (_) => setSB(() => timeRange = r),
-                              showCheckmark: false,
-                              labelStyle: TextStyle(
-                                color: timeRange == r
-                                    ? Colors.white
-                                    : AppColors.muted,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 13,
-                              ),
-                              backgroundColor: AppColors.panel,
-                              selectedColor: AppColors.accent,
-                              side: BorderSide(
-                                color: timeRange == r
-                                    ? AppColors.accent
-                                    : AppColors.accentBorder,
-                              ),
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                              visualDensity: VisualDensity.compact,
-                            ),
-                        ],
-                      ),
+                      timeRangeBox(),
 
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 14),
