@@ -503,9 +503,18 @@ class _FestlBottomSheetState extends State<FestlBottomSheet>
   Widget _metaChips() {
     final organizer = (_d['organizer'] ?? '').toString().trim();
     final range = _rangeChip();
+    final minAge = _d['minAge'];
+    final ageEstimated = _d['minAgeEstimated'] == true;
 
     final chips = <Widget>[
       if (range.isNotEmpty) _chip('📅', range),
+      // Alters-Chip nur, wenn wirklich ein Wert da ist. Bei Kirtag,
+      // Frühschoppen & Co. sagt die Quelle nichts über ein Mindestalter
+      // -- dort lieber gar keinen Chip als eine geratene Grenze, die
+      // jemanden vor der Tür stehen lässt. "ca." markiert die aus der
+      // Kategorie abgeleiteten Werte (siehe minAgeEstimated).
+      if (minAge != null)
+        _chip('🔞', ageEstimated ? 'ca. $minAge+' : '$minAge+'),
       if (organizer.isNotEmpty) _chip('👤', organizer),
     ];
     if (chips.isEmpty) return const SizedBox.shrink();
