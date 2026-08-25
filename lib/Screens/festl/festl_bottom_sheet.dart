@@ -508,13 +508,16 @@ class _FestlBottomSheetState extends State<FestlBottomSheet>
 
     final chips = <Widget>[
       if (range.isNotEmpty) _chip('📅', range),
-      // Alters-Chip nur, wenn wirklich ein Wert da ist. Bei Kirtag,
-      // Frühschoppen & Co. sagt die Quelle nichts über ein Mindestalter
-      // -- dort lieber gar keinen Chip als eine geratene Grenze, die
-      // jemanden vor der Tür stehen lässt. "ca." markiert die aus der
-      // Kategorie abgeleiteten Werte (siehe minAgeEstimated).
+      // Drei Fälle: bekannte Grenze ("18+"), aus der Kategorie
+      // geschätzte Grenze ("ca. 18+"), oder eine Kategorie ohne
+      // Einlassgrenze wie Kirtag/Frühschoppen ("Alle Altersgruppen",
+      // gesetzt als ageOpen in functions/festlliste/sync.js). Bleibt
+      // alles drei unbekannt, erscheint kein Chip statt einer geratenen
+      // Angabe.
       if (minAge != null)
-        _chip('🔞', ageEstimated ? 'ca. $minAge+' : '$minAge+'),
+        _chip('🔞', ageEstimated ? 'ca. $minAge+' : '$minAge+')
+      else if (_d['ageOpen'] == true)
+        _chip('👨‍👩‍👧', 'Alle Altersgruppen'),
       if (organizer.isNotEmpty) _chip('👤', organizer),
     ];
     if (chips.isEmpty) return const SizedBox.shrink();

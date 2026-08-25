@@ -110,6 +110,34 @@ const CATEGORY_MIN_AGE = {
   "Nachtclubevent": 18,
 };
 
+// Kategorien ohne Einlassgrenze. Bei Kirtag, Fruehschoppen, Zeltfest &
+// Co. gibt es praktisch nie eine Altersbeschraenkung am Eingang -- der
+// Jugendschutz regelt dort den Alkoholausschank, nicht den Eintritt.
+// Diese Festln bekommen `ageOpen: true` und werden in der App als
+// "Alle Altersgruppen" ausgewiesen, damit der Alters-Reiter nicht bei
+// vier von fuenf Festln fehlt.
+//
+// Bewusst NICHT enthalten: "Festival" (grosse Festivals haben sehr wohl
+// oft ein Mindestalter) und "-" (unbekannte Kategorie). Dort bleibt der
+// Reiter lieber leer, als etwas Falsches zu behaupten.
+const CATEGORY_AGE_OPEN = new Set([
+  "Frühschoppen",
+  "Dämmerschoppen",
+  "Kirtag",
+  "Festl",
+  "FFestl",
+  "Oktoberfest / Volksfest",
+  "Oktoberfest/Volksfest",
+  // Kommen vor, wenn die Doppelbezeichnung in der PDF umbricht und nur
+  // eine Haelfte als eigenstaendige Kategorie ankommt.
+  "Oktoberfest",
+  "Volksfest",
+  "Weinfest / Weinkost",
+  "Weinfest/Weinkost",
+  "Weinfest",
+  "Weinkost",
+]);
+
 function slugify(text) {
   return (text || "")
       .toLowerCase()
@@ -498,6 +526,10 @@ async function runFestllisteSync() {
     if (!manualMinAge) {
       data.minAge = estimatedMinAge;
       data.minAgeEstimated = estimatedMinAge != null;
+      // Nur setzen, wenn es KEINE geschaetzte Grenze gibt -- sonst
+      // widersprechen sich die beiden Felder.
+      data.ageOpen = estimatedMinAge == null &&
+        CATEGORY_AGE_OPEN.has(rec.kategorie);
     }
     if (ogImage && !manualImage) {
       data.profileImageUrl = ogImage;
